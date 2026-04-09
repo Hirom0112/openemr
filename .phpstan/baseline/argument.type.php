@@ -31577,11 +31577,6 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../src/Common/Http/HttpRestRequest.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$key of method Symfony\\\\Component\\\\HttpFoundation\\\\InputBag\\:\\:get\\(\\) expects string, mixed given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../src/Common/Http/HttpRestRequest.php',
-];
-$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$key of method Symfony\\\\Component\\\\HttpFoundation\\\\ParameterBag\\:\\:get\\(\\) expects string, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../src/Common/Http/HttpRestRequest.php',
@@ -31599,11 +31594,6 @@ $ignoreErrors[] = [
 $ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$parameters of class Symfony\\\\Component\\\\HttpFoundation\\\\FileBag constructor expects array\\<Symfony\\\\Component\\\\HttpFoundation\\\\File\\\\UploadedFile\\>, array given\\.$#',
     'count' => 1,
-    'path' => __DIR__ . '/../../src/Common/Http/HttpRestRequest.php',
-];
-$ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$parameters of class Symfony\\\\Component\\\\HttpFoundation\\\\InputBag constructor expects array, mixed given\\.$#',
-    'count' => 2,
     'path' => __DIR__ . '/../../src/Common/Http/HttpRestRequest.php',
 ];
 $ignoreErrors[] = [
@@ -61377,11 +61367,6 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../src/FHIR/SMART/ExternalClinicalDecisionSupport/DecisionSupportInterventionEntity.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$key of method Symfony\\\\Component\\\\HttpFoundation\\\\Request\\:\\:get\\(\\) expects string, mixed given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../src/FHIR/SMART/ExternalClinicalDecisionSupport/RouteController.php',
-];
-$ignoreErrors[] = [
     'message' => '#^Parameter \\#2 \\$context of method Twig\\\\Environment\\:\\:render\\(\\) expects array, mixed given\\.$#',
     'count' => 2,
     'path' => __DIR__ . '/../../src/FHIR/SMART/ExternalClinicalDecisionSupport/RouteController.php',
@@ -62127,11 +62112,6 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../src/RestControllers/AuthorizationController.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$id of method Symfony\\\\Component\\\\HttpFoundation\\\\Session\\\\SessionInterface\\:\\:setId\\(\\) expects string, float\\|int\\<min, \\-1\\>\\|int\\<1, max\\>\\|string\\|true given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../src/RestControllers/AuthorizationController.php',
-];
-$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$keys of function array_combine expects array\\<int\\|string\\>, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../src/RestControllers/AuthorizationController.php',
@@ -62187,7 +62167,7 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../src/RestControllers/AuthorizationController.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#2 \\$array of function implode expects array\\<string\\>, array given\\.$#',
+    'message' => '#^Parameter \\#2 \\$array of function implode expects array\\<string\\>, array\\<mixed\\> given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../src/RestControllers/AuthorizationController.php',
 ];
@@ -62202,16 +62182,6 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../src/RestControllers/AuthorizationController.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#2 \\$oauthSessionId of method OpenEMR\\\\RestControllers\\\\AuthorizationController\\:\\:restoreOAuthSession\\(\\) expects string, bool\\|float\\|int\\|string\\|null given\\.$#',
-    'count' => 3,
-    'path' => __DIR__ . '/../../src/RestControllers/AuthorizationController.php',
-];
-$ignoreErrors[] = [
-    'message' => '#^Parameter \\#2 \\$string of function explode expects string, float\\|int\\<min, \\-1\\>\\|int\\<1, max\\>\\|string\\|true given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../src/RestControllers/AuthorizationController.php',
-];
-$ignoreErrors[] = [
     'message' => '#^Parameter \\#2 \\$string of function explode expects string, list\\<string\\>\\|string given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../src/RestControllers/AuthorizationController.php',
@@ -62223,11 +62193,6 @@ $ignoreErrors[] = [
 ];
 $ignoreErrors[] = [
     'message' => '#^Parameter \\#2 \\$value of method OpenEMR\\\\FHIR\\\\SMART\\\\ExternalClinicalDecisionSupport\\\\DecisionSupportInterventionEntity\\:\\:setFieldValue\\(\\) expects string, mixed given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../src/RestControllers/AuthorizationController.php',
-];
-$ignoreErrors[] = [
-    'message' => '#^Parameter \\#2 \\$value of method Symfony\\\\Component\\\\HttpFoundation\\\\InputBag\\:\\:set\\(\\) expects array\\|bool\\|float\\|int\\|string\\|null, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../src/RestControllers/AuthorizationController.php',
 ];
