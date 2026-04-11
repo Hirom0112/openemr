@@ -24897,11 +24897,6 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../library/htmlspecialchars.inc.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#3 \\$subject of function str_replace expects array\\<string\\>\\|string, string\\|false given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../library/htmlspecialchars.inc.php',
-];
-$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$constant of function xl_layout_label expects string, mixed given\\.$#',
     'count' => 2,
     'path' => __DIR__ . '/../../library/ippf_issues.inc.php',
