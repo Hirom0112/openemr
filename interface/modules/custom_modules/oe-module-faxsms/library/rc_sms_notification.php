@@ -85,7 +85,8 @@ if (!empty($runtime['type'])) {
     $TYPE = $runtime['type'] = "SMS"; // default
 }
 
-$CRON_TIME = 150;
+$taskManager = new \OpenEMR\Modules\FaxSMS\Controller\NotificationTaskManager();
+$CRON_TIME = $taskManager->getTaskHours(strtolower($TYPE));
 // use service if needed
 if ($TYPE === "SMS") {
     $session->set('authUser', $runtime['user'] ?? $session->get('authUser'));
@@ -173,7 +174,7 @@ $db_sms_msg['message'] = $MESSAGE;
                 $strMsg = "<strong>* " . xlt("SEND NOTIFICATION BEFORE:") . $SMS_NOTIFICATION_HOUR . " | " . xlt("CRONJOB RUNS EVERY:") . $CRON_TIME . " | " . xlt("APPOINTMENT DATE TIME") . ': ' . $app_date . " | " . xlt("APPOINTMENT REMAINING HOURS") . ": " . text($remaining_app_hour) . " | " . xlt("SEND ALERT AFTER") . ': ' . text($remain_hour) . "</strong>";
 
                 // check in the interval
-                if ($remain_hour >= -($CRON_TIME) && $remain_hour <= $CRON_TIME) {
+                if (\OpenEMR\Modules\FaxSMS\Controller\NotificationTaskManager::isWithinCronWindow((int) $remain_hour, $CRON_TIME)) {
                     //set message
                     $db_sms_msg['message'] = cron_SetMessage($prow, $db_sms_msg);
                     // send sms to patient - if not in test mode
