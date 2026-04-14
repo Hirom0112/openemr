@@ -8132,11 +8132,6 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/main/messages/messages.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$string of function addslashes expects string, int\\<1, max\\> given\\.$#',
-    'count' => 2,
-    'path' => __DIR__ . '/../../interface/main/messages/messages.php',
-];
-$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$text of function attr expects string, \\(float\\|int\\) given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/main/messages/messages.php',

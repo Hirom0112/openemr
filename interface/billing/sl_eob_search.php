@@ -1371,7 +1371,7 @@ $session = SessionWrapperFactory::getInstance()->getActiveSession();
     });
     <?php
     if ($alertmsg) {
-        echo "alert('" . addslashes((string) $alertmsg) . "');\n";
+        echo "alert(" . js_escape((string) $alertmsg) . ");\n";
     }
     ?>
     $(function () {
