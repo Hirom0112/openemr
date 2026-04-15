@@ -75182,7 +75182,7 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../tests/Tests/Unit/FHIR/SMART/ClientAdminControllerTest.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#3 \\$clientRepo of class OpenEMR\\\\FHIR\\\\SMART\\\\ClientAdminController@anonymous/tests/Tests/Unit/FHIR/SMART/ClientAdminControllerTest\\.php\\:428 constructor expects OpenEMR\\\\Common\\\\Auth\\\\OpenIDConnect\\\\Repositories\\\\ClientRepository, PHPUnit\\\\Framework\\\\MockObject\\\\MockObject given\\.$#',
+    'message' => '#^Parameter \\#3 \\$clientRepo of class OpenEMR\\\\FHIR\\\\SMART\\\\ClientAdminController@anonymous/tests/Tests/Unit/FHIR/SMART/ClientAdminControllerTest\\.php\\:427 constructor expects OpenEMR\\\\Common\\\\Auth\\\\OpenIDConnect\\\\Repositories\\\\ClientRepository, PHPUnit\\\\Framework\\\\MockObject\\\\MockObject given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../tests/Tests/Unit/FHIR/SMART/ClientAdminControllerTest.php',
 ];
