@@ -21907,11 +21907,6 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../library/classes/Installer.class.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$json of function json_decode expects string, mixed given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../library/classes/Installer.class.php',
-];
-$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$mysql of function mysqli_close expects mysqli, mysqli\\|false given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../library/classes/Installer.class.php',
@@ -29520,6 +29515,11 @@ $ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$text of function js_escape expects string, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../portal/sign/lib/show-signature.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$cgi_variables of class Installer constructor expects array\\{iuser\\?\\: string, iuserpass\\?\\: string, iuname\\?\\: string, iufname\\?\\: string, igroup\\?\\: string, i2faenable\\?\\: string, i2fasecret\\?\\: string, server\\?\\: string, \\.\\.\\.\\}, array\\<mixed\\> given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../setup.php',
 ];
 $ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$directory of class RecursiveDirectoryIterator constructor expects string, mixed given\\.$#',
