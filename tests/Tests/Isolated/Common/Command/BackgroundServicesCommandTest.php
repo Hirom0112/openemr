@@ -16,6 +16,7 @@ namespace OpenEMR\Tests\Isolated\Common\Command;
 use OpenEMR\Common\Command\BackgroundServicesCommand;
 use OpenEMR\Core\OEGlobalsBag;
 use OpenEMR\Services\Background\BackgroundServiceDefinition;
+use OpenEMR\Services\Background\BackgroundServiceRunner;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Application;
@@ -99,15 +100,202 @@ class BackgroundServicesCommandTest extends TestCase
         $this->assertStringContainsString('No background services', $tester->getDisplay());
     }
 
-    public function testRunRequiresName(): void
+    public function testRunWithoutNameRunsAllDue(): void
     {
-        $command = new BackgroundServicesCommandStub([]);
+        // Without --name, the command invokes BackgroundServiceRunner::run(null, false)
+        // which advances every service whose interval has elapsed. Used by cron
+        // and Kubernetes CronJob.
+        $command = new BackgroundServicesCommandStub(
+            services: [],
+            runnerResults: [
+                ['name' => 'phimail', 'status' => 'executed'],
+                ['name' => 'Email_Service', 'status' => 'not_due'],
+            ],
+        );
+        $tester = $this->createTester($command);
+
+        $tester->execute(['action' => 'run']);
+
+        $this->assertSame(Command::SUCCESS, $tester->getStatusCode());
+        $this->assertStringContainsString('phimail', $tester->getDisplay());
+        $this->assertStringContainsString('Email_Service', $tester->getDisplay());
+    }
+
+    public function testRunWithoutNameAndNoDueServices(): void
+    {
+        $command = new BackgroundServicesCommandStub(services: [], runnerResults: []);
+        $tester = $this->createTester($command);
+
+        $tester->execute(['action' => 'run']);
+
+        $this->assertSame(Command::SUCCESS, $tester->getStatusCode());
+        $this->assertStringContainsString('No background services were due', $tester->getDisplay());
+    }
+
+    public function testRunExecutedExitsZero(): void
+    {
+        $command = new BackgroundServicesCommandStub(
+            services: [],
+            runnerResults: [['name' => 'phimail', 'status' => 'executed']],
+        );
+        $tester = $this->createTester($command);
+
+        $tester->execute(['action' => 'run', '--name' => 'phimail']);
+
+        $this->assertSame(Command::SUCCESS, $tester->getStatusCode());
+    }
+
+    /**
+     * Regression for #11677: a service that isn't due to run on this tick
+     * must exit 0 so Kubernetes CronJob doesn't treat the no-op as failure.
+     */
+    public function testRunNotDueExitsZero(): void
+    {
+        $command = new BackgroundServicesCommandStub(
+            services: [],
+            runnerResults: [['name' => 'phimail', 'status' => 'not_due']],
+        );
+        $tester = $this->createTester($command);
+
+        $tester->execute(['action' => 'run', '--name' => 'phimail']);
+
+        $this->assertSame(Command::SUCCESS, $tester->getStatusCode());
+    }
+
+    /**
+     * Regression for #11677: a service whose previous tick is still running
+     * is an expected state, not a failure.
+     */
+    public function testRunAlreadyRunningExitsZero(): void
+    {
+        $command = new BackgroundServicesCommandStub(
+            services: [],
+            runnerResults: [['name' => 'phimail', 'status' => 'already_running']],
+        );
+        $tester = $this->createTester($command);
+
+        $tester->execute(['action' => 'run', '--name' => 'phimail']);
+
+        $this->assertSame(Command::SUCCESS, $tester->getStatusCode());
+    }
+
+    public function testRunSkippedExitsZero(): void
+    {
+        $command = new BackgroundServicesCommandStub(
+            services: [],
+            runnerResults: [['name' => 'phimail', 'status' => 'skipped']],
+        );
+        $tester = $this->createTester($command);
+
+        $tester->execute(['action' => 'run', '--name' => 'phimail']);
+
+        $this->assertSame(Command::SUCCESS, $tester->getStatusCode());
+    }
+
+    public function testRunNotFoundExitsOne(): void
+    {
+        $command = new BackgroundServicesCommandStub(
+            services: [],
+            runnerResults: [['name' => 'nonexistent', 'status' => 'not_found']],
+        );
+        $tester = $this->createTester($command);
+
+        $tester->execute(['action' => 'run', '--name' => 'nonexistent']);
+
+        $this->assertSame(Command::FAILURE, $tester->getStatusCode());
+    }
+
+    public function testRunErrorExitsOne(): void
+    {
+        $command = new BackgroundServicesCommandStub(
+            services: [],
+            runnerResults: [['name' => 'phimail', 'status' => 'error']],
+        );
+        $tester = $this->createTester($command);
+
+        $tester->execute(['action' => 'run', '--name' => 'phimail']);
+
+        $this->assertSame(Command::FAILURE, $tester->getStatusCode());
+    }
+
+    public function testRunAllDueExitsOneIfAnyServiceErrored(): void
+    {
+        // Mixed multi-service result: one executed cleanly, one errored.
+        // The run-all path must surface the error via a non-zero exit.
+        $command = new BackgroundServicesCommandStub(
+            services: [],
+            runnerResults: [
+                ['name' => 'phimail', 'status' => 'executed'],
+                ['name' => 'Email_Service', 'status' => 'error'],
+            ],
+        );
         $tester = $this->createTester($command);
 
         $tester->execute(['action' => 'run']);
 
         $this->assertSame(Command::FAILURE, $tester->getStatusCode());
-        $this->assertStringContainsString('--name', $tester->getDisplay());
+    }
+
+    public function testRunAllDueExitsZeroWhenAllNonErrorOutcomes(): void
+    {
+        // Mixed non-error outcomes across multiple services must still be
+        // success — a cron tick that finds everything already running or
+        // not yet due is the normal steady state.
+        $command = new BackgroundServicesCommandStub(
+            services: [],
+            runnerResults: [
+                ['name' => 'phimail', 'status' => 'executed'],
+                ['name' => 'Email_Service', 'status' => 'not_due'],
+                ['name' => 'UUID_Service', 'status' => 'already_running'],
+                ['name' => 'MedEx', 'status' => 'skipped'],
+            ],
+        );
+        $tester = $this->createTester($command);
+
+        $tester->execute(['action' => 'run']);
+
+        $this->assertSame(Command::SUCCESS, $tester->getStatusCode());
+    }
+
+    /**
+     * --force without --name must be dropped before reaching the runner. The
+     * CLI help documents --force as "ignored without --name" because honoring
+     * it in the run-all path would flip BackgroundServiceRunner::getServices()
+     * to `WHERE 1` (including manual-mode services) and bypass the interval
+     * check for every service, contradicting the run-all semantics.
+     */
+    public function testRunAllDueIgnoresForceFlag(): void
+    {
+        $command = new BackgroundServicesCommandStub(services: [], runnerResults: []);
+        $tester = $this->createTester($command);
+
+        $tester->execute(['action' => 'run', '--force' => true]);
+
+        $this->assertSame(Command::SUCCESS, $tester->getStatusCode());
+        $this->assertNotNull($command->runner);
+        $this->assertNull($command->runner->lastServiceName);
+        $this->assertFalse($command->runner->lastForce);
+        $this->assertStringContainsString('--force is ignored without --name', $tester->getDisplay());
+    }
+
+    /**
+     * --force with an explicit --name flows through to the runner unchanged;
+     * this is the documented escape hatch for manual-mode services.
+     */
+    public function testRunWithNameForwardsForceFlag(): void
+    {
+        $command = new BackgroundServicesCommandStub(
+            services: [],
+            runnerResults: [['name' => 'phimail', 'status' => 'executed']],
+        );
+        $tester = $this->createTester($command);
+
+        $tester->execute(['action' => 'run', '--name' => 'phimail', '--force' => true]);
+
+        $this->assertSame(Command::SUCCESS, $tester->getStatusCode());
+        $this->assertNotNull($command->runner);
+        $this->assertSame('phimail', $command->runner->lastServiceName);
+        $this->assertTrue($command->runner->lastForce);
     }
 
     public function testUnknownAction(): void
@@ -290,14 +478,19 @@ class BackgroundServicesCommandTest extends TestCase
  */
 class BackgroundServicesCommandStub extends BackgroundServicesCommand
 {
+    public ?BackgroundServiceRunnerFixture $runner = null;
+
     /** @var list<string> */
     public array $unlockedServices = [];
 
     /**
      * @param list<BackgroundServicesQueryRow> $services
+     * @param list<array{name: string, status: string}> $runnerResults
      */
-    public function __construct(private readonly array $services = [])
-    {
+    public function __construct(
+        private readonly array $services = [],
+        private readonly array $runnerResults = [],
+    ) {
         parent::__construct();
         $this->setGlobalsBag(new OEGlobalsBag(['fileroot' => '/var/www/openemr']));
     }
@@ -315,6 +508,12 @@ class BackgroundServicesCommandStub extends BackgroundServicesCommand
         ));
     }
 
+    protected function createRunner(): BackgroundServiceRunner
+    {
+        $this->runner ??= new BackgroundServiceRunnerFixture($this->runnerResults);
+        return $this->runner;
+    }
+
     protected function clearLease(string $name): bool
     {
         $exists = array_filter($this->services, fn(array $s) => $s['name'] === $name);
@@ -323,5 +522,33 @@ class BackgroundServicesCommandStub extends BackgroundServicesCommand
         }
         $this->unlockedServices[] = $name;
         return true;
+    }
+}
+
+/**
+ * Runner fixture that returns a canned results array without touching the DB.
+ *
+ * Records the arguments of the last run() call so tests can assert that the
+ * command layer forwarded them correctly (e.g., dropping --force when no
+ * --name was given).
+ */
+class BackgroundServiceRunnerFixture extends BackgroundServiceRunner
+{
+    public ?string $lastServiceName = null;
+
+    public ?bool $lastForce = null;
+
+    /**
+     * @param list<array{name: string, status: string}> $results
+     */
+    public function __construct(private readonly array $results)
+    {
+    }
+
+    public function run(?string $serviceName = null, bool $force = false): array
+    {
+        $this->lastServiceName = $serviceName;
+        $this->lastForce = $force;
+        return $this->results;
     }
 }
