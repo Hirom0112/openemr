@@ -61772,11 +61772,6 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../src/RestControllers/Authorization/BearerTokenAuthorizationStrategy.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$userId of method OpenEMR\\\\Services\\\\UserService\\:\\:getUser\\(\\) expects int\\|string, mixed given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../src/RestControllers/Authorization/LocalApiAuthorizationController.php',
-];
-$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$data of static method OpenEMR\\\\Common\\\\Utils\\\\HttpUtils\\:\\:base64url_encode\\(\\) expects string, mixed given\\.$#',
     'count' => 2,
     'path' => __DIR__ . '/../../src/RestControllers/Authorization/OAuth2PublicJsonWebKeyController.php',
