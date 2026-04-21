@@ -8687,7 +8687,17 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/modules/custom_modules/oe-module-comlink-telehealth/src/Bootstrap.php',
 ];
 $ignoreErrors[] = [
+    'message' => '#^Parameter \\#4 \\$assetPath of class Comlink\\\\OpenEMR\\\\Modules\\\\TeleHealthModule\\\\Controller\\\\TeleHealthCalendarController constructor expects string, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/modules/custom_modules/oe-module-comlink-telehealth/src/Bootstrap.php',
+];
+$ignoreErrors[] = [
     'message' => '#^Parameter \\#4 \\$mailerService of class Comlink\\\\OpenEMR\\\\Modules\\\\TeleHealthModule\\\\Controller\\\\TeleconferenceRoomController constructor expects Comlink\\\\OpenEMR\\\\Modules\\\\TeleHealthModule\\\\Services\\\\TeleHealthParticipantInvitationMailerService, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/modules/custom_modules/oe-module-comlink-telehealth/src/Bootstrap.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#5 \\$loggedInUserId of class Comlink\\\\OpenEMR\\\\Modules\\\\TeleHealthModule\\\\Controller\\\\TeleHealthCalendarController constructor expects int\\|null, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/modules/custom_modules/oe-module-comlink-telehealth/src/Bootstrap.php',
 ];
