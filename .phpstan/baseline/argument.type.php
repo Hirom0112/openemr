@@ -26592,11 +26592,6 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../library/validation/LBF_Validation.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$search of function str_replace expects array\\<string\\>\\|string, mixed given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../library/validation/validate_core.php',
-];
-$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$text of function js_escape expects string, int given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../library/validation/validate_core.php',
