@@ -27957,26 +27957,6 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../portal/patient/fwk/libs/verysimple/Phreeze/ExportUtility.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$columnNumber of static method ExportUtility\\:\\:GetColumnLetter\\(\\) expects int, string given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../portal/patient/fwk/libs/verysimple/Phreeze/ExportUtility.php',
-];
-$ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$objectOrClass of class ReflectionClass constructor expects class\\-string\\<T of object\\>\\|T of object, mixed given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../portal/patient/fwk/libs/verysimple/Phreeze/ExportUtility.php',
-];
-$ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$objectclass of method Phreezer\\:\\:GetFieldMaps\\(\\) expects string, mixed given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../portal/patient/fwk/libs/verysimple/Phreeze/ExportUtility.php',
-];
-$ignoreErrors[] = [
-    'message' => '#^Parameter \\#2 \\$arrays of function array_diff expects an array of values castable to string, array\\<string, mixed\\> given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../portal/patient/fwk/libs/verysimple/Phreeze/ExportUtility.php',
-];
-$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$fieldname of static method RequestUtil\\:\\:Get\\(\\) expects string, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../portal/patient/fwk/libs/verysimple/Phreeze/GenericRouter.php',
@@ -28324,11 +28304,6 @@ $ignoreErrors[] = [
 $ignoreErrors[] = [
     'message' => '#^Parameter \\#2 \\$timestamp of function date expects int\\|null, int\\|false given\\.$#',
     'count' => 2,
-    'path' => __DIR__ . '/../../portal/patient/fwk/libs/verysimple/Phreeze/PortalController.php',
-];
-$ignoreErrors[] = [
-    'message' => '#^Parameter \\#2 \\$timestamp of function date expects int\\|null, mixed given\\.$#',
-    'count' => 1,
     'path' => __DIR__ . '/../../portal/patient/fwk/libs/verysimple/Phreeze/PortalController.php',
 ];
 $ignoreErrors[] = [
