@@ -2957,6 +2957,16 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/eRxGlobals.php',
 ];
 $ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$listId of method eRxStore\\:\\:updateErxUploadedByListId\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxPage.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$patientId of method eRxStore\\:\\:updatePatientImportStatusByPatientId\\(\\) expects int, string given\\.$#',
+    'count' => 2,
+    'path' => __DIR__ . '/../../interface/eRxPage.php',
+];
+$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$stream of function fclose expects resource, resource\\|false given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/eRxPage.php',
@@ -2972,17 +2982,57 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/eRxPage.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$xmlBuilder of method eRxPage\\:\\:setXMLBuilder\\(\\) expects object, mixed given\\.$#',
+    'message' => '#^Parameter \\#1 \\$xmlBuilder of method eRxPage\\:\\:setXMLBuilder\\(\\) expects eRxXMLBuilder, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/eRxPage.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$r of function sqlFetchArray expects ADORecordSet\\|false, mixed given\\.$#',
+    'message' => '#^Parameter \\#1 \\$listId of method eRxStore\\:\\:updateErxUploadedByListId\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$name of method eRxStore\\:\\:insertAllergy\\(\\) expects string, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$name of method eRxStore\\:\\:selectUserIdByUserName\\(\\) expects string, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$outcome of method eRxStore\\:\\:updateAllergyOutcomeByPatientIdExternalIdName\\(\\) expects int, string given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$outcome of method eRxStore\\:\\:updateAllergyOutcomeExternalIdByPatientIdName\\(\\) expects int, string given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$prescriptionData of method eRxStore\\:\\:insertPrescriptions\\(\\) expects array, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$prescriptionData of method eRxStore\\:\\:updatePrescriptions\\(\\) expects array, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$prescriptionGuid of method eRxStore\\:\\:selectPrescriptionIdByGuidPatientId\\(\\) expects string, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$r of function sqlFetchArray expects ADORecordSet\\|false, resource given\\.$#',
     'count' => 2,
     'path' => __DIR__ . '/../../interface/eRxSOAP.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$r of function sqlNumRows expects ADORecordSet, mixed given\\.$#',
+    'message' => '#^Parameter \\#1 \\$r of function sqlNumRows expects ADORecordSet, resource given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/eRxSOAP.php',
 ];
@@ -2997,13 +3047,123 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/eRxSOAP.php',
 ];
 $ignoreErrors[] = [
+    'message' => '#^Parameter \\#2 \\$allergyId of method eRxStore\\:\\:insertAllergy\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
     'message' => '#^Parameter \\#2 \\$array of function array_key_exists expects array, mixed given\\.$#',
     'count' => 3,
     'path' => __DIR__ . '/../../interface/eRxSOAP.php',
 ];
 $ignoreErrors[] = [
+    'message' => '#^Parameter \\#2 \\$encounter of method eRxStore\\:\\:insertPrescriptions\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#2 \\$externalId of method eRxStore\\:\\:updateAllergyOutcomeExternalIdByPatientIdName\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#2 \\$listId of method eRxStore\\:\\:updateAllergyEndDateByPatientIdListId\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#2 \\$name of method eRxStore\\:\\:selectAllergyErxSourceByPatientIdName\\(\\) expects string, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#2 \\$optionId of method eRxStore\\:\\:insertListOptions\\(\\) expects string, int given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#2 \\$patientId of method eRxStore\\:\\:selectPrescriptionIdByGuidPatientId\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#2 \\$status of method eRxStore\\:\\:updatePatientImportStatusByPatientId\\(\\) expects int, string given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
     'message' => '#^Parameter \\#2 \\$title of method eRxSOAP\\:\\:insertMissingListOptions\\(\\) expects string, mixed given\\.$#',
     'count' => 5,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#3 \\$authUserId of method eRxStore\\:\\:updatePrescriptions\\(\\) expects string, int given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#3 \\$externalId of method eRxStore\\:\\:updateAllergyOutcomeByPatientIdExternalIdName\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#4 \\$authUserId of method eRxStore\\:\\:insertPrescriptions\\(\\) expects string, int given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#4 \\$formOptionId of method eRxStore\\:\\:updatePrescriptions\\(\\) expects int, string\\|null given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#4 \\$name of method eRxStore\\:\\:updateAllergyOutcomeByPatientIdExternalIdName\\(\\) expects string, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#4 \\$name of method eRxStore\\:\\:updateAllergyOutcomeExternalIdByPatientIdName\\(\\) expects string, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#5 \\$formOptionId of method eRxStore\\:\\:insertPrescriptions\\(\\) expects int, string\\|null given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#5 \\$outcome of method eRxStore\\:\\:insertAllergy\\(\\) expects int, string given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#5 \\$routeOptionId of method eRxStore\\:\\:updatePrescriptions\\(\\) expects int, string\\|null given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#6 \\$routeOptionId of method eRxStore\\:\\:insertPrescriptions\\(\\) expects int, string\\|null given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#6 \\$unitsOptionId of method eRxStore\\:\\:updatePrescriptions\\(\\) expects int, string\\|null given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#7 \\$intervalOptionId of method eRxStore\\:\\:updatePrescriptions\\(\\) expects int, string\\|null given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#7 \\$unitsOptionId of method eRxStore\\:\\:insertPrescriptions\\(\\) expects int, string\\|null given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxSOAP.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#8 \\$intervalOptionId of method eRxStore\\:\\:insertPrescriptions\\(\\) expects int, string\\|null given\\.$#',
+    'count' => 1,
     'path' => __DIR__ . '/../../interface/eRxSOAP.php',
 ];
 $ignoreErrors[] = [
@@ -3022,7 +3182,17 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/eRxXMLBuilder.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$globals of method eRxXMLBuilder\\:\\:setGlobals\\(\\) expects object, mixed given\\.$#',
+    'message' => '#^Parameter \\#1 \\$globals of method eRxXMLBuilder\\:\\:setGlobals\\(\\) expects eRxGlobals, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxXMLBuilder.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$id of method eRxStore\\:\\:getUserById\\(\\) expects int, mixed given\\.$#',
+    'count' => 7,
+    'path' => __DIR__ . '/../../interface/eRxXMLBuilder.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$id of method eRxStore\\:\\:getUserFacility\\(\\) expects int, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/eRxXMLBuilder.php',
 ];
@@ -3037,6 +3207,16 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/eRxXMLBuilder.php',
 ];
 $ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$patientId of method eRxStore\\:\\:getPatientByPatientId\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxXMLBuilder.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$prescriptionId of method eRxStore\\:\\:getPrescriptionById\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/eRxXMLBuilder.php',
+];
+$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$r of function sqlFetchArray expects ADORecordSet\\|false, mixed given\\.$#',
     'count' => 5,
     'path' => __DIR__ . '/../../interface/eRxXMLBuilder.php',
@@ -3047,7 +3227,7 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/eRxXMLBuilder.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$store of method eRxXMLBuilder\\:\\:setStore\\(\\) expects object, mixed given\\.$#',
+    'message' => '#^Parameter \\#1 \\$store of method eRxXMLBuilder\\:\\:setStore\\(\\) expects eRxStore, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/eRxXMLBuilder.php',
 ];
@@ -3072,7 +3252,7 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/eRxXMLBuilder.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#3 \\$value of function curl_setopt expects non\\-empty\\-string, mixed given\\.$#',
+    'message' => '#^Parameter \\#3 \\$value of function curl_setopt expects non\\-empty\\-string, string given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/eRxXMLBuilder.php',
 ];
@@ -19537,13 +19717,28 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/soap_functions/soap_accountStatusDetails.php',
 ];
 $ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$user of method eRxSOAP\\:\\:setAuthUserId\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/soap_functions/soap_accountStatusDetails.php',
+];
+$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$id of method eRxSOAP\\:\\:setPatientId\\(\\) expects int, mixed given\\.$#',
     'count' => 2,
     'path' => __DIR__ . '/../../interface/soap_functions/soap_allergy.php',
 ];
 $ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$user of method eRxSOAP\\:\\:setAuthUserId\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/soap_functions/soap_allergy.php',
+];
+$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$id of method eRxSOAP\\:\\:setPatientId\\(\\) expects int, mixed given\\.$#',
     'count' => 2,
+    'path' => __DIR__ . '/../../interface/soap_functions/soap_patientfullmedication.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$user of method eRxSOAP\\:\\:setAuthUserId\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
     'path' => __DIR__ . '/../../interface/soap_functions/soap_patientfullmedication.php',
 ];
 $ignoreErrors[] = [
