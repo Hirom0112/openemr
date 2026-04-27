@@ -2037,6 +2037,11 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/billing/print_daysheet_report_num1.php',
 ];
 $ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$rows of method OpenEMR\\\\Billing\\\\DaySheet\\\\DaySheetAggregator\\:\\:aggregate\\(\\) expects iterable\\<array\\<string, mixed\\>\\|OpenEMR\\\\Billing\\\\DaySheet\\\\BillRow\\>, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../interface/billing/print_daysheet_report_num1.php',
+];
+$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$text of function text expects string, \\(array\\|float\\|int\\) given\\.$#',
     'count' => 8,
     'path' => __DIR__ . '/../../interface/billing/print_daysheet_report_num1.php',
