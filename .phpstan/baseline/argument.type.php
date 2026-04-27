@@ -7132,7 +7132,7 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/main/calendar/includes/pnHTML.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#2 \\$array of function implode expects array, string given\\.$#',
+    'message' => '#^Parameter \\#2 \\$array of function implode expects array\\<string\\>, array given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/main/calendar/includes/pnHTML.php',
 ];
@@ -7157,7 +7157,7 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/main/calendar/index.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$text of method pnHTML\\:\\:Text\\(\\) expects string, mixed given\\.$#',
+    'message' => '#^Parameter \\#1 \\$text of method pnHTML\\:\\:generateText\\(\\) expects string, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/main/calendar/index.php',
 ];
@@ -7237,7 +7237,7 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/plugins/function.pc_date_select.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#2 \\$data of method pnHTML\\:\\:FormSelectMultiple\\(\\) expects array, mixed given\\.$#',
+    'message' => '#^Parameter \\#2 \\$data of method pnHTML\\:\\:generateFormSelectMultiple\\(\\) expects array, mixed given\\.$#',
     'count' => 3,
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/plugins/function.pc_date_select.php',
 ];
@@ -7262,7 +7262,7 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/plugins/function.pc_filter.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#2 \\$value of method pnHTML\\:\\:FormHidden\\(\\) expects string, mixed given\\.$#',
+    'message' => '#^Parameter \\#2 \\$value of method pnHTML\\:\\:generateFormHidden\\(\\) expects string, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/plugins/function.pc_filter.php',
 ];
@@ -7327,7 +7327,7 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/plugins/modifier.pc_date_format.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$action of method pnHTML\\:\\:FormStart\\(\\) expects string, absolute given\\.$#',
+    'message' => '#^Parameter \\#1 \\$action of method pnHTML\\:\\:generateFormStart\\(\\) expects string, absolute given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/pnadmin.php',
 ];
@@ -7367,7 +7367,7 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/pnadmin.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$text of method pnHTML\\:\\:Text\\(\\) expects string, mixed given\\.$#',
+    'message' => '#^Parameter \\#1 \\$text of method pnHTML\\:\\:generateText\\(\\) expects string, mixed given\\.$#',
     'count' => 15,
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/pnadmin.php',
 ];
@@ -7382,12 +7382,12 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/pnadmin.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#2 \\$value of method pnHTML\\:\\:FormHidden\\(\\) expects string, \\(float\\|int\\) given\\.$#',
+    'message' => '#^Parameter \\#2 \\$value of method pnHTML\\:\\:generateFormHidden\\(\\) expects string, \\(float\\|int\\) given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/pnadmin.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#2 \\$value of method pnHTML\\:\\:FormHidden\\(\\) expects string, mixed given\\.$#',
+    'message' => '#^Parameter \\#2 \\$value of method pnHTML\\:\\:generateFormHidden\\(\\) expects string, mixed given\\.$#',
     'count' => 15,
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/pnadmin.php',
 ];
@@ -7487,7 +7487,7 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/pnuser.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#2 \\$data of method pnHTML\\:\\:FormSelectMultiple\\(\\) expects array, mixed given\\.$#',
+    'message' => '#^Parameter \\#2 \\$data of method pnHTML\\:\\:generateFormSelectMultiple\\(\\) expects array, mixed given\\.$#',
     'count' => 10,
     'path' => __DIR__ . '/../../interface/main/calendar/modules/PostCalendar/pnuser.php',
 ];
