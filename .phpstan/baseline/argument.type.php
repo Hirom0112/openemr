@@ -1362,11 +1362,6 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../gacl/admin/acl_admin.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$array of function reset expects array\\|object, mixed given\\.$#',
-    'count' => 1,
-    'path' => __DIR__ . '/../../gacl/admin/acl_admin.php',
-];
-$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$s of method ADOConnection\\:\\:qStr\\(\\) expects string, mixed given\\.$#',
     'count' => 3,
     'path' => __DIR__ . '/../../gacl/admin/acl_admin.php',
@@ -1407,12 +1402,12 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../gacl/admin/acl_list.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$value of function count expects array\\|Countable, mixed given\\.$#',
+    'message' => '#^Parameter \\#3 \\$page of method ADOConnection\\:\\:PageExecute\\(\\) expects int, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../gacl/admin/acl_test2.php',
 ];
 $ignoreErrors[] = [
-    'message' => '#^Parameter \\#1 \\$value of function count expects array\\|Countable, mixed given\\.$#',
+    'message' => '#^Parameter \\#3 \\$page of method ADOConnection\\:\\:PageExecute\\(\\) expects int, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../gacl/admin/acl_test3.php',
 ];
@@ -1433,7 +1428,7 @@ $ignoreErrors[] = [
 ];
 $ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$value of function count expects array\\|Countable, mixed given\\.$#',
-    'count' => 2,
+    'count' => 1,
     'path' => __DIR__ . '/../../gacl/admin/edit_group.php',
 ];
 $ignoreErrors[] = [
@@ -1442,12 +1437,27 @@ $ignoreErrors[] = [
     'path' => __DIR__ . '/../../gacl/admin/edit_object_sections.php',
 ];
 $ignoreErrors[] = [
+    'message' => '#^Parameter \\#3 \\$page of method ADOConnection\\:\\:PageExecute\\(\\) expects int, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../gacl/admin/edit_object_sections.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$s of method ADOConnection\\:\\:qStr\\(\\) expects string, mixed given\\.$#',
+    'count' => 2,
+    'path' => __DIR__ . '/../../gacl/admin/edit_objects.php',
+];
+$ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$text of function attr expects string, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../gacl/admin/edit_objects.php',
 ];
 $ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$value of function count expects array\\|Countable, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../gacl/admin/edit_objects.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#3 \\$page of method ADOConnection\\:\\:PageExecute\\(\\) expects int, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../gacl/admin/edit_objects.php',
 ];
@@ -1475,6 +1485,11 @@ $ignoreErrors[] = [
     'message' => '#^Parameter \\#2 \\.\\.\\.\\$arrays of function array_merge expects array, mixed given\\.$#',
     'count' => 1,
     'path' => __DIR__ . '/../../gacl/admin/gacl_admin.inc.php',
+];
+$ignoreErrors[] = [
+    'message' => '#^Parameter \\#1 \\$s of method ADOConnection\\:\\:qStr\\(\\) expects string, mixed given\\.$#',
+    'count' => 1,
+    'path' => __DIR__ . '/../../gacl/admin/object_search.php',
 ];
 $ignoreErrors[] = [
     'message' => '#^Parameter \\#1 \\$text of function attr expects string, mixed given\\.$#',
