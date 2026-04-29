@@ -1,0 +1,618 @@
+{
+  "resourceType": "Bundle",
+  "type": "transaction",
+  "entry": [
+    {
+      "fullUrl": "urn:uuid:fe5509e4-7641-53af-ac9d-11cdc3c6d679",
+      "resource": {
+        "resourceType": "Patient",
+        "id": "pt-006",
+        "identifier": [
+          {
+            "system": "urn:oid:2.16.840.1.113883.4.1",
+            "value": "MRN-10006"
+          }
+        ],
+        "name": [
+          {
+            "use": "official",
+            "family": "Nakamura",
+            "given": [
+              "Ingrid"
+            ]
+          }
+        ],
+        "gender": "female",
+        "birthDate": "1965-07-29"
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Patient/pt-006"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:4243a60d-d0cc-5b77-8dc7-4997bad588e2",
+      "resource": {
+        "resourceType": "Encounter",
+        "id": "enc-006",
+        "status": "in-progress",
+        "class": {
+          "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+          "code": "IMP"
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "participant": [
+          {
+            "individual": {
+              "reference": "Practitioner/prov-chen"
+            }
+          }
+        ],
+        "period": {
+          "start": "2026-04-26T08:00:00Z"
+        },
+        "location": [
+          {
+            "location": {
+              "display": "Bed 518"
+            }
+          }
+        ],
+        "reasonCode": [
+          {
+            "coding": [
+              {
+                "system": "http://snomed.info/sct",
+                "code": "59282003",
+                "display": "Suspected pulmonary embolism"
+              }
+            ]
+          }
+        ],
+        "extension": [
+          {
+            "url": "http://example.org/fhir/StructureDefinition/discharge-plan-status",
+            "valueString": "Discharge plan documented \u2014 pending results review"
+          }
+        ]
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Encounter/enc-006"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:b01f1456-1bf9-550a-94e2-2953677c5011",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-006-sbp",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8480-6",
+              "display": "Systolic blood pressure"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-006"
+        },
+        "effectiveDateTime": "2026-04-29T05:30:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-chen"
+          }
+        ],
+        "valueQuantity": {
+          "value": 118.0,
+          "unit": "mmHg",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-006-sbp"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:da9c1904-d1e2-55e8-9a6f-34d27e57c9bc",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-006-dbp",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8462-4",
+              "display": "Diastolic blood pressure"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-006"
+        },
+        "effectiveDateTime": "2026-04-29T05:30:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-chen"
+          }
+        ],
+        "valueQuantity": {
+          "value": 72.0,
+          "unit": "mmHg",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-006-dbp"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:b7ce7b36-4a58-54e9-8f38-73e6295e366d",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-006-hr",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8867-4",
+              "display": "Heart rate"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-006"
+        },
+        "effectiveDateTime": "2026-04-29T05:30:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-chen"
+          }
+        ],
+        "valueQuantity": {
+          "value": 102.0,
+          "unit": "/min",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-006-hr"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:fda630bd-ec4e-5eaf-b04d-e6bf357743a8",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-006-rr",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "9279-1",
+              "display": "Respiratory rate"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-006"
+        },
+        "effectiveDateTime": "2026-04-29T05:30:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-chen"
+          }
+        ],
+        "valueQuantity": {
+          "value": 19.0,
+          "unit": "/min",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-006-rr"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:5af935c5-b185-5249-a68d-be0f1d56abcc",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-006-temp",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8310-5",
+              "display": "Body temperature"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-006"
+        },
+        "effectiveDateTime": "2026-04-29T05:30:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-chen"
+          }
+        ],
+        "valueQuantity": {
+          "value": 37.2,
+          "unit": "Cel",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-006-temp"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:87c9cd85-335a-58dc-b8b8-d65f598307e4",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-006-spo2",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "59408-5",
+              "display": "Oxygen saturation"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-006"
+        },
+        "effectiveDateTime": "2026-04-29T05:30:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-chen"
+          }
+        ],
+        "valueQuantity": {
+          "value": 93.0,
+          "unit": "%",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-006-spo2"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:2dd28712-ce68-5338-bf78-82191335655b",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-006-ddimer",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "laboratory"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "48066-5",
+              "display": "Fibrin D-dimer DDU [Mass/volume] in Platelet poor plasma"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-006"
+        },
+        "effectiveDateTime": "2026-04-29T02:00:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-lab"
+          }
+        ],
+        "valueQuantity": {
+          "value": 3.2,
+          "unit": "mg/L FEU",
+          "system": "http://unitsofmeasure.org"
+        },
+        "interpretation": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation",
+                "code": "H"
+              }
+            ]
+          }
+        ]
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-006-ddimer"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:153192ac-202d-5121-9890-021fc07f066e",
+      "resource": {
+        "resourceType": "Condition",
+        "id": "pt-006-cond1",
+        "clinicalStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+              "code": "active"
+            }
+          ]
+        },
+        "code": {
+          "coding": [
+            {
+              "system": "http://snomed.info/sct",
+              "code": "59282003",
+              "display": "Pulmonary embolism"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-006"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Condition/pt-006-cond1"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:f718e877-500b-57ef-b932-9df3b7b9b56d",
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "pt-006-med1",
+        "status": "active",
+        "intent": "order",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "67108",
+              "display": "Heparin 5000 units IV bolus"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-006"
+        },
+        "authoredOn": "2026-04-29T01:00:00Z",
+        "requester": {
+          "reference": "Practitioner/prov-chen"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "MedicationRequest/pt-006-med1"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:02e56ed8-c15f-537e-8b8b-dd765c7222d4",
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "pt-006-med2",
+        "status": "active",
+        "intent": "order",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "1037045",
+              "display": "Enoxaparin 1mg/kg SC q12h"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-006"
+        },
+        "authoredOn": "2026-04-29T02:00:00Z",
+        "requester": {
+          "reference": "Practitioner/prov-chen"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "MedicationRequest/pt-006-med2"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:bb0f3095-3022-55b2-b0d9-e18f733b0c4e",
+      "resource": {
+        "resourceType": "AllergyIntolerance",
+        "id": "pt-006-allergy",
+        "clinicalStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical",
+              "code": "active"
+            }
+          ]
+        },
+        "code": {
+          "coding": [
+            {
+              "system": "http://hl7.org/fhir/uv/ips/CodeSystem/absent-unknown-uv-ips",
+              "code": "no-known-allergy",
+              "display": "No known allergy"
+            }
+          ]
+        },
+        "patient": {
+          "reference": "Patient/pt-006"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "AllergyIntolerance/pt-006-allergy"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:2056bd25-463b-58d9-8396-410f65ff6d96",
+      "resource": {
+        "resourceType": "DiagnosticReport",
+        "id": "pt-006-ct",
+        "status": "registered",
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "24627-2",
+              "display": "CT Chest"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-006"
+        },
+        "issued": "2026-04-28T23:00:00Z"
+      },
+      "request": {
+        "method": "PUT",
+        "url": "DiagnosticReport/pt-006-ct"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:8e0927d6-9ead-5a3b-bb3e-c0ecfcd07342",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-006-codestatus",
+        "status": "final",
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "81638-3",
+              "display": "Code status"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-006"
+        },
+        "effectiveDateTime": "2026-04-26T08:00:00Z",
+        "valueCodeableConcept": {
+          "text": "Full Code"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-006-codestatus"
+      }
+    }
+  ]
+}

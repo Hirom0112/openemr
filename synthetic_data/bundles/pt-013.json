@@ -1,0 +1,674 @@
+{
+  "resourceType": "Bundle",
+  "type": "transaction",
+  "entry": [
+    {
+      "fullUrl": "urn:uuid:35cdf2b7-f8ac-5666-a95b-3ddc1888e8ac",
+      "resource": {
+        "resourceType": "Patient",
+        "id": "pt-013",
+        "identifier": [
+          {
+            "system": "urn:oid:2.16.840.1.113883.4.1",
+            "value": "MRN-10013"
+          }
+        ],
+        "name": [
+          {
+            "use": "official",
+            "family": "Reyes",
+            "given": [
+              "Carlos"
+            ]
+          }
+        ],
+        "gender": "male",
+        "birthDate": "1977-09-09"
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Patient/pt-013"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:ae9602dc-0bf6-5883-971f-eb0ea954b6c1",
+      "resource": {
+        "resourceType": "Encounter",
+        "id": "enc-013",
+        "status": "in-progress",
+        "class": {
+          "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+          "code": "IMP"
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "participant": [
+          {
+            "individual": {
+              "reference": "Practitioner/prov-chen"
+            }
+          }
+        ],
+        "period": {
+          "start": "2026-04-28T08:00:00Z"
+        },
+        "location": [
+          {
+            "location": {
+              "display": "Bed 511"
+            }
+          }
+        ],
+        "reasonCode": [
+          {
+            "coding": [
+              {
+                "system": "http://snomed.info/sct",
+                "code": "420422005",
+                "display": "Diabetic ketoacidosis"
+              }
+            ]
+          }
+        ]
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Encounter/enc-013"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:5e012001-e692-528d-ba1f-1200736b840e",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-013-sbp",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8480-6",
+              "display": "Systolic blood pressure"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-013"
+        },
+        "effectiveDateTime": "2026-04-29T06:00:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-chen"
+          }
+        ],
+        "valueQuantity": {
+          "value": 121.28223707793126,
+          "unit": "mmHg",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-013-sbp"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:11a87c62-4d49-5853-9834-c04ea93746ba",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-013-dbp",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8462-4",
+              "display": "Diastolic blood pressure"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-013"
+        },
+        "effectiveDateTime": "2026-04-29T06:00:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-chen"
+          }
+        ],
+        "valueQuantity": {
+          "value": 70.94284878445325,
+          "unit": "mmHg",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-013-dbp"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:fae5016f-3ff9-5f4f-ad03-8bfc4e1e0be9",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-013-hr",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8867-4",
+              "display": "Heart rate"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-013"
+        },
+        "effectiveDateTime": "2026-04-29T06:00:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-chen"
+          }
+        ],
+        "valueQuantity": {
+          "value": 70.0517929544365,
+          "unit": "/min",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-013-hr"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:d8fc2c6a-cc8b-550c-b051-7786d5d70d0b",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-013-rr",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "9279-1",
+              "display": "Respiratory rate"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-013"
+        },
+        "effectiveDateTime": "2026-04-29T06:00:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-chen"
+          }
+        ],
+        "valueQuantity": {
+          "value": 12.260702657538584,
+          "unit": "/min",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-013-rr"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:1afe7336-0f8e-5c6e-b150-7dbdff484340",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-013-temp",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "8310-5",
+              "display": "Body temperature"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-013"
+        },
+        "effectiveDateTime": "2026-04-29T06:00:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-chen"
+          }
+        ],
+        "valueQuantity": {
+          "value": 37.097252343573395,
+          "unit": "Cel",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-013-temp"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:94ad4e17-db9c-5e13-b20f-87aeb34d7d80",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-013-spo2",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "59408-5",
+              "display": "Oxygen saturation"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-013"
+        },
+        "effectiveDateTime": "2026-04-29T06:00:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-chen"
+          }
+        ],
+        "valueQuantity": {
+          "value": 95.49930465141284,
+          "unit": "%",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-013-spo2"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:33d844db-e2a4-59ea-ac3f-28c2999e8af0",
+      "resource": {
+        "resourceType": "Condition",
+        "id": "pt-013-cond1",
+        "clinicalStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+              "code": "active"
+            }
+          ]
+        },
+        "code": {
+          "coding": [
+            {
+              "system": "http://snomed.info/sct",
+              "code": "420422005",
+              "display": "Diabetic ketoacidosis"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-013"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Condition/pt-013-cond1"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:2dd6cf3a-3408-5b3a-9095-93f020b95557",
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "pt-013-med1",
+        "status": "active",
+        "intent": "order",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "51428",
+              "display": "Insulin glargine 20 units SC daily"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-013"
+        },
+        "authoredOn": "2026-04-28T08:00:00Z",
+        "requester": {
+          "reference": "Practitioner/prov-chen"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "MedicationRequest/pt-013-med1"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:00ccedfd-44e4-5c17-b934-2088627b1660",
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "pt-013-med2",
+        "status": "active",
+        "intent": "order",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "860975",
+              "display": "Metformin 500mg PO BID"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-013"
+        },
+        "authoredOn": "2026-04-28T08:00:00Z",
+        "requester": {
+          "reference": "Practitioner/prov-chen"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "MedicationRequest/pt-013-med2"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:48c43c15-113c-54d3-bd23-8edb3d618863",
+      "resource": {
+        "resourceType": "MedicationRequest",
+        "id": "pt-013-med3",
+        "status": "active",
+        "intent": "order",
+        "medicationCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+              "code": "202991",
+              "display": "Sodium chloride 0.9% IV 125 mL/hr"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-013"
+        },
+        "authoredOn": "2026-04-28T08:00:00Z",
+        "requester": {
+          "reference": "Practitioner/prov-chen"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "MedicationRequest/pt-013-med3"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:1fa568d2-fc82-5c96-960c-32a1b3cb26b1",
+      "resource": {
+        "resourceType": "AllergyIntolerance",
+        "id": "pt-013-allergy",
+        "clinicalStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical",
+              "code": "active"
+            }
+          ]
+        },
+        "code": {
+          "coding": [
+            {
+              "system": "http://hl7.org/fhir/uv/ips/CodeSystem/absent-unknown-uv-ips",
+              "code": "no-known-allergy",
+              "display": "No known allergy"
+            }
+          ]
+        },
+        "patient": {
+          "reference": "Patient/pt-013"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "AllergyIntolerance/pt-013-allergy"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:ab3287d7-c6d0-5555-ba67-764a7328222b",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-013-lab1",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "laboratory"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "2345-7",
+              "display": "Glucose [Mass/volume] in Serum or Plasma"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-013"
+        },
+        "effectiveDateTime": "2026-04-29T04:00:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-lab"
+          }
+        ],
+        "valueQuantity": {
+          "value": 420.0,
+          "unit": "mg/dL",
+          "system": "http://unitsofmeasure.org"
+        },
+        "interpretation": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation",
+                "code": "HH"
+              }
+            ]
+          }
+        ]
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-013-lab1"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:c58c05c5-9aa0-59da-91bb-926de6d021e3",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-013-lab2",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "laboratory"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "6298-4",
+              "display": "Potassium [Moles/volume] in Blood"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-013"
+        },
+        "effectiveDateTime": "2026-04-29T04:00:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-lab"
+          }
+        ],
+        "valueQuantity": {
+          "value": 3.3,
+          "unit": "mmol/L",
+          "system": "http://unitsofmeasure.org"
+        },
+        "interpretation": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation",
+                "code": "L"
+              }
+            ]
+          }
+        ]
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-013-lab2"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:05a27f24-2306-57ae-844d-ec6a9e6a01f2",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-013-codestatus",
+        "status": "final",
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "81638-3",
+              "display": "Code status"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-013"
+        },
+        "effectiveDateTime": "2026-04-28T08:00:00Z",
+        "valueCodeableConcept": {
+          "text": "Full Code"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-013-codestatus"
+      }
+    }
+  ]
+}
