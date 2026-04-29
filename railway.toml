@@ -1,0 +1,10 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# healthcheckPath intentionally omitted for first deploy.
+# First-boot database initialization can exceed any reasonable timeout.
+# Add "/meta/health/readyz" after confirming first boot completes successfully.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
