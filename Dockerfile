@@ -1,4 +1,4 @@
-FROM openemr/openemr:flex
+FROM openemr/openemr:latest
 
 # Inject proxy trust config before Apache starts.
 # Inlined to avoid build-context path resolution issues.
