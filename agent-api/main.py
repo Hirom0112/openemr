@@ -90,6 +90,16 @@ _langfuse: Langfuse | None = None
 
 
 @app.on_event("startup")
+async def warn_legacy_endpoints() -> None:
+    if settings.legacy_endpoints_enabled:
+        logger.warning(
+            "Legacy per-use-case endpoints are ACTIVE. "
+            "These will be removed after Phase 13 cutover is confirmed. "
+            "Set LEGACY_ENDPOINTS_ENABLED=false to disable."
+        )
+
+
+@app.on_event("startup")
 async def startup() -> None:
     global _redis, _redis_saver, _sqlite_saver, _langfuse
 
@@ -151,7 +161,7 @@ async def get_patient(patient_id: str) -> dict:
         raise HTTPException(status_code=502, detail="FHIR upstream error") from exc
 
 
-# ── UC-1 Triage Census ────────────────────────────────────────────────────────
+# ── UC-1 Triage Census ──────────────────────────────────────────────────────── LEGACY — retire after Phase 13 cutover
 
 class CensusRequest(BaseModel):
     patient_ids: list[str]
@@ -177,7 +187,7 @@ async def triage_census(body: CensusRequest) -> dict:
         raise HTTPException(status_code=500, detail="Triage census failed") from exc
 
 
-# ── UC-2 Pre-Encounter Briefing ───────────────────────────────────────────────
+# ── UC-2 Pre-Encounter Briefing ───────────────────────────────────────────────  LEGACY — retire after Phase 13 cutover
 
 @app.post("/briefing/{patient_id}", response_model=BriefingResponse)
 async def briefing(patient_id: str) -> BriefingResponse:
@@ -194,7 +204,7 @@ async def briefing(patient_id: str) -> BriefingResponse:
         raise HTTPException(status_code=500, detail="Briefing generation failed") from exc
 
 
-# ── UC-3 Targeted Record Query ────────────────────────────────────────────────
+# ── UC-3 Targeted Record Query ────────────────────────────────────────────────  LEGACY — retire after Phase 13 cutover
 
 class QueryRequest(BaseModel):
     patient_id: str
@@ -216,7 +226,7 @@ async def targeted_query(session_id: str, body: QueryRequest) -> dict:
         raise HTTPException(status_code=500, detail="Query failed") from exc
 
 
-# ── UC-4 Medication Safety ────────────────────────────────────────────────────
+# ── UC-4 Medication Safety ────────────────────────────────────────────────────  LEGACY — retire after Phase 13 cutover
 
 @app.get("/medication/safety/{patient_id}")
 async def medication_safety(patient_id: str) -> dict:
@@ -230,7 +240,7 @@ async def medication_safety(patient_id: str) -> dict:
         raise HTTPException(status_code=502, detail="FHIR upstream error") from exc
 
 
-# ── UC-5 Parallel Handoff ─────────────────────────────────────────────────────
+# ── UC-5 Parallel Handoff ─────────────────────────────────────────────────────  LEGACY — retire after Phase 13 cutover
 
 class HandoffRequest(BaseModel):
     patient_ids: list[str]
