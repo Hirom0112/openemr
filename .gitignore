@@ -3,6 +3,9 @@
 
 # environment vars
 .env
+.env.*
+!.env.example
+!.env.*.example
 
 # vendor and assets
 node_modules
