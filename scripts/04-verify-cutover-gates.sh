@@ -29,12 +29,14 @@ WARN=0
 pass()  { echo "  PASS: $1"; ((PASS++))  || true; }
 fail()  { echo "  FAIL: $1"; ((FAIL++))  || true; }
 warn()  { echo "  WARN: $1"; ((WARN++))  || true; }
+ms_now() { python3 -c "import time; print(int(time.time() * 1000))"; }
+
 timed() {
   local label="$1"; shift
   local start end elapsed
-  start=$(date +%s%3N)
+  start=$(ms_now)
   "$@" > /tmp/gate_resp.json 2>/dev/null || echo "{}" > /tmp/gate_resp.json
-  end=$(date +%s%3N)
+  end=$(ms_now)
   elapsed=$(( end - start ))
   echo "${elapsed}"
 }

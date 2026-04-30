@@ -150,15 +150,29 @@ class FHIRClient:
     async def search(self, resource: str, params: dict[str, str]) -> dict[str, Any]:
         return await self.get(resource, params=params)
 
+    async def _safe_search(self, resource: str, params: dict[str, str], patient_id: str) -> dict[str, Any]:
+        """Search with error handling; returns empty bundle on failure."""
+        try:
+            return await self.search(resource, params)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "FHIR fetch failed",
+                extra={"resource": resource, "params": params, "patient_id": patient_id, "error": str(exc)},
+            )
+            return {}
+
     async def get_bundle_for_patient(self, patient_id: str) -> dict[str, Any]:
-        """Fetch a minimal census bundle: vitals, labs, meds, conditions, allergies."""
+        """Fetch a minimal census bundle: vitals, labs, meds, conditions, allergies.
+
+        All 8 FHIR searches run concurrently via asyncio.gather() to minimise
+        wall-clock latency. Observation results are deduplicated by resource id
+        before being stored so the lab search cannot overwrite vitals entries.
+        SBP/DBP (8480-6/8462-4) are stored as hasMember observations in OpenEMR
+        and are NOT returned by category=vital-signs, so they are fetched explicitly.
+        """
         fhir_id = await self._resolve_patient_id(patient_id)
 
-        # Observation fetches are split by category to avoid the lab search overwriting
-        # the vital-signs results when both use the same resource key.
-        # SBP/DBP (8480-6/8462-4) are stored as hasMember observations in OpenEMR —
-        # they are NOT returned by category=vital-signs, so we fetch them explicitly.
-        observation_searches = [
+        observation_params = [
             {"patient": fhir_id, "category": "vital-signs", "_count": "50"},
             {"patient": fhir_id, "code": "8480-6", "_count": "10"},  # Systolic BP
             {"patient": fhir_id, "code": "8462-4", "_count": "10"},  # Diastolic BP
@@ -171,36 +185,29 @@ class FHIRClient:
             ("Flag", {"patient": fhir_id}),
         ]
 
-        results: dict[str, Any] = {"patient_id": patient_id, "resources": {}}
+        # Run all searches concurrently.
+        obs_coros = [self._safe_search("Observation", p, patient_id) for p in observation_params]
+        other_coros = [self._safe_search(r, p, patient_id) for r, p in other_resources]
+        all_results = await asyncio.gather(*obs_coros, *other_coros)
 
-        # Merge all Observation entries into a single list (deduplicating by resource id)
+        obs_results = all_results[:len(obs_coros)]
+        other_results = all_results[len(obs_coros):]
+
+        # Merge Observation entries, deduplicating by resource id.
         obs_entries: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
-        for params in observation_searches:
-            try:
-                data = await self.search("Observation", params)
-                for entry in data.get("entry", []):
-                    rid = entry.get("resource", {}).get("id")
-                    if rid and rid not in seen_ids:
-                        seen_ids.add(rid)
-                        obs_entries.append(entry)
-            except httpx.HTTPError as exc:
-                logger.warning(
-                    "FHIR fetch failed",
-                    extra={"resource": "Observation", "params": params, "patient_id": patient_id, "error": str(exc)},
-                )
-        results["resources"]["Observation"] = obs_entries
+        for data in obs_results:
+            for entry in data.get("entry", []):
+                rid = entry.get("resource", {}).get("id")
+                if rid and rid not in seen_ids:
+                    seen_ids.add(rid)
+                    obs_entries.append(entry)
 
-        for resource, params in other_resources:
-            try:
-                data = await self.search(resource, params)
-                results["resources"][resource] = data.get("entry", [])
-            except httpx.HTTPError as exc:
-                logger.warning(
-                    "FHIR fetch failed",
-                    extra={"resource": resource, "patient_id": patient_id, "error": str(exc)},
-                )
-                results["resources"][resource] = []
+        results: dict[str, Any] = {"patient_id": patient_id, "resources": {}}
+        results["resources"]["Observation"] = obs_entries
+        for (resource, _), data in zip(other_resources, other_results):
+            results["resources"][resource] = data.get("entry", [])
+
         return results
 
 
