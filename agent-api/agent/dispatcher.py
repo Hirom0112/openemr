@@ -31,6 +31,7 @@ from agent.schemas import DISPATCHER_TOOLS
 from agent.system_prompt import build_system_prompt
 from agent.tool_registry import TOOL_REGISTRY
 from config import settings
+from verification.dispatcher_response import verify_dispatcher_response
 from verification.domain_constraints import verify_conversation_answer
 
 logger = logging.getLogger(__name__)
@@ -367,10 +368,41 @@ async def dispatch(
             _finalize_span(dispatch_span, error=True)
             return _error_response(ToolFailureClass.UNKNOWN, f"exceeded {MAX_TOOL_TURNS} tool turns")
 
-        # Apply lightweight final-response verification
-        if final_narrative:
-            patient_id = session_context.get("patient_ids", [None])[0] if session_context.get("patient_ids") else "unknown"
-            final_narrative = verify_conversation_answer(final_narrative, patient_id or "unknown")
+        # Apply final-response verification (all 7 hard rules)
+        active_patient_id: str | None = None
+        if session_context.get("patient_ids"):
+            active_patient_id = session_context["patient_ids"][0]
+        elif session_context.get("last_viewed_patient_id"):
+            active_patient_id = session_context["last_viewed_patient_id"]
+
+        pre_verify_response: dict[str, Any] = {
+            "type": response_type,
+            "data": final_data,
+            "narrative": final_narrative,
+            "citations": all_citations,
+            "metadata": {},
+        }
+        fhir_context = session_context.get("fhir_context", {})
+        verification_result = verify_dispatcher_response(
+            pre_verify_response, fhir_context, active_patient_id
+        )
+
+        if verification_result.blocked:
+            logger.error(
+                "Dispatcher response blocked by verification",
+                extra={"session_id": session_id, "violations": verification_result.violations},
+            )
+            _finalize_span(dispatch_span, error=True)
+            return {
+                "type": "error",
+                "data": None,
+                "narrative": verification_result.physician_message,
+                "citations": [],
+                "metadata": {"verification_blocked": True},
+            }
+
+        verified_response = verification_result.modified_response
+        final_narrative = verified_response.get("narrative", final_narrative)
 
         # Save assistant response to history
         await _save_turn(session_id, session_context, "assistant", final_narrative or json.dumps(final_data or {}))
@@ -381,7 +413,11 @@ async def dispatch(
             dispatch_span,
             error=False,
             output={"type": response_type, "duration_ms": duration_ms},
-            metadata={"misroute_detected": misroute_detected, "self_corrected": self_corrected},
+            metadata={
+                "misroute_detected": misroute_detected,
+                "self_corrected": self_corrected,
+                "verification_violations": verification_result.violations,
+            },
         )
 
         return {
@@ -395,6 +431,7 @@ async def dispatch(
                 "turn_count": turn_count,
                 "misroute_detected": misroute_detected,
                 "self_corrected": self_corrected,
+                "verification_violations": verification_result.violations,
             },
         }
 
