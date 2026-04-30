@@ -112,7 +112,7 @@ LATENCIES=()
 for i in $(seq 1 10); do
   MS=$(timed "query-${i}" curl -sf -X POST "${AGENT_API_URL}/agent/query" \
     -H "Content-Type: application/json" \
-    -d "{\"message\": \"Brief me on bed 501.\", \"session_id\": \"${SESSION_ID}-lat\"}")
+    -d "{\"message\": \"Brief me on bed 501.\", \"session_id\": \"${SESSION_ID}-lat\", \"provider_id\": \"gate-check\", \"patient_ids\": [\"pt-001\"]}")
   LATENCIES+=("${MS}")
   echo "    query ${i}: ${MS}ms"
 done
