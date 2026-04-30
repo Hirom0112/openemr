@@ -153,16 +153,45 @@ class FHIRClient:
     async def get_bundle_for_patient(self, patient_id: str) -> dict[str, Any]:
         """Fetch a minimal census bundle: vitals, labs, meds, conditions, allergies."""
         fhir_id = await self._resolve_patient_id(patient_id)
-        resources = [
-            ("Observation", {"patient": fhir_id, "category": "vital-signs", "_count": "50"}),
-            ("Observation", {"patient": fhir_id, "category": "laboratory", "_count": "100"}),
+
+        # Observation fetches are split by category to avoid the lab search overwriting
+        # the vital-signs results when both use the same resource key.
+        # SBP/DBP (8480-6/8462-4) are stored as hasMember observations in OpenEMR —
+        # they are NOT returned by category=vital-signs, so we fetch them explicitly.
+        observation_searches = [
+            {"patient": fhir_id, "category": "vital-signs", "_count": "50"},
+            {"patient": fhir_id, "code": "8480-6", "_count": "10"},  # Systolic BP
+            {"patient": fhir_id, "code": "8462-4", "_count": "10"},  # Diastolic BP
+            {"patient": fhir_id, "category": "laboratory", "_count": "100"},
+        ]
+        other_resources = [
             ("MedicationRequest", {"patient": fhir_id, "status": "active"}),
             ("Condition", {"patient": fhir_id, "clinical-status": "active"}),
             ("AllergyIntolerance", {"patient": fhir_id}),
             ("Flag", {"patient": fhir_id}),
         ]
+
         results: dict[str, Any] = {"patient_id": patient_id, "resources": {}}
-        for resource, params in resources:
+
+        # Merge all Observation entries into a single list (deduplicating by resource id)
+        obs_entries: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for params in observation_searches:
+            try:
+                data = await self.search("Observation", params)
+                for entry in data.get("entry", []):
+                    rid = entry.get("resource", {}).get("id")
+                    if rid and rid not in seen_ids:
+                        seen_ids.add(rid)
+                        obs_entries.append(entry)
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "FHIR fetch failed",
+                    extra={"resource": "Observation", "params": params, "patient_id": patient_id, "error": str(exc)},
+                )
+        results["resources"]["Observation"] = obs_entries
+
+        for resource, params in other_resources:
             try:
                 data = await self.search(resource, params)
                 results["resources"][resource] = data.get("entry", [])
