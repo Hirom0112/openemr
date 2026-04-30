@@ -611,6 +611,35 @@
         "method": "PUT",
         "url": "Observation/pt-014-codestatus"
       }
+    },
+    {
+      "fullUrl": "urn:uuid:b8ae64a6-612b-5471-bdea-7f8bab7901f8",
+      "resource": {
+        "resourceType": "Flag",
+        "id": "pt-014-isolation",
+        "status": "inactive",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/flag-category",
+                "code": "infection",
+                "display": "Infection Control Flag"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "text": "No Isolation Required"
+        },
+        "subject": {
+          "reference": "Patient/pt-014"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Flag/pt-014-isolation"
+      }
     }
   ]
 }

@@ -3,45 +3,45 @@
   "type": "transaction",
   "entry": [
     {
-      "fullUrl": "urn:uuid:00c29fa7-205c-5262-99ee-b9f13b8e544e",
+      "fullUrl": "urn:uuid:79d65d0c-4c77-50eb-af91-534e6db78144",
       "resource": {
         "resourceType": "Patient",
-        "id": "pt-009",
+        "id": "pt-022",
         "identifier": [
           {
             "system": "urn:oid:2.16.840.1.113883.4.1",
-            "value": "MRN-10009"
+            "value": "MRN-10022"
           }
         ],
         "name": [
           {
             "use": "official",
-            "family": "Morales",
+            "family": "Whitfield",
             "given": [
-              "Elena"
+              "James"
             ]
           }
         ],
-        "gender": "female",
-        "birthDate": "1955-08-17"
+        "gender": "male",
+        "birthDate": "1942-10-05"
       },
       "request": {
         "method": "PUT",
-        "url": "Patient/pt-009"
+        "url": "Patient/pt-022"
       }
     },
     {
-      "fullUrl": "urn:uuid:fb313721-3619-510c-b1ba-76e5b350732f",
+      "fullUrl": "urn:uuid:aabe3ccf-7455-56fe-8ae2-8344db8525c5",
       "resource": {
         "resourceType": "Encounter",
-        "id": "enc-009",
+        "id": "enc-022",
         "status": "in-progress",
         "class": {
           "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
           "code": "IMP"
         },
         "subject": {
-          "reference": "Patient/pt-009"
+          "reference": "Patient/pt-022"
         },
         "participant": [
           {
@@ -56,7 +56,7 @@
         "location": [
           {
             "location": {
-              "display": "Bed 504"
+              "display": "Bed 526"
             }
           }
         ],
@@ -65,8 +65,8 @@
             "coding": [
               {
                 "system": "http://snomed.info/sct",
-                "code": "68566005",
-                "display": "Urinary tract infection"
+                "code": "409966000",
+                "display": "Acute delirium \u2014 hyperactive type"
               }
             ]
           }
@@ -74,14 +74,14 @@
       },
       "request": {
         "method": "PUT",
-        "url": "Encounter/enc-009"
+        "url": "Encounter/enc-022"
       }
     },
     {
-      "fullUrl": "urn:uuid:e15ebb72-c7ed-55e7-bf07-23cff41a4c7c",
+      "fullUrl": "urn:uuid:45072bbf-414e-5522-bf6f-61a52f73cc16",
       "resource": {
         "resourceType": "Observation",
-        "id": "pt-009-sbp",
+        "id": "pt-022-sbp",
         "status": "final",
         "category": [
           {
@@ -103,10 +103,10 @@
           ]
         },
         "subject": {
-          "reference": "Patient/pt-009"
+          "reference": "Patient/pt-022"
         },
         "encounter": {
-          "reference": "Encounter/enc-009"
+          "reference": "Encounter/enc-022"
         },
         "effectiveDateTime": "2026-04-29T06:00:00Z",
         "performer": [
@@ -115,21 +115,21 @@
           }
         ],
         "valueQuantity": {
-          "value": 131.65879154294169,
+          "value": 128.0,
           "unit": "mmHg",
           "system": "http://unitsofmeasure.org"
         }
       },
       "request": {
         "method": "PUT",
-        "url": "Observation/pt-009-sbp"
+        "url": "Observation/pt-022-sbp"
       }
     },
     {
-      "fullUrl": "urn:uuid:732aa5a4-2cf1-58e5-a29b-482c61e1c096",
+      "fullUrl": "urn:uuid:c56df0b5-a38d-5c0d-876e-76d908ced7eb",
       "resource": {
         "resourceType": "Observation",
-        "id": "pt-009-dbp",
+        "id": "pt-022-dbp",
         "status": "final",
         "category": [
           {
@@ -151,10 +151,10 @@
           ]
         },
         "subject": {
-          "reference": "Patient/pt-009"
+          "reference": "Patient/pt-022"
         },
         "encounter": {
-          "reference": "Encounter/enc-009"
+          "reference": "Encounter/enc-022"
         },
         "effectiveDateTime": "2026-04-29T06:00:00Z",
         "performer": [
@@ -163,21 +163,21 @@
           }
         ],
         "valueQuantity": {
-          "value": 62.65027963578934,
+          "value": 74.0,
           "unit": "mmHg",
           "system": "http://unitsofmeasure.org"
         }
       },
       "request": {
         "method": "PUT",
-        "url": "Observation/pt-009-dbp"
+        "url": "Observation/pt-022-dbp"
       }
     },
     {
-      "fullUrl": "urn:uuid:0ba9d8bb-2471-55ef-b310-f71c79685cce",
+      "fullUrl": "urn:uuid:4f520df9-d12b-5588-a93e-8ac3853be3e5",
       "resource": {
         "resourceType": "Observation",
-        "id": "pt-009-hr",
+        "id": "pt-022-hr",
         "status": "final",
         "category": [
           {
@@ -199,10 +199,10 @@
           ]
         },
         "subject": {
-          "reference": "Patient/pt-009"
+          "reference": "Patient/pt-022"
         },
         "encounter": {
-          "reference": "Encounter/enc-009"
+          "reference": "Encounter/enc-022"
         },
         "effectiveDateTime": "2026-04-29T06:00:00Z",
         "performer": [
@@ -211,21 +211,21 @@
           }
         ],
         "valueQuantity": {
-          "value": 70.45111409802654,
+          "value": 88.0,
           "unit": "/min",
           "system": "http://unitsofmeasure.org"
         }
       },
       "request": {
         "method": "PUT",
-        "url": "Observation/pt-009-hr"
+        "url": "Observation/pt-022-hr"
       }
     },
     {
-      "fullUrl": "urn:uuid:01c2c4e2-d556-52b7-98fe-6417ab22a311",
+      "fullUrl": "urn:uuid:d8815007-b18a-5614-a09f-911c6cffddd6",
       "resource": {
         "resourceType": "Observation",
-        "id": "pt-009-rr",
+        "id": "pt-022-rr",
         "status": "final",
         "category": [
           {
@@ -247,10 +247,10 @@
           ]
         },
         "subject": {
-          "reference": "Patient/pt-009"
+          "reference": "Patient/pt-022"
         },
         "encounter": {
-          "reference": "Encounter/enc-009"
+          "reference": "Encounter/enc-022"
         },
         "effectiveDateTime": "2026-04-29T06:00:00Z",
         "performer": [
@@ -259,21 +259,21 @@
           }
         ],
         "valueQuantity": {
-          "value": 13.339264428892937,
+          "value": 17.0,
           "unit": "/min",
           "system": "http://unitsofmeasure.org"
         }
       },
       "request": {
         "method": "PUT",
-        "url": "Observation/pt-009-rr"
+        "url": "Observation/pt-022-rr"
       }
     },
     {
-      "fullUrl": "urn:uuid:3c68edfc-2651-5f5c-876b-2171bc1b826e",
+      "fullUrl": "urn:uuid:d9294450-6438-5ef2-a896-f9c7dde200ac",
       "resource": {
         "resourceType": "Observation",
-        "id": "pt-009-temp",
+        "id": "pt-022-temp",
         "status": "final",
         "category": [
           {
@@ -295,10 +295,10 @@
           ]
         },
         "subject": {
-          "reference": "Patient/pt-009"
+          "reference": "Patient/pt-022"
         },
         "encounter": {
-          "reference": "Encounter/enc-009"
+          "reference": "Encounter/enc-022"
         },
         "effectiveDateTime": "2026-04-29T06:00:00Z",
         "performer": [
@@ -307,21 +307,21 @@
           }
         ],
         "valueQuantity": {
-          "value": 37.45741257841321,
+          "value": 37.3,
           "unit": "Cel",
           "system": "http://unitsofmeasure.org"
         }
       },
       "request": {
         "method": "PUT",
-        "url": "Observation/pt-009-temp"
+        "url": "Observation/pt-022-temp"
       }
     },
     {
-      "fullUrl": "urn:uuid:61dfb2c3-5502-510b-a62c-d5732976a6e5",
+      "fullUrl": "urn:uuid:a8f37947-c5ba-55ee-8513-68951a3883ff",
       "resource": {
         "resourceType": "Observation",
-        "id": "pt-009-spo2",
+        "id": "pt-022-spo2",
         "status": "final",
         "category": [
           {
@@ -343,10 +343,10 @@
           ]
         },
         "subject": {
-          "reference": "Patient/pt-009"
+          "reference": "Patient/pt-022"
         },
         "encounter": {
-          "reference": "Encounter/enc-009"
+          "reference": "Encounter/enc-022"
         },
         "effectiveDateTime": "2026-04-29T06:00:00Z",
         "performer": [
@@ -355,21 +355,166 @@
           }
         ],
         "valueQuantity": {
-          "value": 97.70679794969165,
+          "value": 96.0,
           "unit": "%",
           "system": "http://unitsofmeasure.org"
         }
       },
       "request": {
         "method": "PUT",
-        "url": "Observation/pt-009-spo2"
+        "url": "Observation/pt-022-spo2"
       }
     },
     {
-      "fullUrl": "urn:uuid:4326fd6d-b993-5561-91f8-643450989054",
+      "fullUrl": "urn:uuid:267952ff-44ac-50e5-ac42-81121c351a9b",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-022-gcs",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "vital-signs"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "9269-2",
+              "display": "Glasgow coma score total"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-022"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-022"
+        },
+        "effectiveDateTime": "2026-04-29T06:00:00Z",
+        "valueInteger": 14,
+        "interpretation": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation",
+                "code": "L"
+              }
+            ]
+          }
+        ]
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-022-gcs"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:8c6dd0aa-f50a-5d89-bf8f-152e215ac972",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-022-bmp",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "laboratory"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "2823-3",
+              "display": "Potassium [Moles/volume] in Blood"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-022"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-022"
+        },
+        "effectiveDateTime": "2026-04-29T04:00:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-lab"
+          }
+        ],
+        "valueQuantity": {
+          "value": 4.0,
+          "unit": "mmol/L",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-022-bmp"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:3d8fc263-00ce-5448-b5fe-243acc30684a",
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-022-creat",
+        "status": "final",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                "code": "laboratory"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "2160-0",
+              "display": "Creatinine [Mass/volume] in Serum or Plasma"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-022"
+        },
+        "encounter": {
+          "reference": "Encounter/enc-022"
+        },
+        "effectiveDateTime": "2026-04-29T04:00:00Z",
+        "performer": [
+          {
+            "reference": "Practitioner/prov-lab"
+          }
+        ],
+        "valueQuantity": {
+          "value": 1.1,
+          "unit": "mg/dL",
+          "system": "http://unitsofmeasure.org"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-022-creat"
+      }
+    },
+    {
+      "fullUrl": "urn:uuid:c7b472ab-e0c9-5315-b352-6fafe74b1544",
       "resource": {
         "resourceType": "Condition",
-        "id": "pt-009-cond1",
+        "id": "pt-022-cond1",
         "clinicalStatus": {
           "coding": [
             {
@@ -382,92 +527,60 @@
           "coding": [
             {
               "system": "http://snomed.info/sct",
-              "code": "68566005",
-              "display": "Urinary tract infection"
+              "code": "409966000",
+              "display": "Delirium"
             }
           ]
         },
         "subject": {
-          "reference": "Patient/pt-009"
+          "reference": "Patient/pt-022"
         },
         "encounter": {
-          "reference": "Encounter/enc-009"
+          "reference": "Encounter/enc-022"
         }
       },
       "request": {
         "method": "PUT",
-        "url": "Condition/pt-009-cond1"
+        "url": "Condition/pt-022-cond1"
       }
     },
     {
-      "fullUrl": "urn:uuid:b4e87443-033e-5bde-8016-4bc3b844366e",
+      "fullUrl": "urn:uuid:dc5d1ff5-c0e8-592d-83ed-d4884e2734b5",
       "resource": {
         "resourceType": "MedicationRequest",
-        "id": "pt-009-med1",
+        "id": "pt-022-med1",
         "status": "active",
         "intent": "order",
         "medicationCodeableConcept": {
           "coding": [
             {
               "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
-              "code": "372687004",
-              "display": "Trimethoprim-sulfamethoxazole 160/800mg PO BID"
+              "code": "1049502",
+              "display": "Haloperidol 0.5mg IV PRN"
             }
           ]
         },
         "subject": {
-          "reference": "Patient/pt-009"
+          "reference": "Patient/pt-022"
         },
         "encounter": {
-          "reference": "Encounter/enc-009"
+          "reference": "Encounter/enc-022"
         },
-        "authoredOn": "2026-04-28T08:00:00Z",
+        "authoredOn": "2026-04-29T05:00:00Z",
         "requester": {
           "reference": "Practitioner/prov-chen"
         }
       },
       "request": {
         "method": "PUT",
-        "url": "MedicationRequest/pt-009-med1"
+        "url": "MedicationRequest/pt-022-med1"
       }
     },
     {
-      "fullUrl": "urn:uuid:01522c86-49d2-5215-89bf-5727107a9481",
-      "resource": {
-        "resourceType": "MedicationRequest",
-        "id": "pt-009-med2",
-        "status": "active",
-        "intent": "order",
-        "medicationCodeableConcept": {
-          "coding": [
-            {
-              "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
-              "code": "1191",
-              "display": "Aspirin 81mg PO daily"
-            }
-          ]
-        },
-        "subject": {
-          "reference": "Patient/pt-009"
-        },
-        "encounter": {
-          "reference": "Encounter/enc-009"
-        },
-        "authoredOn": "2026-04-28T08:00:00Z",
-        "requester": {
-          "reference": "Practitioner/prov-chen"
-        }
-      },
-      "request": {
-        "method": "PUT",
-        "url": "MedicationRequest/pt-009-med2"
-      }
-    },
-    {
-      "fullUrl": "urn:uuid:97c0d2e7-db78-520f-9e25-983e68b40bf8",
+      "fullUrl": "urn:uuid:ff513bbf-f837-5c61-8e06-cfc39a92dca2",
       "resource": {
         "resourceType": "AllergyIntolerance",
-        "id": "pt-009-allergy",
+        "id": "pt-022-allergy",
         "clinicalStatus": {
           "coding": [
             {
@@ -486,77 +599,19 @@
           ]
         },
         "patient": {
-          "reference": "Patient/pt-009"
+          "reference": "Patient/pt-022"
         }
       },
       "request": {
         "method": "PUT",
-        "url": "AllergyIntolerance/pt-009-allergy"
+        "url": "AllergyIntolerance/pt-022-allergy"
       }
     },
     {
-      "fullUrl": "urn:uuid:fc22c5d3-db8f-597c-ac3e-22e2846319c2",
+      "fullUrl": "urn:uuid:7496b72a-7aac-5cd3-8fe3-22b583a2a0f3",
       "resource": {
         "resourceType": "Observation",
-        "id": "pt-009-lab1",
-        "status": "final",
-        "category": [
-          {
-            "coding": [
-              {
-                "system": "http://terminology.hl7.org/CodeSystem/observation-category",
-                "code": "laboratory"
-              }
-            ]
-          }
-        ],
-        "code": {
-          "coding": [
-            {
-              "system": "http://loinc.org",
-              "code": "6690-2",
-              "display": "Leukocytes [#/volume] in Blood"
-            }
-          ]
-        },
-        "subject": {
-          "reference": "Patient/pt-009"
-        },
-        "encounter": {
-          "reference": "Encounter/enc-009"
-        },
-        "effectiveDateTime": "2026-04-29T04:00:00Z",
-        "performer": [
-          {
-            "reference": "Practitioner/prov-lab"
-          }
-        ],
-        "valueQuantity": {
-          "value": 13.2,
-          "unit": "10*3/uL",
-          "system": "http://unitsofmeasure.org"
-        },
-        "interpretation": [
-          {
-            "coding": [
-              {
-                "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation",
-                "code": "H"
-              }
-            ]
-          }
-        ]
-      },
-      "request": {
-        "method": "PUT",
-        "url": "Observation/pt-009-lab1"
-      }
-    },
-    {
-      "fullUrl": "urn:uuid:63dd33f3-956b-5d6e-8e78-c4db51554ada",
-      "resource": {
-        "resourceType": "Observation",
-        "id": "pt-009-codestatus",
+        "id": "pt-022-codestatus",
         "status": "final",
         "code": {
           "coding": [
@@ -568,24 +623,24 @@
           ]
         },
         "subject": {
-          "reference": "Patient/pt-009"
+          "reference": "Patient/pt-022"
         },
         "effectiveDateTime": "2026-04-28T08:00:00Z",
         "valueCodeableConcept": {
-          "text": "DNR/DNI"
+          "text": "Full Code"
         }
       },
       "request": {
         "method": "PUT",
-        "url": "Observation/pt-009-codestatus"
+        "url": "Observation/pt-022-codestatus"
       }
     },
     {
-      "fullUrl": "urn:uuid:3cfcc472-b5e7-5adb-b7c7-46126789980c",
+      "fullUrl": "urn:uuid:7e972e30-4a01-536d-9206-27ae8ce98e47",
       "resource": {
         "resourceType": "Flag",
-        "id": "pt-009-isolation",
-        "status": "active",
+        "id": "pt-022-isolation",
+        "status": "inactive",
         "category": [
           {
             "coding": [
@@ -598,22 +653,15 @@
           }
         ],
         "code": {
-          "text": "Contact Precautions",
-          "coding": [
-            {
-              "system": "http://snomed.info/sct",
-              "code": "409528009",
-              "display": "Contact precautions"
-            }
-          ]
+          "text": "No Isolation Required"
         },
         "subject": {
-          "reference": "Patient/pt-009"
+          "reference": "Patient/pt-022"
         }
       },
       "request": {
         "method": "PUT",
-        "url": "Flag/pt-009-isolation"
+        "url": "Flag/pt-022-isolation"
       }
     }
   ]

@@ -551,6 +551,35 @@
         "method": "PUT",
         "url": "AllergyIntolerance/pt-003-allergy"
       }
+    },
+    {
+      "fullUrl": "urn:uuid:372e5222-1700-5e3c-9055-7e85e8cb6df8",
+      "resource": {
+        "resourceType": "Flag",
+        "id": "pt-003-isolation",
+        "status": "inactive",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/flag-category",
+                "code": "infection",
+                "display": "Infection Control Flag"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "text": "No Isolation Required"
+        },
+        "subject": {
+          "reference": "Patient/pt-003"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Flag/pt-003-isolation"
+      }
     }
   ]
 }

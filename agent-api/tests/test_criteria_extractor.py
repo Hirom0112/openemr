@@ -1,0 +1,408 @@
+"""Unit tests for triage/criteria.py — extractor code paths.
+
+Covers newly audited paths: valueDecimal, valueString, valueRatio,
+safe interpretation coding, all CRITICAL_LAB_VALUE_RANGES thresholds,
+uncategorized lab observation fallback, and most-recent-vital precedence.
+
+All tests are isolated — no FHIR network calls, no fixtures from disk.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from triage.criteria import (
+    CRITICAL_LAB_VALUE_RANGES,
+    LOINC_HR,
+    LOINC_RR,
+    LOINC_SBP,
+    LOINC_SPO2,
+    _interp_codes,
+    _is_critical_lab,
+    _is_lab_observation,
+    _numeric,
+    extract,
+)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _obs(loinc: str, value_field: dict, *, category: str | None = "laboratory",
+         system: str = "http://terminology.hl7.org/CodeSystem/observation-category",
+         interpretation: list[dict] | None = None,
+         effective: str | None = None) -> dict:
+    """Build a minimal FHIR Observation dict for testing."""
+    obs: dict = {
+        "resourceType": "Observation",
+        "code": {"coding": [{"system": "http://loinc.org", "code": loinc}]},
+    }
+    obs.update(value_field)
+    if category is not None:
+        obs["category"] = [{"coding": [{"system": system, "code": category}]}]
+    if interpretation:
+        obs["interpretation"] = interpretation
+    if effective:
+        obs["effectiveDateTime"] = effective
+    return obs
+
+
+def _bundle(*obs_list: dict) -> dict:
+    """Wrap observations in a minimal bundle structure."""
+    return {
+        "resources": {
+            "Observation": [{"resource": o} for o in obs_list],
+            "Condition": [],
+        }
+    }
+
+
+def _interp_entry(code: str) -> dict:
+    return {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation", "code": code}]}
+
+
+# ── _numeric() new code paths ─────────────────────────────────────────────────
+
+@pytest.mark.hard_failure
+@pytest.mark.clinical_accuracy
+class TestNumericExtraction:
+    def test_value_quantity_integer_value(self):
+        obs = {"valueQuantity": {"value": 97, "unit": "%"}}
+        assert _numeric(obs) == 97.0
+
+    def test_value_quantity_float_value(self):
+        obs = {"valueQuantity": {"value": 6.4, "unit": "mEq/L"}}
+        assert _numeric(obs) == 6.4
+
+    def test_value_integer(self):
+        obs = {"valueInteger": 14}
+        assert _numeric(obs) == 14.0
+
+    def test_value_decimal(self):
+        # FHIR R4 valueDecimal — distinct from valueQuantity
+        obs = {"valueDecimal": 3.14}
+        assert _numeric(obs) == 3.14
+
+    def test_value_decimal_integer_typed(self):
+        obs = {"valueDecimal": 5}
+        assert _numeric(obs) == 5.0
+
+    def test_value_string_parseable(self):
+        # Some vendor implementations return numeric strings
+        obs = {"valueString": "6.4"}
+        assert _numeric(obs) == pytest.approx(6.4)
+
+    def test_value_string_not_numeric_returns_none(self):
+        # "positive", "trace", etc. should return None, not raise
+        obs = {"valueString": "positive"}
+        assert _numeric(obs) is None
+
+    def test_value_string_empty_returns_none(self):
+        obs = {"valueString": ""}
+        assert _numeric(obs) is None
+
+    def test_value_ratio_normal(self):
+        # PT/INR: numerator=12.5s, denominator=11.0s (normal)
+        obs = {
+            "valueRatio": {
+                "numerator": {"value": 12.5, "unit": "s"},
+                "denominator": {"value": 11.0, "unit": "s"},
+            }
+        }
+        result = _numeric(obs)
+        assert result is not None
+        assert result == pytest.approx(12.5 / 11.0)
+
+    def test_value_ratio_zero_denominator_returns_none(self):
+        obs = {
+            "valueRatio": {
+                "numerator": {"value": 5.0},
+                "denominator": {"value": 0},
+            }
+        }
+        assert _numeric(obs) is None
+
+    def test_no_value_field_returns_none(self):
+        obs = {"code": {"coding": []}}
+        assert _numeric(obs) is None
+
+
+# ── _interp_codes() — safe against empty coding lists ────────────────────────
+
+@pytest.mark.hard_failure
+@pytest.mark.clinical_accuracy
+class TestInterpCodes:
+    def test_normal_interpretation(self):
+        obs = {"interpretation": [_interp_entry("HH")]}
+        assert "HH" in _interp_codes(obs)
+
+    def test_empty_coding_list_does_not_raise(self):
+        # Previously would IndexError on coding[0] when coding=[]
+        obs = {"interpretation": [{"coding": []}]}
+        result = _interp_codes(obs)
+        assert result == []
+
+    def test_missing_interpretation_key(self):
+        obs: dict = {}
+        assert _interp_codes(obs) == []
+
+    def test_multiple_interpretations(self):
+        obs = {
+            "interpretation": [
+                _interp_entry("HH"),
+                _interp_entry("A"),
+            ]
+        }
+        codes = _interp_codes(obs)
+        assert "HH" in codes
+        assert "A" in codes
+
+    def test_interpretation_missing_code_key(self):
+        obs = {"interpretation": [{"coding": [{"system": "x"}]}]}
+        result = _interp_codes(obs)
+        assert result == []
+
+
+# ── _is_lab_observation() — category and fallback paths ──────────────────────
+
+@pytest.mark.hard_failure
+@pytest.mark.clinical_accuracy
+class TestIsLabObservation:
+    def test_laboratory_category_standard_system(self):
+        obs = _obs("2823-3", {"valueQuantity": {"value": 4.0}})
+        assert _is_lab_observation(obs) is True
+
+    def test_vital_signs_category_excluded(self):
+        obs = _obs(LOINC_RR, {"valueQuantity": {"value": 18}}, category="vital-signs")
+        assert _is_lab_observation(obs) is False
+
+    def test_imaging_category_excluded(self):
+        obs = _obs("24627-2", {"valueString": "clear"}, category="imaging")
+        assert _is_lab_observation(obs) is False
+
+    def test_laboratory_category_no_system(self):
+        # Some implementations omit the system — still accept "laboratory"
+        obs = _obs("2823-3", {"valueQuantity": {"value": 4.0}}, system="")
+        assert _is_lab_observation(obs) is True
+
+    def test_uncategorized_known_lab_loinc_treated_as_lab(self):
+        # No category field at all, but LOINC is in CRITICAL_LAB_LOINCS
+        obs = _obs("2823-3", {"valueQuantity": {"value": 6.4}}, category=None)
+        assert _is_lab_observation(obs) is True
+
+    def test_uncategorized_vital_loinc_not_treated_as_lab(self):
+        # No category, LOINC is a vital sign — should NOT be treated as lab
+        obs = _obs(LOINC_HR, {"valueQuantity": {"value": 80}}, category=None)
+        assert _is_lab_observation(obs) is False
+
+    def test_uncategorized_unknown_loinc_not_treated_as_lab(self):
+        obs = _obs("99999-9", {"valueQuantity": {"value": 1.0}}, category=None)
+        assert _is_lab_observation(obs) is False
+
+
+# ── _is_critical_lab() — all CRITICAL_LAB_VALUE_RANGES thresholds ────────────
+
+@pytest.mark.hard_failure
+@pytest.mark.clinical_accuracy
+class TestCriticalLabThresholds:
+    def test_potassium_critical_high(self):
+        obs = _obs("2823-3", {"valueQuantity": {"value": 6.1}},
+                   interpretation=[_interp_entry("HH")])
+        assert _is_critical_lab(obs) is True
+
+    def test_potassium_critical_high_by_value_no_flag(self):
+        # Value alone exceeds threshold — no interpretation flag present
+        obs = _obs("2823-3", {"valueQuantity": {"value": 6.1}})
+        assert _is_critical_lab(obs) is True
+
+    def test_potassium_critical_low(self):
+        obs = _obs("2823-3", {"valueQuantity": {"value": 2.8}})
+        assert _is_critical_lab(obs) is True
+
+    def test_potassium_normal_not_critical(self):
+        obs = _obs("2823-3", {"valueQuantity": {"value": 4.2}})
+        assert _is_critical_lab(obs) is False
+
+    def test_glucose_critical_low(self):
+        obs = _obs("1558-6", {"valueQuantity": {"value": 45.0}})
+        assert _is_critical_lab(obs) is True
+
+    def test_glucose_critical_high(self):
+        obs = _obs("1558-6", {"valueQuantity": {"value": 520.0}})
+        assert _is_critical_lab(obs) is True
+
+    def test_glucose_normal_not_critical(self):
+        obs = _obs("1558-6", {"valueQuantity": {"value": 110.0}})
+        assert _is_critical_lab(obs) is False
+
+    def test_hemoglobin_critical_low(self):
+        obs = _obs("718-7", {"valueQuantity": {"value": 6.5}})
+        assert _is_critical_lab(obs) is True
+
+    def test_hemoglobin_normal_not_critical(self):
+        obs = _obs("718-7", {"valueQuantity": {"value": 11.0}})
+        assert _is_critical_lab(obs) is False
+
+    def test_platelets_critical_low(self):
+        obs = _obs("777-3", {"valueQuantity": {"value": 40_000}})
+        assert _is_critical_lab(obs) is True
+
+    def test_platelets_normal_not_critical(self):
+        obs = _obs("777-3", {"valueQuantity": {"value": 150_000}})
+        assert _is_critical_lab(obs) is False
+
+    def test_wbc_critical_high(self):
+        obs = _obs("6690-2", {"valueQuantity": {"value": 32_000}})
+        assert _is_critical_lab(obs) is True
+
+    def test_wbc_normal_not_critical(self):
+        obs = _obs("6690-2", {"valueQuantity": {"value": 8_000}})
+        assert _is_critical_lab(obs) is False
+
+    def test_interpretation_flag_alone_triggers_critical(self):
+        # LL flag on sodium — interpretation alone is sufficient
+        obs = _obs("2951-2", {"valueQuantity": {"value": 131.0}},
+                   interpretation=[_interp_entry("LL")])
+        assert _is_critical_lab(obs) is True
+
+    def test_critical_lab_via_valuestring(self):
+        # K+ returned as a string "6.5" from a vendor system
+        obs = _obs("2823-3", {"valueString": "6.5"})
+        assert _is_critical_lab(obs) is True
+
+
+# ── extract() — most-recent vital wins ───────────────────────────────────────
+
+@pytest.mark.hard_failure
+@pytest.mark.clinical_accuracy
+class TestMostRecentVitalPrecedence:
+    def test_later_timestamp_wins(self):
+        # Two HR observations: older=55 (normal), newer=130 (critical)
+        older_hr = _obs(LOINC_HR, {"valueQuantity": {"value": 55}},
+                        category="vital-signs", effective="2024-01-01T06:00:00Z")
+        newer_hr = _obs(LOINC_HR, {"valueQuantity": {"value": 130}},
+                        category="vital-signs", effective="2024-01-01T07:00:00Z")
+        bundle = _bundle(older_hr, newer_hr)
+        criteria = extract(bundle)
+        assert criteria.latest_vitals.get(LOINC_HR) == 130.0
+        assert criteria.critical_vital is True
+
+    def test_earlier_timestamp_does_not_overwrite(self):
+        # Array order has older first — newer (high value) should win
+        newer_rr = _obs(LOINC_RR, {"valueQuantity": {"value": 26}},
+                        category="vital-signs", effective="2024-01-01T07:30:00Z")
+        older_rr = _obs(LOINC_RR, {"valueQuantity": {"value": 14}},
+                        category="vital-signs", effective="2024-01-01T05:00:00Z")
+        # Bundle has newer first in array — older should NOT overwrite
+        bundle = _bundle(newer_rr, older_rr)
+        criteria = extract(bundle)
+        assert criteria.latest_vitals.get(LOINC_RR) == 26.0
+        assert criteria.qsofa_score >= 1
+
+    def test_no_timestamp_first_value_kept(self):
+        # When neither observation has a timestamp, the first one is kept
+        first_spo2 = _obs(LOINC_SPO2, {"valueQuantity": {"value": 88}},
+                          category="vital-signs")
+        second_spo2 = _obs(LOINC_SPO2, {"valueQuantity": {"value": 97}},
+                           category="vital-signs")
+        bundle = _bundle(first_spo2, second_spo2)
+        criteria = extract(bundle)
+        # Without timestamps, insertion order wins — first value (88) is kept
+        assert criteria.latest_vitals.get(LOINC_SPO2) == 88.0
+
+
+# ── extract() — uncategorized critical lab integration ───────────────────────
+
+@pytest.mark.hard_failure
+@pytest.mark.clinical_accuracy
+class TestUncategorizedLabIntegration:
+    def test_uncategorized_critical_k_flagged(self):
+        # K+ 6.5 with no category — should still be detected as critical
+        critical_k = _obs("2823-3", {"valueQuantity": {"value": 6.5}}, category=None)
+        bundle = _bundle(critical_k)
+        criteria = extract(bundle)
+        assert criteria.critical_lab is True
+
+    def test_uncategorized_vital_not_treated_as_lab(self):
+        # HR 130 with no category — should affect critical_vital, NOT critical_lab
+        high_hr = _obs(LOINC_HR, {"valueQuantity": {"value": 130}}, category=None)
+        bundle = _bundle(high_hr)
+        criteria = extract(bundle)
+        assert criteria.critical_vital is True
+        assert criteria.critical_lab is False
+
+
+# ── extract() — isolation precaution ─────────────────────────────────────────
+
+def _flag(status: str, code_text: str, snomed_code: str | None = None) -> dict:
+    """Build a minimal FHIR Flag dict for testing."""
+    resource: dict = {
+        "resourceType": "Flag",
+        "status": status,
+        "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/flag-category", "code": "infection"}]}],
+        "code": {"text": code_text},
+        "subject": {"reference": "Patient/test"},
+    }
+    if snomed_code:
+        resource["code"]["coding"] = [{"system": "http://snomed.info/sct", "code": snomed_code}]
+    return resource
+
+
+def _bundle_with_flag(flag_resource: dict | None) -> dict:
+    bundle: dict = {
+        "resources": {
+            "Observation": [],
+            "Condition": [],
+            "Flag": [{"resource": flag_resource}] if flag_resource else [],
+        }
+    }
+    return bundle
+
+
+@pytest.mark.hard_failure
+@pytest.mark.clinical_accuracy
+class TestIsolationExtraction:
+    def test_active_contact_precautions(self):
+        bundle = _bundle_with_flag(
+            _flag("active", "Contact Precautions", "409528009")
+        )
+        criteria = extract(bundle)
+        assert criteria.isolation_precaution == "Contact Precautions"
+        assert criteria.blank_isolation is False
+
+    def test_active_droplet_precautions(self):
+        bundle = _bundle_with_flag(
+            _flag("active", "Droplet Precautions", "409527004")
+        )
+        criteria = extract(bundle)
+        assert criteria.isolation_precaution == "Droplet Precautions"
+        assert criteria.blank_isolation is False
+
+    def test_active_airborne_precautions(self):
+        bundle = _bundle_with_flag(
+            _flag("active", "Airborne Precautions", "409526008")
+        )
+        criteria = extract(bundle)
+        assert criteria.isolation_precaution == "Airborne Precautions"
+        assert criteria.blank_isolation is False
+
+    def test_inactive_no_isolation_required(self):
+        bundle = _bundle_with_flag(
+            _flag("inactive", "No Isolation Required")
+        )
+        criteria = extract(bundle)
+        assert criteria.isolation_precaution == "No Isolation Required"
+        assert criteria.blank_isolation is False
+
+    def test_missing_flag_returns_unknown_not_clean(self):
+        # Absence of Flag must return "Unknown", never "No Isolation Required"
+        bundle = _bundle_with_flag(None)
+        criteria = extract(bundle)
+        assert criteria.isolation_precaution == "Unknown"
+        assert criteria.blank_isolation is True
+
+    def test_missing_flag_key_in_resources(self):
+        # Bundle without a Flag key at all — same as empty Flag list
+        bundle: dict = {"resources": {"Observation": [], "Condition": []}}
+        criteria = extract(bundle)
+        assert criteria.isolation_precaution == "Unknown"
+        assert criteria.blank_isolation is True

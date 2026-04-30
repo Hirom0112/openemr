@@ -579,6 +579,42 @@
         "method": "PUT",
         "url": "Observation/pt-010-codestatus"
       }
+    },
+    {
+      "fullUrl": "urn:uuid:a187ae2c-2ef2-5f5f-851c-a910edcbadf8",
+      "resource": {
+        "resourceType": "Flag",
+        "id": "pt-010-isolation",
+        "status": "active",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/flag-category",
+                "code": "infection",
+                "display": "Infection Control Flag"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "text": "Contact Precautions",
+          "coding": [
+            {
+              "system": "http://snomed.info/sct",
+              "code": "409528009",
+              "display": "Contact precautions"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-010"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Flag/pt-010-isolation"
+      }
     }
   ]
 }

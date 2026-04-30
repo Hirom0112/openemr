@@ -700,6 +700,35 @@
         "method": "PUT",
         "url": "Observation/pt-007-codestatus"
       }
+    },
+    {
+      "fullUrl": "urn:uuid:8a75e867-a687-51b2-829e-9eb7adc3db86",
+      "resource": {
+        "resourceType": "Flag",
+        "id": "pt-007-isolation",
+        "status": "inactive",
+        "category": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/flag-category",
+                "code": "infection",
+                "display": "Infection Control Flag"
+              }
+            ]
+          }
+        ],
+        "code": {
+          "text": "No Isolation Required"
+        },
+        "subject": {
+          "reference": "Patient/pt-007"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Flag/pt-007-isolation"
+      }
     }
   ]
 }
