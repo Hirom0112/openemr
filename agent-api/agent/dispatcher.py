@@ -142,6 +142,9 @@ async def _save_turn(
 
 def _build_system_blocks(session_context: dict[str, Any]) -> list[dict[str, Any]]:
     provider_name = session_context.get("provider_name", "Provider")
+    provider_id = session_context.get("provider_id", "system")
+    patient_ids: list[str] = session_context.get("patient_ids", [])
+
     blocks: list[dict[str, Any]] = [
         {
             "type": "text",
@@ -149,6 +152,26 @@ def _build_system_blocks(session_context: dict[str, Any]) -> list[dict[str, Any]
             "cache_control": {"type": "ephemeral"},
         }
     ]
+
+    # Inject session context so the LLM can call tools without asking for IDs.
+    # This is cached per session (ephemeral) — patient list is stable per rounding session.
+    session_info_lines = [
+        "## Active Session Context",
+        "",
+        f"Provider ID: {provider_id}",
+        f"Active census patient IDs: {', '.join(patient_ids) if patient_ids else 'none'}",
+        "",
+        "When calling tools, use these values for provider_id and patient_ids unless the "
+        "physician specifies different values explicitly.",
+    ]
+    blocks.append(
+        {
+            "type": "text",
+            "text": "\n".join(session_info_lines),
+            "cache_control": {"type": "ephemeral"},
+        }
+    )
+
     census_context = session_context.get("census_context")
     if census_context:
         blocks.append(
