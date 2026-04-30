@@ -25,34 +25,41 @@ _token_lock = asyncio.Lock()
 
 async def _fetch_token() -> tuple[str, float]:
     """Obtain an access token via password grant with FHIR scopes."""
-    async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(
-            settings.resolved_fhir_token_url,
-            data={
-                "grant_type": "password",
-                "client_id": settings.fhir_client_id,
-                "client_secret": settings.fhir_client_secret,
-                "username": settings.fhir_username,
-                "password": settings.fhir_password,
-                "user_role": settings.fhir_user_role,
-                "scope": settings.fhir_scopes,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+    token_url = settings.resolved_fhir_token_url
+    logger.info("FHIR token URL: %s", token_url)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                token_url,
+                data={
+                    "grant_type": "password",
+                    "client_id": settings.fhir_client_id,
+                    "client_secret": settings.fhir_client_secret,
+                    "username": settings.fhir_username,
+                    "password": settings.fhir_password,
+                    "user_role": settings.fhir_user_role,
+                    "scope": settings.fhir_scopes,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+    except Exception as conn_exc:
+        logger.error("FHIR token HTTP request failed (connection error): %s", conn_exc)
+        raise
+
+    if response.status_code != 200:
+        logger.error(
+            "FHIR token request failed",
+            extra={"status": response.status_code, "body": response.text[:300]},
         )
-        if response.status_code != 200:
-            logger.error(
-                "FHIR token request failed",
-                extra={"status": response.status_code, "body": response.text[:300]},
-            )
-        response.raise_for_status()
-        try:
-            payload = response.json()
-        except Exception as json_exc:
-            logger.error(
-                "FHIR token response is not valid JSON",
-                extra={"status": response.status_code, "body": response.text[:300], "error": str(json_exc)},
-            )
-            raise RuntimeError(f"FHIR token response is not valid JSON: {response.text[:200]}") from json_exc
+    response.raise_for_status()
+    try:
+        payload = response.json()
+    except Exception as json_exc:
+        logger.error(
+            "FHIR token response is not valid JSON",
+            extra={"status": response.status_code, "body": response.text[:300], "error": str(json_exc)},
+        )
+        raise RuntimeError(f"FHIR token response is not valid JSON: {response.text[:200]}") from json_exc
 
     if "access_token" not in payload:
         raise RuntimeError(f"No access_token in FHIR token response: {payload}")
