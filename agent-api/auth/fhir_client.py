@@ -45,7 +45,14 @@ async def _fetch_token() -> tuple[str, float]:
                 extra={"status": response.status_code, "body": response.text[:300]},
             )
         response.raise_for_status()
-        payload = response.json()
+        try:
+            payload = response.json()
+        except Exception as json_exc:
+            logger.error(
+                "FHIR token response is not valid JSON",
+                extra={"status": response.status_code, "body": response.text[:300], "error": str(json_exc)},
+            )
+            raise RuntimeError(f"FHIR token response is not valid JSON: {response.text[:200]}") from json_exc
 
     if "access_token" not in payload:
         raise RuntimeError(f"No access_token in FHIR token response: {payload}")
