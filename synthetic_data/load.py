@@ -749,6 +749,118 @@ PATIENTS: list[dict[str, Any]] = [
              "status": "final"},
         ],
     },
+
+    # ── pt-019: Linda Okonkwo — Observation after minor fall ──────────────
+    {
+        "fname": "Linda", "lname": "Okonkwo", "dob": "1966-08-30", "sex": "Female",
+        "admit_date": "2026-04-28", "admit_reason": "Observation after minor fall — no fracture identified",
+        "conditions": [{"title": "Fall, unspecified", "icd": "W19.XXXA"}],
+        "allergies": [],
+        "medications": [{"title": "Acetaminophen 650mg PO q6h PRN"}],
+        "vitals": [
+            {"dt": "2026-04-29 06:00:00", "bps": 124, "bpd": 76,
+             "pulse": 72, "respiration": 15, "temperature": 37.0,
+             "oxygen_saturation": 97},
+        ],
+        "labs": [
+            {"loinc": "2345-7", "name": "Glucose", "collected_dt": "2026-04-28 20:00:00",
+             "value": "98", "units": "mg/dL", "range": "70-100", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-28 20:00:00",
+             "value": "0.9", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
+             "status": "final"},
+        ],
+    },
+
+    # ── pt-020: Robert Finch — Pre-procedure observation (colonoscopy) ────
+    {
+        "fname": "Robert", "lname": "Finch", "dob": "1959-03-17", "sex": "Male",
+        "admit_date": "2026-04-29", "admit_reason": "Pre-procedure observation — elective colonoscopy prep",
+        "conditions": [{"title": "Encounter for screening colonoscopy", "icd": "Z12.11"}],
+        "allergies": [],
+        "medications": [{"title": "Polyethylene glycol 3350 solution PO"}],
+        "vitals": [
+            {"dt": "2026-04-29 06:00:00", "bps": 118, "bpd": 74,
+             "pulse": 68, "respiration": 14, "temperature": 36.8,
+             "oxygen_saturation": 98},
+        ],
+        "labs": [
+            {"loinc": "2345-7", "name": "Glucose", "collected_dt": "2026-04-29 04:00:00",
+             "value": "94", "units": "mg/dL", "range": "70-100", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 04:00:00",
+             "value": "0.8", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
+             "status": "final"},
+        ],
+    },
+
+    # ── pt-021: Priya Anand — Suspected sepsis (airborne precautions) ─────
+    {
+        "fname": "Priya", "lname": "Anand", "dob": "1975-04-12", "sex": "Female",
+        "admit_date": "2026-04-29", "admit_reason": "Suspected sepsis — source under investigation",
+        "conditions": [{"title": "Septicemia, unspecified organism", "icd": "A41.9"}],
+        "allergies": [],
+        "medications": [{"title": "Vancomycin 1g IV q12h"},
+                        {"title": "Piperacillin-tazobactam 3.375g IV q6h"}],
+        "vitals": [
+            {"dt": "2026-04-29 06:00:00", "bps": 96, "bpd": 62,
+             "pulse": 108, "respiration": 24, "temperature": 38.6,
+             "oxygen_saturation": 94},
+        ],
+        "labs": [
+            {"loinc": "6690-2", "name": "WBC", "collected_dt": "2026-04-29 04:00:00",
+             "value": "14.2", "units": "10*3/uL", "range": "4.5-11.0", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "2518-9", "name": "Lactate", "collected_dt": "2026-04-29 04:00:00",
+             "value": "1.8", "units": "mmol/L", "range": "0.5-2.0", "abnormal": "normal",
+             "status": "final"},
+        ],
+    },
+
+    # ── pt-022: James Whitfield — Acute delirium ──────────────────────────
+    {
+        "fname": "James", "lname": "Whitfield", "dob": "1942-10-05", "sex": "Male",
+        "admit_date": "2026-04-28", "admit_reason": "Acute delirium — hyperactive type",
+        "conditions": [{"title": "Delirium due to known physiological condition", "icd": "F05"}],
+        "allergies": [],
+        "medications": [{"title": "Haloperidol 0.5mg IV PRN agitation"}],
+        "vitals": [
+            {"dt": "2026-04-29 06:00:00", "bps": 128, "bpd": 74,
+             "pulse": 88, "respiration": 17, "temperature": 37.3,
+             "oxygen_saturation": 96},
+        ],
+        "labs": [
+            {"loinc": "2823-3", "name": "Potassium", "collected_dt": "2026-04-29 03:00:00",
+             "value": "4.0", "units": "mmol/L", "range": "3.5-5.0", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 03:00:00",
+             "value": "1.1", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
+             "status": "final"},
+        ],
+    },
+
+    # ── pt-023: Keisha Balogun — Sickle cell vaso-occlusive crisis ────────
+    {
+        "fname": "Keisha", "lname": "Balogun", "dob": "1988-07-19", "sex": "Female",
+        "admit_date": "2026-04-28", "admit_reason": "Sickle cell disease with acute vaso-occlusive crisis",
+        "conditions": [{"title": "Sickle-cell disease with crisis", "icd": "D57.00"}],
+        "allergies": [],
+        "medications": [{"title": "Morphine 4mg IV q3h PRN pain"},
+                        {"title": "Ketorolac 15mg IV q6h"}],
+        "vitals": [
+            {"dt": "2026-04-29 06:00:00", "bps": 118, "bpd": 72,
+             "pulse": 98, "respiration": 18, "temperature": 37.5,
+             "oxygen_saturation": 96},
+        ],
+        "labs": [
+            {"loinc": "718-7", "name": "Hemoglobin", "collected_dt": "2026-04-29 02:00:00",
+             "value": "8.2", "units": "g/dL", "range": "12.0-16.0", "abnormal": "low",
+             "status": "final"},
+            {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 02:00:00",
+             "value": "0.8", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
+             "status": "final"},
+        ],
+    },
 ]
 
 
@@ -789,7 +901,7 @@ def main() -> None:
 
     ok = 0
     for i, p_def in enumerate(PATIENTS, 1):
-        print(f"[{i:02d}/18] {p_def['fname']} {p_def['lname']} ...")
+        print(f"[{i:02d}/23] {p_def['fname']} {p_def['lname']} ...")
         try:
             load_patient(base_url, token, conn, p_def)
             ok += 1
@@ -798,8 +910,8 @@ def main() -> None:
         time.sleep(0.3)  # avoid rate-limiting
 
     conn.close()
-    print(f"\nDone: {ok}/18 patients loaded.")
-    if ok < 18:
+    print(f"\nDone: {ok}/23 patients loaded.")
+    if ok < 23:
         print("Re-run load.py to retry failed patients.", file=sys.stderr)
 
 
