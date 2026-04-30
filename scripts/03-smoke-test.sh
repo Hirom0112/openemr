@@ -111,22 +111,27 @@ fi
 
 # ── Test 6: Marcus Webb (pt-001) is ranked P1 (qSOFA) ───────────────────────
 echo ""
-echo "[6] Verify Marcus Webb (pt-001) is ranked P1 (qSOFA ≥2)"
+echo "[6] Verify Marcus Webb (pt-001) is ranked P1 (qSOFA ≥2 + critical lab → level 1)"
 if echo "${DISPATCH}" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-patients = d.get('data', {}).get('patients', [])
+# Census response: data.census[] (not data.patients[])
+patients = d.get('data', {}).get('census', [])
 if not patients:
-    patients = d.get('data', [])
+    patients = d.get('data', {}).get('patients', [])
+if not patients:
+    data = d.get('data', [])
+    if isinstance(data, list):
+        patients = data
 for p in patients:
-    if p.get('patient_id') == 'pt-001' or 'Webb' in str(p):
-        level = p.get('priority_level', p.get('level', 0))
-        print(f'pt-001 priority level: {level}')
+    if p.get('patient_id') == 'pt-001' or 'Webb' in str(p.get('name', '')):
+        level = p.get('triage_level', p.get('priority_level', p.get('level', 0)))
+        print(f'pt-001 triage_level: {level}')
         sys.exit(0 if str(level) == '1' else 1)
 print('pt-001 not found in response')
 sys.exit(1)
 " 2>/dev/null; then
-  pass "Marcus Webb correctly ranked P1"
+  pass "Marcus Webb correctly ranked P1 (qSOFA + critical lactate)"
 else
   fail "Marcus Webb not at P1 or not found in census response — check FHIR data"
 fi

@@ -46,6 +46,7 @@ CRITICAL_LAB_LOINCS = {
     "6690-2",   # WBC
     "5902-2",   # PT
     "5895-8",   # PTT
+    "2518-9",   # Lactate
 }
 
 # Tuples are (low_critical_threshold, high_critical_threshold).
@@ -60,6 +61,7 @@ CRITICAL_LAB_VALUE_RANGES: dict[str, tuple[float | None, float | None]] = {
     "718-7":      (7.0, None),    # Hgb:     < 7.0 critical low
     "777-3":      (50_000, None), # Plt:     < 50k critical low
     "6690-2":     (None, 30_000), # WBC:     > 30k critical high
+    "2518-9":     (None, 4.0),    # Lactate: > 4.0 mmol/L critical high (severe sepsis threshold)
 }
 
 
