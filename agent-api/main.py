@@ -1,15 +1,17 @@
 """Clinical Co-Pilot — agent-api entry point.
 
 Exposes:
-  GET  /health                    — liveness / readiness
-  GET  /fhir/patient/{id}         — FHIR proxy for validation
-  POST /triage/census             — UC-1: ranked triage list with explanations
-  POST /briefing/{patient_id}     — UC-2: pre-encounter briefing
-  POST /session/{id}/query        — UC-3: multi-turn targeted record query
-  GET  /medication/safety/{id}    — UC-4: medication safety surface
-  POST /handoff/generate          — UC-5: parallel handoff generation
-  POST /session/{id}/message      — raw conversation turn (checkpointer)
-  GET  /session/{id}/history      — stored conversation turns
+  GET  /health                       — liveness / readiness
+  GET  /fhir/patient/{id}            — FHIR proxy for validation
+  POST /triage/census                — UC-1: ranked triage list (legacy)
+  POST /briefing/{patient_id}        — UC-2: pre-encounter briefing (legacy)
+  POST /session/{id}/query           — UC-3: multi-turn targeted record query (legacy)
+  GET  /medication/safety/{id}       — UC-4: medication safety surface (legacy)
+  POST /handoff/generate             — UC-5: parallel handoff generation (legacy)
+  POST /agent/query                  — dispatcher: all use cases via tool_use loop
+  POST /agent/triage_rationale/{id}  — direct-call triage rationale (click-to-expand)
+  POST /session/{id}/message         — raw conversation turn (checkpointer)
+  GET  /session/{id}/history         — stored conversation turns
 """
 
 import logging
@@ -23,6 +25,7 @@ from prometheus_client import Counter, Histogram
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 
+from agent.dispatcher import dispatch
 from agent.tools import (
     generate_handoff,
     get_census_summary,
@@ -251,6 +254,35 @@ async def triage_rationale(patient_id: str, body: TriageRationaleRequest) -> dic
     except Exception as exc:
         logger.error("Triage rationale failed", extra={"patient_id": patient_id, "error": str(exc)})
         raise HTTPException(status_code=500, detail="Triage rationale failed") from exc
+
+
+# ── Dispatcher endpoint (POST /agent/query) ───────────────────────────────────
+
+class AgentQueryRequest(BaseModel):
+    message: str
+    session_id: str
+    provider_id: str
+    patient_ids: list[str] = []
+    provider_name: str = "Provider"
+    census_context: str | None = None
+
+
+@app.post("/agent/query")
+async def agent_query(request: AgentQueryRequest) -> dict:
+    """Dispatcher — routes all physician queries through the tool_use loop."""
+    session_context = {
+        **_session_ctx(request.session_id),
+        "provider_id": request.provider_id,
+        "patient_ids": request.patient_ids,
+        "provider_name": request.provider_name,
+    }
+    if request.census_context:
+        session_context["census_context"] = request.census_context
+    try:
+        return await dispatch(request.message, request.session_id, session_context)
+    except Exception as exc:
+        logger.error("Dispatcher error", extra={"session_id": request.session_id, "error": str(exc)})
+        raise HTTPException(status_code=500, detail="Dispatcher error") from exc
 
 
 # ── Raw conversation turns ────────────────────────────────────────────────────

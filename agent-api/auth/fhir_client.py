@@ -4,6 +4,8 @@ Tokens are cached in memory and refreshed automatically before expiry.
 All FHIR reads go through get() — callers never touch raw HTTP.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
