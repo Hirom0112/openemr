@@ -1,0 +1,38 @@
+"""Pytest configuration and shared fixtures for Clinical Co-Pilot eval suite."""
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+FIXTURE_DIR = Path(__file__).parent / "fixtures"
+
+REQUIRED_MARKERS = {"hard_failure", "clinical_accuracy"}
+
+
+def load_fixture(name: str) -> Any:
+    return json.loads((FIXTURE_DIR / name).read_text())
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Fail if any test is missing a required marker (hard_failure or clinical_accuracy).
+
+    Skipped when a -m marker expression is active — the full-suite run is the
+    enforcement point.  Marker-gated CI steps run after the full suite passes,
+    so unmarked tests are caught before gates are evaluated.
+    """
+    if getattr(session.config.option, "markexpr", ""):
+        return
+
+    unmarked = [
+        item.nodeid
+        for item in session.items
+        if not {m.name for m in item.iter_markers()} & REQUIRED_MARKERS
+    ]
+    if unmarked:
+        lines = "\n".join(f"  {n}" for n in unmarked)
+        raise pytest.UsageError(
+            f"Tests missing a required marker ({', '.join(sorted(REQUIRED_MARKERS))}):\n{lines}\n"
+            "Tag each test with @pytest.mark.hard_failure and/or @pytest.mark.clinical_accuracy."
+        )

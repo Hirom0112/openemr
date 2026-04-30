@@ -1,0 +1,121 @@
+name: Clinical Co-Pilot — Eval Suite
+
+on:
+  push:
+    paths:
+      - "agent-api/**"
+      - ".github/workflows/copilot-eval.yml"
+  pull_request:
+    paths:
+      - "agent-api/**"
+      - ".github/workflows/copilot-eval.yml"
+
+jobs:
+  eval:
+    name: Eval Suite
+    runs-on: ubuntu-latest
+
+    env:
+      ANTHROPIC_API_KEY: "not-needed-for-unit-tests"
+      OPENEMR_BASE_URL: "http://localhost"
+      FHIR_CLIENT_ID: ""
+      FHIR_CLIENT_SECRET: ""
+      REDIS_URL: "redis://localhost:6379/0"
+      LANGFUSE_SECRET_KEY: "test"
+      LANGFUSE_PUBLIC_KEY: "test"
+      LANGFUSE_HOST: "http://localhost:3000"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: agent-api/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r agent-api/requirements.txt pytest
+
+      # Full suite — also enforces the unmarked-test guard via conftest hook.
+      - name: Run full eval suite
+        run: |
+          python3 -m pytest agent-api/tests \
+            --tb=short \
+            --strict-markers \
+            --strict-config \
+            -q \
+            --junitxml=eval-results.xml
+
+      # hard_failure gate — verify non-empty via pytest exit code, then run.
+      # Exit 0 = tests collected. Exit 5 = no tests collected (vacuous gate).
+      # Any other non-zero = collection/config/infrastructure error.
+      # The collection check here guarantees non-empty selection; the execution
+      # step below relies on that guarantee (pytest exit 5 would still fail it,
+      # but the distinct error message here is what surfaces the root cause).
+      - name: Verify hard_failure marker is non-empty
+        run: |
+          python3 -m pytest agent-api/tests \
+            -m hard_failure \
+            --collect-only -q --no-header \
+            --strict-markers --strict-config
+          EXIT=$?
+          case $EXIT in
+            0) echo "hard_failure: non-empty marker selection confirmed" ;;
+            5) echo "ERROR: hard_failure marker selects 0 tests — vacuous gate, fix test markers" >&2; exit 1 ;;
+            *) echo "ERROR: pytest collection failed with exit $EXIT — see output above" >&2; exit $EXIT ;;
+          esac
+
+      - name: Run hard_failure gate (100% pass required)
+        run: |
+          python3 -m pytest agent-api/tests \
+            -m hard_failure \
+            --tb=short \
+            --strict-markers \
+            --strict-config \
+            -q
+
+      # clinical_accuracy gate — same exit-code pattern as hard_failure above.
+      - name: Verify clinical_accuracy marker is non-empty
+        run: |
+          python3 -m pytest agent-api/tests \
+            -m clinical_accuracy \
+            --collect-only -q --no-header \
+            --strict-markers --strict-config
+          EXIT=$?
+          case $EXIT in
+            0) echo "clinical_accuracy: non-empty marker selection confirmed" ;;
+            5) echo "ERROR: clinical_accuracy marker selects 0 tests — vacuous gate, fix test markers" >&2; exit 1 ;;
+            *) echo "ERROR: pytest collection failed with exit $EXIT — see output above" >&2; exit $EXIT ;;
+          esac
+
+      - name: Run clinical_accuracy gate (95% accuracy gate)
+        run: |
+          python3 -m pytest agent-api/tests \
+            -m clinical_accuracy \
+            --tb=short \
+            --strict-markers \
+            --strict-config \
+            -q
+
+      # routing eval gate — subset of test_agent_routing.py; non-empty guard via exit code.
+      - name: Routing eval gate
+        run: |
+          python3 -m pytest agent-api/tests/test_agent_routing.py \
+            -m "clinical_accuracy or hard_failure" \
+            --strict-markers --strict-config \
+            -q --tb=short
+          EXIT=$?
+          if [ $EXIT -eq 5 ]; then
+            echo "ERROR: No routing tests collected — empty selection guard" >&2
+            exit 1
+          fi
+          exit $EXIT
+
+      - name: Upload eval results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: eval-results.xml
