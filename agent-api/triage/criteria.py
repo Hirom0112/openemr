@@ -217,16 +217,28 @@ def extract(bundle: dict[str, Any]) -> TriageCriteria:
     _epoch = datetime.min.replace(tzinfo=timezone.utc)
 
     for obs in observations:
+        ts = _effective_datetime(obs)
+
+        def _add(loinc_code: str, value: float) -> None:
+            existing_ts = vitals_timestamps.get(loinc_code, _epoch)
+            if loinc_code not in vitals or (ts is not None and ts > existing_ts):
+                vitals[loinc_code] = value
+                if ts is not None:
+                    vitals_timestamps[loinc_code] = ts
+
         code = _loinc(obs)
         val = _numeric(obs)
         if code and val is not None:
-            ts = _effective_datetime(obs)
-            existing_ts = vitals_timestamps.get(code, _epoch)
-            # Replace if no existing value, or if this observation is more recent.
-            if code not in vitals or (ts is not None and ts > existing_ts):
-                vitals[code] = val
-                if ts is not None:
-                    vitals_timestamps[code] = ts
+            _add(code, val)
+
+        # OpenEMR stores BP as a compound observation (LOINC 85354-9) with
+        # component[].  Extract each component's LOINC + value individually so
+        # the SBP (8480-6) and DBP (8462-4) are visible to the qSOFA extractor.
+        for component in obs.get("component", []):
+            comp_code = _loinc(component)
+            comp_val = _numeric(component)
+            if comp_code and comp_val is not None:
+                _add(comp_code, comp_val)
 
     criteria.latest_vitals = vitals
 
