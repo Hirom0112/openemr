@@ -91,13 +91,24 @@ class FHIRClient:
                     "Accept": "application/fhir+json",
                 },
             )
+            logger.info(
+                "FHIR GET response",
+                extra={"url": url, "status": response.status_code, "body_len": len(response.text), "body_preview": response.text[:200]},
+            )
             if response.status_code != 200:
                 logger.error(
                     "FHIR GET failed",
                     extra={"url": url, "status": response.status_code, "body": response.text[:500]},
                 )
             response.raise_for_status()
-            return response.json()
+            try:
+                return response.json()
+            except Exception as json_exc:
+                logger.error(
+                    "FHIR GET response not JSON",
+                    extra={"url": url, "status": response.status_code, "body": response.text[:500], "error": str(json_exc)},
+                )
+                raise
 
     async def get_patient(self, patient_id: str) -> dict[str, Any]:
         return await self.get(f"Patient/{patient_id}")
