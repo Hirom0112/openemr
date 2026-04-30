@@ -1,0 +1,5 @@
+# Exclude bulk of OpenEMR source — Railway only needs the Dockerfile and our
+# custom module. Everything else is already in openemr/openemr:latest base image.
+*
+!Dockerfile
+!interface/modules/custom_modules/oe-module-clinical-copilot/
