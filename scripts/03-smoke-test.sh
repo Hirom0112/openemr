@@ -101,7 +101,7 @@ RATIONALE=$(curl -sf -X POST "${AGENT_API_URL}/agent/triage_rationale/pt-001" \
   -H "Content-Type: application/json" \
   -d '{"session_id": "smoke-test-session-001"}' 2>/dev/null || echo "")
 
-if echo "${RATIONALE}" | grep -q '"level"\|"label"\|"rationale"'; then
+if echo "${RATIONALE}" | grep -q '"triage_level"\|"level"\|"label"\|"rationale"'; then
   pass "Triage rationale endpoint responded with scoring data"
 elif echo "${RATIONALE}" | grep -qi "error"; then
   fail "Triage rationale returned error: '${RATIONALE:0:400}'"

@@ -4,12 +4,17 @@ OpenEMR on Railway does not support the SMART client_credentials backend
 services flow (returns "assertion type is not supported").  The working flow
 is a password grant with user_role=users.  Tokens are cached in memory and
 refreshed automatically before expiry.  All FHIR reads go through get().
+
+Patient ID mapping: the agent uses 'pt-NNN' synthetic identifiers. OpenEMR
+stores patients with numeric PIDs (1, 2, 3…) as their FHIR identifier value.
+_resolve_patient_id() translates 'pt-001' → FHIR UUID via GET /Patient?identifier=1.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 
@@ -117,21 +122,44 @@ class FHIRClient:
                 )
                 raise
 
+    async def _resolve_patient_id(self, patient_id: str) -> str:
+        """Translate 'pt-NNN' synthetic IDs to FHIR UUIDs via identifier search.
+
+        pt-001 → OpenEMR PID 1 → GET /Patient?identifier=1 → UUID.
+        Already-UUID IDs pass through unchanged.
+        """
+        m = re.match(r'^pt-(\d+)$', patient_id)
+        if not m:
+            return patient_id
+        pid_num = str(int(m.group(1)))  # "pt-001" → "1"
+        result = await self.search("Patient", {"identifier": pid_num})
+        entries = result.get("entry", [])
+        if not entries:
+            raise ValueError(f"No FHIR Patient found for identifier {pid_num} (from {patient_id})")
+        fhir_id: str = entries[0]["resource"]["id"]
+        logger.info(
+            "Resolved patient ID",
+            extra={"pt_id": patient_id, "pid": pid_num, "fhir_id": fhir_id},
+        )
+        return fhir_id
+
     async def get_patient(self, patient_id: str) -> dict[str, Any]:
-        return await self.get(f"Patient/{patient_id}")
+        fhir_id = await self._resolve_patient_id(patient_id)
+        return await self.get(f"Patient/{fhir_id}")
 
     async def search(self, resource: str, params: dict[str, str]) -> dict[str, Any]:
         return await self.get(resource, params=params)
 
     async def get_bundle_for_patient(self, patient_id: str) -> dict[str, Any]:
         """Fetch a minimal census bundle: vitals, labs, meds, conditions, allergies."""
+        fhir_id = await self._resolve_patient_id(patient_id)
         resources = [
-            ("Observation", {"patient": patient_id, "category": "vital-signs", "_count": "50"}),
-            ("Observation", {"patient": patient_id, "category": "laboratory", "_count": "100"}),
-            ("MedicationRequest", {"patient": patient_id, "status": "active"}),
-            ("Condition", {"patient": patient_id, "clinical-status": "active"}),
-            ("AllergyIntolerance", {"patient": patient_id}),
-            ("Flag", {"patient": patient_id}),
+            ("Observation", {"patient": fhir_id, "category": "vital-signs", "_count": "50"}),
+            ("Observation", {"patient": fhir_id, "category": "laboratory", "_count": "100"}),
+            ("MedicationRequest", {"patient": fhir_id, "status": "active"}),
+            ("Condition", {"patient": fhir_id, "clinical-status": "active"}),
+            ("AllergyIntolerance", {"patient": fhir_id}),
+            ("Flag", {"patient": fhir_id}),
         ]
         results: dict[str, Any] = {"patient_id": patient_id, "resources": {}}
         for resource, params in resources:
