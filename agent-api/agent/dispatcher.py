@@ -294,8 +294,33 @@ async def dispatch(
                             misroute_detected = True
                             logger.warning(
                                 "Misroute detected",
-                                extra={"session_id": session_id, "tool": tool_name, "message": message[:80]},
+                                extra={"session_id": session_id, "tool": tool_name, "physician_query": message[:80]},
                             )
+
+                    # Census scope enforcement — block FHIR tool calls for out-of-census patients.
+                    # Compensating control for AUDIT finding #6 (ARCHITECTURE.md §6.1).
+                    census_ids: list[str] = session_context.get("patient_ids", [])
+                    requested_pid: str | None = tool_input.get("patient_id")
+                    if (
+                        requested_pid is not None
+                        and census_ids
+                        and requested_pid not in census_ids
+                    ):
+                        logger.warning(
+                            "Census scope violation blocked",
+                            extra={"session_id": session_id, "requested": requested_pid},
+                        )
+                        tool_result_content = json.dumps({
+                            "error": "Patient not on active census. Please confirm patient identity before accessing records.",
+                            "scope_enforcement": True,
+                            "requested_patient_id": requested_pid,
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": tool_result_content,
+                        })
+                        continue
 
                     # Call tool
                     tool_fn = TOOL_REGISTRY.get(tool_name)
