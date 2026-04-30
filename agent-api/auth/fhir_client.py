@@ -84,6 +84,11 @@ class FHIRClient:
                     "Accept": "application/fhir+json",
                 },
             )
+            if response.status_code != 200:
+                logger.error(
+                    "FHIR GET failed",
+                    extra={"url": url, "status": response.status_code, "body": response.text[:500]},
+                )
             response.raise_for_status()
             return response.json()
 
