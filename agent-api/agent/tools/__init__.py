@@ -30,6 +30,7 @@ from typing import Any
 
 import redis.asyncio as aioredis
 
+from agent.citation import Citation, CitationList, ClaimClass, citations_for_fhir_resource
 from auth.fhir_client import fhir_client
 from briefing.context_builder import build as build_briefing_context
 from briefing.generator import generate_briefing
@@ -41,7 +42,7 @@ from triage.criteria import extract as extract_criteria
 from triage.explainer import explain_census
 from triage.rules_engine import rank
 from verification.domain_constraints import verify_conversation_answer, verify_safety_summary, verify_triage_entry
-from verification.source_attribution import verify_briefing
+from verification.source_attribution import extract_citations, verify_briefing
 
 logger = logging.getLogger(__name__)
 
@@ -49,17 +50,31 @@ logger = logging.getLogger(__name__)
 # ── Citation helpers ──────────────────────────────────────────────────────────
 
 def _citation_from_briefing(briefing: BriefingResponse, patient_id: str) -> list[dict[str, Any]]:
-    citations: list[dict[str, Any]] = []
+    """Convert verified briefing claims to structured Citation dicts."""
+    result: list[dict[str, Any]] = []
     for section in briefing.sections:
         for claim in section.claims:
-            citations.append({
-                "patient_id": patient_id,
-                "resource_type": claim.source_resource,
-                "resource_id": claim.source_code,
-                "effective_datetime": claim.source_dt,
-                "value_summary": claim.source_value,
-            })
-    return citations
+            # Map briefing section names to claim classes
+            section_to_class: dict[str, ClaimClass] = {
+                "labs": "lab_value",
+                "vitals": "vital",
+                "medications": "medication",
+                "conditions": "condition",
+                "allergies": "allergy",
+                "code_status": "code_status",
+                "isolation": "isolation",
+            }
+            claim_class: ClaimClass = section_to_class.get(section.section, "lab_value")
+            citation = Citation(
+                patient_id=patient_id,
+                resource_type=claim.source_resource,
+                resource_id=claim.source_code,
+                effective_datetime=getattr(claim, "source_dt", None),
+                value_summary=claim.source_value,
+                claim_class=claim_class,
+            )
+            result.append(citation.to_dict())
+    return result
 
 
 def _empty_metadata(tool: str, patient_id: str | None, duration_ms: int, resources: list[str]) -> dict[str, Any]:
@@ -103,13 +118,14 @@ async def get_census_summary(
     ]
 
     citations: list[dict[str, Any]] = [
-        {
-            "patient_id": e["patient_id"],
-            "resource_type": "Observation",
-            "resource_id": "",
-            "effective_datetime": "",
-            "value_summary": e.get("explanation", ""),
-        }
+        Citation(
+            patient_id=e["patient_id"],
+            resource_type="Observation",
+            resource_id="",
+            effective_datetime=None,
+            value_summary=e.get("explanation", ""),
+            claim_class="vital",
+        ).to_dict()
         for e in verified
     ]
 
@@ -215,13 +231,14 @@ async def get_medication_safety(
         flags_out = [f for f in flags_out if medication_name.lower() in f["medication"].lower()] or flags_out
 
     citations: list[dict[str, Any]] = [
-        {
-            "patient_id": patient_id,
-            "resource_type": "MedicationRequest",
-            "resource_id": "",
-            "effective_datetime": "",
-            "value_summary": f["message"],
-        }
+        Citation(
+            patient_id=patient_id,
+            resource_type="MedicationRequest",
+            resource_id="",
+            effective_datetime=None,
+            value_summary=f["message"],
+            claim_class="medication",
+        ).to_dict()
         for f in flags_out
     ]
 
@@ -323,13 +340,14 @@ async def get_triage_rationale(
     return {
         "result": rationale,
         "citations": [
-            {
-                "patient_id": patient_id,
-                "resource_type": "Observation",
-                "resource_id": "",
-                "effective_datetime": "",
-                "value_summary": f"{k}={v}",
-            }
+            Citation(
+                patient_id=patient_id,
+                resource_type="Observation",
+                resource_id="",
+                effective_datetime=None,
+                value_summary=f"{k}={v}",
+                claim_class="vital",
+            ).to_dict()
             for k, v in triage_result.matched_criteria.items()
         ],
         "metadata": _empty_metadata(
