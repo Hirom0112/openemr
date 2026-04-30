@@ -27,6 +27,13 @@ from typing import Any
 
 import anthropic
 
+from agent.metrics import (
+    agent_cache_hits_total,
+    agent_cache_misses_total,
+    agent_dispatch_latency_seconds,
+    agent_tool_calls_total,
+    agent_tool_misroute_total,
+)
 from agent.schemas import DISPATCHER_TOOLS
 from agent.system_prompt import build_system_prompt
 from agent.tool_registry import TOOL_REGISTRY
@@ -251,14 +258,21 @@ async def dispatch(
                 tools=DISPATCHER_TOOLS,
             )
 
+            cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+            cache_create = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+            if cache_read > 0:
+                agent_cache_hits_total.inc(cache_read)
+            if cache_create > 0:
+                agent_cache_misses_total.inc(cache_create)
+
             if generation_event is not None:
                 generation_event.end(
                     output=response.content,
                     usage={
                         "input_tokens": response.usage.input_tokens,
                         "output_tokens": response.usage.output_tokens,
-                        "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", 0),
-                        "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", 0),
+                        "cache_read_input_tokens": cache_read,
+                        "cache_creation_input_tokens": cache_create,
                     },
                 )
 
@@ -288,10 +302,14 @@ async def dispatch(
                     tool_input: dict[str, Any] = tool_use_block.input
                     tool_use_id: str = tool_use_block.id
 
+                    # Increment tool call counter
+                    agent_tool_calls_total.labels(tool=tool_name).inc()
+
                     # Misroute detection (first tool call only, no correction yet attempted)
                     if turn_count == 1 and not correction_attempted:
                         if _detect_misroute(message, tool_name):
                             misroute_detected = True
+                            agent_tool_misroute_total.inc()
                             logger.warning(
                                 "Misroute detected",
                                 extra={"session_id": session_id, "tool": tool_name, "physician_query": message[:80]},
@@ -432,7 +450,9 @@ async def dispatch(
         # Save assistant response to history
         await _save_turn(session_id, session_context, "assistant", final_narrative or json.dumps(final_data or {}))
 
-        duration_ms = int((time.monotonic() - t_start) * 1000)
+        duration_s = time.monotonic() - t_start
+        duration_ms = int(duration_s * 1000)
+        agent_dispatch_latency_seconds.observe(duration_s)
 
         _finalize_span(
             dispatch_span,

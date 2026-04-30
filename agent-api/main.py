@@ -21,11 +21,18 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from langfuse import Langfuse
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Histogram, make_asgi_app
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 
 from agent.dispatcher import dispatch
+from agent.metrics import (
+    agent_cache_hits_total,
+    agent_cache_misses_total,
+    agent_dispatch_latency_seconds,
+    agent_tool_calls_total,
+    agent_tool_misroute_total,
+)
 from agent.tools import (
     generate_handoff,
     get_census_summary,
@@ -43,7 +50,7 @@ from config import settings
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
 
-# ── Custom Prometheus metrics ─────────────────────────────────────────────────
+# ── Legacy per-endpoint metrics (kept for backward compatibility) ─────────────
 
 TRIAGE_LEVEL_COUNTER = Counter(
     "agent_triage_level_total",
@@ -67,6 +74,12 @@ app.add_middleware(
 )
 
 Instrumentator().instrument(app).expose(app)
+
+# Expose prometheus_client metrics at /metrics (in addition to the
+# fastapi-instrumentator default at /metrics already above — the mount
+# adds the full prometheus_client registry including our custom counters).
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
 
 _redis: aioredis.Redis | None = None
 _redis_saver: RedisSaver | None = None
