@@ -1,0 +1,12 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+httpx==0.28.0
+redis[hiredis]==5.2.0
+anthropic==0.40.0
+langfuse==2.36.2
+prometheus-fastapi-instrumentator==7.0.0
+pydantic-settings==2.6.1
+python-dotenv==1.0.1
+aiosqlite==0.20.0
+aiofiles==24.1.0
+jsonschema==4.25.1
