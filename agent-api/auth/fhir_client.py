@@ -1,7 +1,9 @@
-"""FHIR R4 client using SMART on FHIR client credentials flow.
+"""FHIR R4 client for OpenEMR.
 
-Tokens are cached in memory and refreshed automatically before expiry.
-All FHIR reads go through get() — callers never touch raw HTTP.
+OpenEMR on Railway does not support the SMART client_credentials backend
+services flow (returns "assertion type is not supported").  The working flow
+is a password grant with user_role=users.  Tokens are cached in memory and
+refreshed automatically before expiry.  All FHIR reads go through get().
 """
 
 from __future__ import annotations
@@ -21,24 +23,35 @@ _token_cache: dict[str, Any] = {}
 _token_lock = asyncio.Lock()
 
 
-async def _fetch_token() -> str:
-    """Exchange client credentials for an access token."""
+async def _fetch_token() -> tuple[str, float]:
+    """Obtain an access token via password grant with FHIR scopes."""
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.post(
             settings.resolved_fhir_token_url,
             data={
-                "grant_type": "client_credentials",
+                "grant_type": "password",
                 "client_id": settings.fhir_client_id,
                 "client_secret": settings.fhir_client_secret,
+                "username": settings.fhir_username,
+                "password": settings.fhir_password,
+                "user_role": settings.fhir_user_role,
                 "scope": settings.fhir_scopes,
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
+        if response.status_code != 200:
+            logger.error(
+                "FHIR token request failed",
+                extra={"status": response.status_code, "body": response.text[:300]},
+            )
         response.raise_for_status()
         payload = response.json()
 
+    if "access_token" not in payload:
+        raise RuntimeError(f"No access_token in FHIR token response: {payload}")
+
     expires_in = int(payload.get("expires_in", 300))
-    return payload["access_token"], time.monotonic() + expires_in - 30  # 30-second buffer
+    return payload["access_token"], time.monotonic() + expires_in - 30
 
 
 async def get_access_token() -> str:
@@ -96,7 +109,10 @@ class FHIRClient:
                 data = await self.search(resource, params)
                 results["resources"][resource] = data.get("entry", [])
             except httpx.HTTPError as exc:
-                logger.warning("FHIR fetch failed", extra={"resource": resource, "patient_id": patient_id, "error": str(exc)})
+                logger.warning(
+                    "FHIR fetch failed",
+                    extra={"resource": resource, "patient_id": patient_id, "error": str(exc)},
+                )
                 results["resources"][resource] = []
         return results
 

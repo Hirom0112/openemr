@@ -30,7 +30,9 @@ if (!AclMain::aclCheckCore('patients', 'med')) {
     exit;
 }
 
-$agentApiUrl  = $GLOBALS['copilot_agent_api_url'] ?? 'http://localhost:8400';
+// Prefer the environment variable (set in Railway / Docker) over the OpenEMR
+// globals table so Railway deployments need no database configuration step.
+$agentApiUrl  = getenv('COPILOT_AGENT_API_URL') ?: ($GLOBALS['copilot_agent_api_url'] ?? 'http://localhost:8400');
 $csrfToken    = CsrfUtils::collectCsrfToken();
 $providerId   = (string) ($_SESSION['authUserID'] ?? '');
 $providerName = (string) ($_SESSION['authUser'] ?? 'Provider');

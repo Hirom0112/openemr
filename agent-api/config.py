@@ -5,11 +5,23 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # OpenEMR / FHIR
+    # This OpenEMR deployment uses password grant (not client_credentials) because
+    # the SMART backend services flow is not configured on the Railway instance.
     openemr_base_url: str = "http://openemr"
     fhir_client_id: str = ""
     fhir_client_secret: str = ""
     fhir_token_url: str = ""  # defaults to openemr_base_url/oauth2/default/token if blank
-    fhir_scopes: str = "system/Patient.read system/Observation.read system/MedicationRequest.read system/Condition.read system/AllergyIntolerance.read system/DiagnosticReport.read"
+    fhir_username: str = "admin"          # OpenEMR user for password grant
+    fhir_password: str = ""              # set via FHIR_PASSWORD env var
+    fhir_user_role: str = "users"        # OpenEMR user_role param required by password grant
+    # user/* scopes with api:oemr work on this deployment.
+    # system/* scopes + api:fhir return 401 — SMART backend services not configured.
+    fhir_scopes: str = (
+        "openid api:oemr "
+        "user/Patient.rs user/Encounter.rs user/Observation.rs "
+        "user/Condition.rs user/MedicationRequest.rs "
+        "user/AllergyIntolerance.rs user/DiagnosticReport.rs"
+    )
 
     # Redis
     redis_url: str = "redis://redis:6379/0"
@@ -24,7 +36,7 @@ class Settings(BaseSettings):
     # Langfuse
     langfuse_secret_key: str = "secret"
     langfuse_public_key: str = "public"
-    langfuse_host: str = "http://langfuse:3000"
+    langfuse_host: str = "https://cloud.langfuse.com"
 
     # App
     log_level: str = "INFO"
