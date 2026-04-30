@@ -107,7 +107,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "or 'what is the current potassium?' "
             "Also use for conversational triage rationale questions such as "
             "'why is bed 7 first?' — do NOT route those to get_triage_rationale. "
-            "Do NOT use for full briefings — use get_patient_briefing instead.",
+            "Do NOT use for full briefings — use get_patient_briefing instead."
         ),
         "input_schema": {
             "type": "object",
