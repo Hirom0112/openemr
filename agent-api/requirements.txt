@@ -11,3 +11,4 @@ python-dotenv==1.0.1
 aiosqlite==0.20.0
 aiofiles==24.1.0
 jsonschema==4.25.1
+eval-type-backport==0.2.0

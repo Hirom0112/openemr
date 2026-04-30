@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Clinical Co-Pilot — agent-api entry point.
 
 Exposes:
