@@ -442,9 +442,7 @@ This was an unplanned but critical investigation. The `fhir_client.py` was writt
 - [ ] Update `rules_engine_config.yaml` based on feedback
 - [ ] Re-run eval suite: `python3 -m pytest agent-api/tests` — re-grade any tests that break from threshold changes
 
-#### L2. Streaming responses **[optional, post-demo]**
-- [ ] Add `POST /agent/query/stream` SSE endpoint in `main.py` using `anthropic.AsyncAnthropic().messages.stream()`
-- [ ] Buffer full response, apply verification layer, then stream narrative tokens
-- [ ] Update `agent-ui/src/components/ChatSurface.tsx:64` (replace `// TODO: replace with streaming` with `ReadableStream` consumer)
-- [ ] Remove "Thinking…" spinner; replace with token-by-token rendering
-- [ ] Expected result: UC-1 (15s) and UC-5 (20s) show first words within ~1s instead of a blank spinner
+#### L2. Streaming responses — **DECISION: NOT IMPLEMENTING. "Thinking…" spinner is correct.**
+- [x] **Decision locked 2026-04-30:** Token-by-token streaming is explicitly rejected for this product. Reasoning: the verification layer must see the complete LLM response before anything is shown to the physician. Streaming partial tokens before verification means potentially displaying unverified clinical claims, hallucinated values, or stripped safety flags mid-render. In a clinical context, showing a physician incomplete or pre-verification output — even for a second — is not acceptable. The "Thinking…" spinner holds until the full response is verified and safe. This is a product decision, not a performance limitation.
+- [x] **Remove the `// TODO: replace with streaming` comment** from `agent-ui/src/components/ChatSurface.tsx:64` — it no longer represents a planned change. Replace with a comment documenting the decision.
+- [x] **`UX_SPEC.md` responsiveness strategy** is already locked to the spinner approach — no spec change needed.

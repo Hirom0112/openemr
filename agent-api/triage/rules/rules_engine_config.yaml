@@ -1,0 +1,84 @@
+# Clinical Co-Pilot — Triage Priority Table
+#
+# 10 levels, 1 = most urgent.  Each level lists the criteria that
+# must be satisfied for a patient to be assigned that priority.
+# The rules engine evaluates levels top-to-bottom and assigns the
+# first (highest-priority) level whose criteria are met.
+#
+# Criteria keys:
+#   qsofa_score        — integer 0-3  (≥2 = organ-dysfunction risk)
+#   critical_lab       — bool: any unacknowledged critical-value lab
+#   rapid_response     — bool: rapid-response / code event in last 24 h
+#   abnormal_lab       — bool: any abnormal (non-critical) lab result
+#   critical_vital     — bool: SpO2<92, HR>120, RR>24, MAP<65
+#   mental_status_alert— bool: GCS or RASS change noted
+#   pain_score_high    — bool: pain ≥ 8/10 documented in last 4 h
+#   active_condition   — bool: at least one active condition (always true if data is present)
+#   blank_code_status  — bool: code-status field empty
+
+priority_levels:
+
+  - level: 1
+    label: "Sepsis / Rapid Response"
+    description: "qSOFA ≥2 AND critical lab or rapid-response event"
+    criteria:
+      qsofa_score: {gte: 2}
+      any_of:
+        - critical_lab: true
+        - rapid_response: true
+
+  - level: 2
+    label: "Sepsis Concern"
+    description: "qSOFA ≥2 without confirmed critical lab"
+    criteria:
+      qsofa_score: {gte: 2}
+
+  - level: 3
+    label: "Critical Lab — Unacknowledged"
+    description: "Critical-value lab present, no rapid-response"
+    criteria:
+      critical_lab: true
+      rapid_response: false
+
+  - level: 4
+    label: "Critical Vital Sign"
+    description: "SpO2<92, HR>120, RR>24, or MAP<65"
+    criteria:
+      critical_vital: true
+
+  - level: 5
+    label: "Altered Mental Status"
+    description: "Acute GCS change or RASS deviation documented"
+    criteria:
+      mental_status_alert: true
+
+  - level: 6
+    label: "Severe Pain"
+    description: "Pain ≥8 documented within 4 h"
+    criteria:
+      pain_score_high: true
+
+  - level: 7
+    label: "Abnormal Lab — Monitoring Required"
+    description: "Non-critical abnormal lab, no higher trigger"
+    criteria:
+      abnormal_lab: true
+
+  - level: 8
+    label: "Active Condition — Stable"
+    description: "Active diagnoses, vitals within normal range"
+    criteria:
+      active_condition: true
+      critical_vital: false
+      critical_lab: false
+
+  - level: 9
+    label: "Blank Code Status"
+    description: "Code-status field is empty — requires clarification"
+    criteria:
+      blank_code_status: true
+
+  - level: 10
+    label: "Routine"
+    description: "No elevated criteria detected"
+    criteria: {}
