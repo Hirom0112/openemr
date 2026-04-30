@@ -46,3 +46,25 @@ Before retiring legacy endpoints, all of the following must be true:
 2. Monitor error rate for 24h — rollback is `LEGACY_ENDPOINTS_ENABLED=true`
 3. After stable: remove legacy route handlers from `main.py` in a subsequent release
 4. Update this document status to COMPLETE
+
+---
+
+## Phase 15 Acceptance
+
+**Date verified:** 2026-04-30
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| Clean test run — 255 passed, 0 failed | **PASSED** | `python3 -m pytest agent-api/tests/` → 255 passed, 0 failed, 0 skipped |
+| CI gates configured (hard_failure + clinical_accuracy + routing) | **PASSED** | `copilot-eval.yml`: triggers on `agent-api/**`; 3 gates with empty-selection guards; hard_failure 205 tests, clinical_accuracy 163 tests, routing 24 tests |
+| Routing accuracy ≥ 95% on ≥ 20-query eval set | **PASSED** | `test_agent_routing.py` 24/24 = 100%; includes authorization probe (hard_failure), ambiguous queries, missing-data, dual-path rationale |
+| Session-open flow < 5s end-to-end | **PENDING** | Static greeting: instant (React constant). Pre-fetch: async, fires on mount. Budget is `get_census_summary` LLM response. Requires live deployment measurement against Railway. |
+| Click-to-expand rationale < 2s | **PENDING** | `POST /agent/triage_rationale` → `get_triage_rationale` direct (no dispatcher). Reads Redis cache + rules engine only — LLM not called. Requires live deployment measurement. |
+| Citations present on all clinical claims per claim taxonomy | **PASSED** | `test_claim_without_citation_stripped` passes; all 6 tools return `Citation.to_dict()` objects; 7 claim classes covered; claim-without-citation strip active in `dispatcher_response.py` |
+| Domain constraints run on final dispatcher output | **PASSED** | `verify_dispatcher_response()` hooked at `end_turn` in `dispatcher.py`; 13/13 `hard_failure` tests pass including NKDA strip, stale critical, canary block, recommendation strip, isolation/code-status flags |
+
+### Items requiring live deployment before final acceptance sign-off
+
+- Session-open flow < 5s: measure via Grafana latency panel after Railway deployment
+- Click-to-expand < 2s: measure via Grafana after Railway deployment
+- All 6 PENDING cutover gates in the table above (p95 latency, error rate, misroute rate, cache-hit, Railway patient load, census count match)
