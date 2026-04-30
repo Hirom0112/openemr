@@ -1,14 +1,14 @@
 import type { Citation } from '../types';
+import { buildCitationUrl } from '../utils/citations';
 
 interface CitationLinkProps {
   citation: Citation;
-  /** V2-ready: when present wraps the badge in an anchor. V1 always omits this. */
-  href?: string;
 }
 
 const RESOURCE_ABBREV: Record<string, string> = {
   Observation: 'Obs',
   MedicationRequest: 'Rx',
+  MedicationStatement: 'Rx',
   Condition: 'Dx',
   AllergyIntolerance: 'Allergy',
   Encounter: 'Enc',
@@ -18,18 +18,19 @@ const RESOURCE_ABBREV: Record<string, string> = {
 };
 
 const CLAIM_COLORS: Record<string, string> = {
-  lab_value: '#1a6fa8',
-  vital: '#1a8a6f',
-  medication: '#7b4fa8',
-  condition: '#a84f1a',
-  allergy: '#a81a1a',
+  lab_value:   '#1a6fa8',
+  vital:       '#1a8a6f',
+  medication:  '#7b4fa8',
+  condition:   '#a84f1a',
+  allergy:     '#a81a1a',
   code_status: '#4f4fa8',
-  isolation: '#4fa84f',
+  isolation:   '#4fa84f',
 };
 
-export default function CitationLink({ citation, href }: CitationLinkProps) {
+export default function CitationLink({ citation }: CitationLinkProps) {
   const label = RESOURCE_ABBREV[citation.resource_type] ?? citation.resource_type.slice(0, 4);
   const color = CLAIM_COLORS[citation.claim_class] ?? '#555';
+  const href  = buildCitationUrl(citation);
 
   const badge = (
     <span
@@ -54,7 +55,7 @@ export default function CitationLink({ citation, href }: CitationLinkProps) {
 
   if (href) {
     return (
-      <a href={href} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+      <a href={href} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
         {badge}
       </a>
     );
