@@ -285,6 +285,30 @@ async def agent_query(request: AgentQueryRequest) -> dict:
         raise HTTPException(status_code=500, detail="Dispatcher error") from exc
 
 
+# ── FHIR pre-fetch (fired by React panel on mount) ───────────────────────────
+
+class PrefetchRequest(BaseModel):
+    session_id: str
+    provider_id: str
+    patient_ids: list[str] = []
+
+
+@app.post("/agent/prefetch")
+async def agent_prefetch(request: PrefetchRequest) -> dict:
+    """Signal that the React panel has mounted and FHIR pre-fetch should begin.
+
+    V1: acknowledges immediately; the actual cache warming is handled by the
+    existing FHIR client on the first get_census_summary tool call.  This
+    endpoint exists so the UI can fire a non-blocking fetch on mount without
+    waiting for it — keeping the session-open flow in UX_SPEC §3 intact.
+    """
+    logger.info(
+        "Pre-fetch signal received",
+        extra={"session_id": request.session_id, "patient_count": len(request.patient_ids)},
+    )
+    return {"status": "acknowledged", "session_id": request.session_id}
+
+
 # ── Raw conversation turns ────────────────────────────────────────────────────
 
 class MessageRequest(BaseModel):
