@@ -3,9 +3,8 @@
 /**
  * Clinical Co-Pilot — OpenEMR Custom Module Bootstrap
  *
- * This module is a thin PHP shell that serves the React bundle. It registers
- * no namespaces, event listeners, or hooks — all logic lives in agent-api.
- * The bootstrap file must exist for OpenEMR to consider this module loadable.
+ * Instantiates the module Bootstrap class and subscribes it to OpenEMR events.
+ * Variables in scope here (provided by ModulesApplication): $module, $eventDispatcher.
  *
  * @package   OpenEMR
  * @link      https://www.open-emr.org
@@ -15,3 +14,9 @@
  */
 
 declare(strict_types=1);
+
+use OpenEMR\Modules\ClinicalCopilot\Bootstrap;
+
+require_once __DIR__ . '/src/Bootstrap.php';
+
+(new Bootstrap($eventDispatcher))->subscribeToEvents();

@@ -16,6 +16,7 @@ Exposes:
   GET  /session/{id}/history         — stored conversation turns
 """
 
+import asyncio
 import logging
 import time
 
@@ -26,6 +27,12 @@ from langfuse import Langfuse
 from prometheus_client import Counter, Histogram, make_asgi_app
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
+from pydantic import ConfigDict as _PydanticConfig
+
+# PHP sends numeric PIDs and provider IDs as JSON numbers.
+# _CoerceModel tells Pydantic v2 to coerce numbers to str instead of 422-ing.
+class _CoerceModel(BaseModel):
+    model_config = _PydanticConfig(coerce_numbers_to_str=True)
 
 from agent.dispatcher import dispatch
 from agent.metrics import (
@@ -48,6 +55,7 @@ from briefing.schema import BriefingResponse
 from checkpointer.redis_saver import RedisSaver
 from checkpointer.sqlite_saver import SqliteSaver
 from config import settings
+from triage.census import build_census
 
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
@@ -163,7 +171,7 @@ async def get_patient(patient_id: str) -> dict:
 
 # ── UC-1 Triage Census ──────────────────────────────────────────────────────── LEGACY — retire after Phase 13 cutover
 
-class CensusRequest(BaseModel):
+class CensusRequest(_CoerceModel):
     patient_ids: list[str]
     session_id: str | None = None
 
@@ -264,6 +272,8 @@ async def handoff_generate(body: HandoffRequest) -> dict:
 # ── Triage rationale (direct-call, not dispatcher) ───────────────────────────
 
 class TriageRationaleRequest(BaseModel):
+    patient_id: str | None = None
+    session_id: str | None = None
     provider_id: str = "system"
 
 
@@ -273,7 +283,7 @@ async def triage_rationale(patient_id: str, body: TriageRationaleRequest) -> dic
     try:
         tool_result = await get_triage_rationale(
             {"patient_id": patient_id, "provider_id": body.provider_id},
-            session_context=_session_ctx(),
+            session_context=_session_ctx(body.session_id),
         )
         return tool_result["result"]
     except Exception as exc:
@@ -283,7 +293,7 @@ async def triage_rationale(patient_id: str, body: TriageRationaleRequest) -> dic
 
 # ── Dispatcher endpoint (POST /agent/query) ───────────────────────────────────
 
-class AgentQueryRequest(BaseModel):
+class AgentQueryRequest(_CoerceModel):
     message: str
     session_id: str
     provider_id: str
@@ -312,7 +322,7 @@ async def agent_query(request: AgentQueryRequest) -> dict:
 
 # ── FHIR pre-fetch (fired by React panel on mount) ───────────────────────────
 
-class PrefetchRequest(BaseModel):
+class PrefetchRequest(_CoerceModel):
     session_id: str
     provider_id: str
     patient_ids: list[str] = []
@@ -331,6 +341,21 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
         "Pre-fetch signal received",
         extra={"session_id": request.session_id, "patient_count": len(request.patient_ids)},
     )
+
+    async def _warm() -> None:
+        try:
+            await build_census(
+                request.patient_ids,
+                redis_client=_redis,
+                cache_key=f"copilot:census:{request.session_id}",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Pre-fetch cache warming failed",
+                extra={"session_id": request.session_id, "error": str(exc)},
+            )
+
+    asyncio.create_task(_warm())
     return {"status": "acknowledged", "session_id": request.session_id}
 
 

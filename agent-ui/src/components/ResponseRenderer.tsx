@@ -12,64 +12,90 @@ import QueryAnswerRenderer from './QueryAnswerRenderer';
 import MedicationSafetyRenderer from './MedicationSafetyRenderer';
 import HandoffRenderer from './HandoffRenderer';
 import TextRenderer from './TextRenderer';
+import CitationsPanel from './CitationsPanel';
+import { cardStyle, RED } from '../styles/tokens';
 
 interface ResponseRendererProps {
   response: AgentResponse;
-  onPatientSelect?: (patientId: string) => void;
+  onBrief?: (patientName: string, patientId?: string) => void;
+  providerName?: string;
 }
 
-export default function ResponseRenderer({ response, onPatientSelect }: ResponseRendererProps) {
+export default function ResponseRenderer({ response, onBrief, providerName }: ResponseRendererProps) {
   const { type, data, narrative, citations } = response;
 
+  if (type === 'error') {
+    return (
+      <div style={{ ...cardStyle(RED), fontSize: 13, color: RED.text }}>
+        {narrative || 'An error occurred. Please view the chart directly.'}
+      </div>
+    );
+  }
+
+  let body: React.ReactNode;
   switch (type) {
     case 'census':
-      return (
+      body = (
         <CensusRenderer
           data={data as CensusData}
           narrative={narrative}
           citations={citations}
-          onPatientSelect={onPatientSelect}
+          onBrief={onBrief ?? (() => {})}
+          providerName={providerName}
         />
       );
+      break;
     case 'briefing':
-      return (
+      body = (
         <BriefingRenderer
           data={data as BriefingSection}
           narrative={narrative}
           citations={citations}
         />
       );
+      break;
     case 'query_answer':
-      return (
+      body = (
         <QueryAnswerRenderer
           data={data as QueryAnswerData}
           narrative={narrative}
           citations={citations}
         />
       );
+      break;
     case 'medication_safety':
-      return (
+      body = (
         <MedicationSafetyRenderer
           data={data as MedicationSafetyData}
           narrative={narrative}
           citations={citations}
         />
       );
+      break;
     case 'handoff':
-      return (
+      body = (
         <HandoffRenderer
           data={data as HandoffData}
           narrative={narrative}
           citations={citations}
         />
       );
-    case 'error':
-      return (
-        <div style={{ color: '#c0392b', fontSize: 13, padding: '6px 8px', background: '#fff5f5', borderRadius: 4 }}>
-          {narrative || 'An error occurred. Please view the chart directly.'}
-        </div>
-      );
+      break;
     default:
-      return <TextRenderer narrative={narrative} citations={citations} />;
+      body = <TextRenderer narrative={narrative} citations={citations} />;
   }
+
+  if (type === 'census') {
+    // census renders its own inline source attribution — skip CitationsPanel to avoid double render
+    return <>{body}</>;
+  }
+
+  const patientOrder = undefined;
+
+  return (
+    <>
+      {body}
+      <CitationsPanel citations={citations} patientOrder={patientOrder} />
+    </>
+  );
 }

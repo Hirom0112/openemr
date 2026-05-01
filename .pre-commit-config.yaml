@@ -89,6 +89,20 @@ repos:
   hooks:
   - id: actionlint-docker
 
+- repo: https://github.com/Yelp/detect-secrets
+  rev: v1.5.0
+  hooks:
+  - id: detect-secrets
+    args:
+    - --baseline
+    - .secrets.baseline
+    exclude: |
+      (?x)^(
+        docker/library/|
+        ci/nginx/dummy-key|
+        docker/library/dockers/dev-nginx/dummy-key
+      )
+
 - repo: local
   hooks:
   - id: php-syntax-check

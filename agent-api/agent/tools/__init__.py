@@ -295,26 +295,28 @@ async def generate_handoff(
 
     summaries = await generate_handoffs(patient_ids, langfuse=langfuse)
 
-    handoffs_out = [
+    # Map I-PASS fields → HandoffPatient shape expected by the frontend renderer:
+    #   illness_severity → status
+    #   patient_summary  → active_issues (single narrative item)
+    #   action_list      → pending_items
+    #   situation_awareness + contingency_plan → escalation_triggers
+    patients_out = [
         {
             "patient_id": s.patient_id,
             "name": s.name,
-            "mrn": s.mrn,
-            "triage_level": s.triage_level,
-            "illness_severity": s.illness_severity,
-            "patient_summary": s.patient_summary,
-            "action_list": s.action_list,
-            "situation_awareness": s.situation_awareness,
-            "contingency_plan": s.contingency_plan,
-            "generated_at": s.generated_at,
-            **({"error": s.error} if s.error else {}),
+            "status": s.illness_severity,
+            "active_issues": [s.patient_summary] if s.patient_summary else [],
+            "pending_items": s.action_list,
+            "escalation_triggers": [
+                t for t in [s.situation_awareness, s.contingency_plan] if t
+            ],
         }
         for s in summaries
     ]
 
     duration_ms = int((time.monotonic() - t0) * 1000)
     return {
-        "result": {"handoffs": handoffs_out, "total": len(handoffs_out)},
+        "result": {"patients": patients_out, "total": len(patients_out)},
         "citations": [],
         "metadata": _empty_metadata(
             "generate_handoff",

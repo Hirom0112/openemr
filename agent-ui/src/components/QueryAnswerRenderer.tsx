@@ -1,5 +1,7 @@
 import type { Citation, QueryAnswerData } from '../types';
-import CitationLink from './CitationLink';
+import DisclaimerIcon from './DisclaimerIcon';
+import { NEU } from '../styles/tokens';
+import { Header, Pill, SectionHeading } from './primitives';
 
 interface QueryAnswerRendererProps {
   data: QueryAnswerData;
@@ -8,28 +10,32 @@ interface QueryAnswerRendererProps {
 }
 
 export default function QueryAnswerRenderer({ data, narrative, citations }: QueryAnswerRendererProps) {
+  const text = narrative || data.answer || '';
+
+  const windowPill = data.window_months != null
+    ? <Pill color={NEU} label={`${data.window_months}mo`} />
+    : undefined;
+
   if (data.found === false) {
     return (
-      <div style={{ fontSize: 13, color: '#555' }}>
-        <div style={{ color: '#888', fontStyle: 'italic', marginBottom: 4 }}>
-          No {data.searched ?? 'result'} found
-          {data.window_months ? ` in the last ${data.window_months} months` : ''}.
+      <div>
+        <Header title="Query answer" subtitle={data.searched} pill={windowPill} />
+        <SectionHeading color={NEU}>No results found</SectionHeading>
+        <p style={{ margin: 0, fontSize: 13, color: '#374151', lineHeight: 1.6 }}>{text}</p>
+        <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end' }}>
+          <DisclaimerIcon citations={citations} />
         </div>
-        <p style={{ margin: 0 }}>{narrative}</p>
       </div>
     );
   }
 
   return (
-    <div style={{ fontSize: 13, color: '#333', lineHeight: 1.5 }}>
-      <p style={{ margin: '0 0 6px' }}>{narrative}</p>
-      {citations.length > 0 && (
-        <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 2 }}>
-          {citations.map((c, i) => (
-            <CitationLink key={`${c.resource_id}-${i}`} citation={c} />
-          ))}
-        </div>
-      )}
+    <div>
+      <Header title="Query answer" subtitle={data.searched} pill={windowPill} />
+      <p style={{ margin: 0, fontSize: 13, color: '#374151', lineHeight: 1.6 }}>{text}</p>
+      <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end' }}>
+        <DisclaimerIcon citations={citations} />
+      </div>
     </div>
   );
 }
