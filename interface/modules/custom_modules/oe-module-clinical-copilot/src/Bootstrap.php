@@ -99,7 +99,25 @@ class Bootstrap
         $providerId      = $sessionData['authUserID']         ?? $_SESSION['authUserID']         ?? null;
         $patientIds      = $sessionData['copilot_patient_ids'] ?? $_SESSION['copilot_patient_ids'] ?? [];
         $sessionId       = session_id();
-        $agentApiUrl     = getenv('COPILOT_AGENT_API_URL') ?: 'http://localhost:8400';
+
+        // Resolve the agent API URL the same way index.php does. When neither
+        // COPILOT_AGENT_API_URL nor a clearly-local context is present, skip
+        // the prefetch entirely — fire-and-forget POSTs to localhost from a
+        // deployed container only burn time and pollute logs.
+        $envAgentApiUrl = getenv('COPILOT_AGENT_API_URL');
+        $httpHost       = (string) ($_SERVER['HTTP_HOST'] ?? '');
+        $isLocalRequest = $httpHost === ''
+            || str_contains($httpHost, 'localhost')
+            || str_contains($httpHost, '127.0.0.1');
+        $devMode        = getenv('COPILOT_DEV_MODE') === '1';
+        if (is_string($envAgentApiUrl) && $envAgentApiUrl !== '') {
+            $agentApiUrl = $envAgentApiUrl;
+        } elseif ($isLocalRequest || $devMode) {
+            $agentApiUrl = 'http://localhost:8400';
+        } else {
+            error_log('[clinical-copilot] skipping agent prefetch: COPILOT_AGENT_API_URL not configured');
+            return;
+        }
 
         $payload = [
             'session_id'  => $sessionId,
