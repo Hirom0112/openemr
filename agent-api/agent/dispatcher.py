@@ -252,11 +252,12 @@ async def dispatch(
             input={"message": message},
             metadata={"provider_id": session_context.get("provider_id")},
         )
-        dispatch_span = langfuse_trace.span(
-            name="dispatch",
-            input={"message": message, "session_id": session_id},
-            metadata={"provider_id": session_context.get("provider_id")},
-        )
+        if langfuse_trace is not None:
+            dispatch_span = langfuse_trace.span(
+                name="dispatch",
+                input={"message": message, "session_id": session_id},
+                metadata={"provider_id": session_context.get("provider_id")},
+            )
 
     # Load conversation history
     history = await _load_history(session_id, session_context)
@@ -290,7 +291,7 @@ async def dispatch(
 
             response = await _anthropic.messages.create(
                 model=_MODEL,
-                max_tokens=4096,
+                max_tokens=16384,
                 system=system_blocks,
                 messages=messages,
                 tools=DISPATCHER_TOOLS,
@@ -320,6 +321,17 @@ async def dispatch(
 
             if response.stop_reason == "max_tokens":
                 logger.warning("LLM hit max_tokens", extra={"session_id": session_id})
+                # If a tool already ran successfully, return its data with whatever partial narrative
+                # was generated. This prevents large handoff / census responses from being discarded.
+                if final_data is not None:
+                    for block in response.content:
+                        if hasattr(block, "text"):
+                            final_narrative += block.text
+                    logger.warning(
+                        "Returning partial narrative after max_tokens; tool data intact",
+                        extra={"session_id": session_id, "response_type": response_type},
+                    )
+                    break
                 _finalize_span(dispatch_span, error=True)
                 return _error_response(ToolFailureClass.LLM_TIMEOUT, "max_tokens exceeded")
 
