@@ -26,12 +26,16 @@ if (!AclMain::aclCheckCore('patients', 'med')) {
     exit;
 }
 
+// OpenEMR stores auth keys at the top level of $_SESSION on the published
+// Docker image, but the local dev branch nests them under $_SESSION['OpenEMR']
+// after the HttpSessionFactory refactor. Read from both so the module works
+// against either layout.
 $oemrSession  = $_SESSION['OpenEMR'] ?? [];
 $agentApiUrl  = getenv('COPILOT_AGENT_API_URL') ?: ($GLOBALS['copilot_agent_api_url'] ?? 'http://localhost:8400');
-$providerId   = (int) ($oemrSession['authUserID'] ?? 0);
-$providerName = (string) ($oemrSession['authUser'] ?? '');
+$providerId   = (int) ($oemrSession['authUserID'] ?? $_SESSION['authUserID'] ?? 0);
+$providerName = (string) ($oemrSession['authUser'] ?? $_SESSION['authUser'] ?? '');
 $sessionId    = session_id() ?: uniqid('copilot-', true);
-$patientIds   = $oemrSession['copilot_patient_ids'] ?? [];
+$patientIds   = $oemrSession['copilot_patient_ids'] ?? $_SESSION['copilot_patient_ids'] ?? [];
 if (empty($patientIds) && !empty($_GET['pids'])) {
     $patientIds = array_filter(array_map('intval', explode(',', $_GET['pids'])));
 }

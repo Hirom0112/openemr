@@ -92,9 +92,12 @@ class Bootstrap
      */
     public function injectCopilotBootScript(RenderEvent $event): void
     {
+        // Read from both nested and top-level $_SESSION so the module works
+        // against the local dev branch (HttpSessionFactory nests under
+        // $_SESSION['OpenEMR']) and the published Docker image (top-level).
         $sessionData     = $_SESSION['OpenEMR'] ?? [];
-        $providerId      = $sessionData['authUserID'] ?? null;
-        $patientIds      = $sessionData['copilot_patient_ids'] ?? [];
+        $providerId      = $sessionData['authUserID']         ?? $_SESSION['authUserID']         ?? null;
+        $patientIds      = $sessionData['copilot_patient_ids'] ?? $_SESSION['copilot_patient_ids'] ?? [];
         $sessionId       = session_id();
         $agentApiUrl     = getenv('COPILOT_AGENT_API_URL') ?: 'http://localhost:8400';
 
