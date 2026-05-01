@@ -2,6 +2,7 @@
 # custom module. Everything else is already in openemr/openemr:latest base image.
 *
 !Dockerfile
+!docker-entrypoint-wrapper.sh
 !interface/
 !interface/modules/
 !interface/modules/custom_modules/
