@@ -22,6 +22,7 @@ session_context may be sparse ({}) in Phase 2; Phase 4 (dispatcher) populates it
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import asdict
@@ -37,7 +38,7 @@ from briefing.generator import generate_briefing
 from briefing.schema import BriefingResponse
 from handoff.generator import generate_handoffs
 from medication.safety import add_llm_summary, run_safety_checks
-from triage.census import build_census
+from triage.census import _CACHE_TTL, build_census
 from triage.criteria import extract as extract_criteria
 from triage.explainer import explain_census
 from triage.rules_engine import rank
@@ -102,15 +103,38 @@ async def get_census_summary(
 
     cache_key = f"copilot:census:{session_id}" if session_id else None
 
-    entries = await build_census(patient_ids, redis_client=redis_client, cache_key=cache_key)
-    annotated = await explain_census(entries, langfuse=langfuse)
+    entries = await build_census(
+        patient_ids,
+        redis_client=redis_client,
+        cache_key=cache_key,
+        provider_id=provider_id,
+    )
+    annotated = await explain_census(entries, langfuse=langfuse, redis_client=redis_client)
 
     bundles: dict[str, dict] = {}
     for entry in entries:
-        try:
-            bundles[entry.patient_id] = await fhir_client.get_bundle_for_patient(entry.patient_id)
-        except Exception:
-            bundles[entry.patient_id] = {"resources": {}}
+        bundle_key = f"copilot:bundle:{entry.patient_id}"
+        bundle: dict | None = None
+        if redis_client:
+            try:
+                cached_bundle = await redis_client.get(bundle_key)
+                if cached_bundle:
+                    bundle = json.loads(cached_bundle)
+            except Exception as exc:
+                logger.warning("Bundle cache read failed", extra={"patient_id": entry.patient_id, "error": str(exc)})
+
+        if bundle is None:
+            try:
+                bundle = await fhir_client.get_bundle_for_patient(entry.patient_id)
+                if redis_client:
+                    try:
+                        await redis_client.setex(bundle_key, _CACHE_TTL, json.dumps(bundle))
+                    except Exception as exc:
+                        logger.warning("Bundle cache write failed", extra={"patient_id": entry.patient_id, "error": str(exc)})
+            except Exception:
+                bundle = {"resources": {}}
+
+        bundles[entry.patient_id] = bundle
 
     verified = [
         verify_triage_entry(e, bundles.get(e["patient_id"], {"resources": {}}))

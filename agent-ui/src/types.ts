@@ -1,9 +1,9 @@
 export interface CopilotConfig {
   agentApiUrl: string;
-  providerId: string;
-  csrfToken: string;
+  providerId: string | number;
+  csrfToken?: string;
   sessionId: string;
-  patientIds: string[];
+  patientIds?: string[];
   providerName?: string;
 }
 
@@ -17,6 +17,21 @@ export interface TriageEntry {
   explanation: string;
   matched_criteria: Record<string, unknown>;
   verification_warnings?: string[];
+}
+
+/** Single patient in a census response — matches the actual backend payload */
+export interface CensusPatient {
+  patient_id: string;
+  name: string;
+  mrn: string;
+  openemr_pid?: string;
+  triage_level: number;
+  triage_label: string;
+  explanation: string;
+  matched_criteria: Record<string, unknown>;
+  verification_warnings?: string[];
+  admit_date?: string;
+  days_since_admit?: number;
 }
 
 export interface ConversationTurn {
@@ -53,17 +68,32 @@ export interface PatientSummary {
   one_line: string;
 }
 
+/** Census payload as returned by the backend get_census_summary tool */
 export interface CensusData {
-  patients: PatientSummary[];
+  census: CensusPatient[];
   total: number;
 }
 
+export interface ClinicalClaim {
+  text: string;
+  source_resource: string;
+  source_code: string;
+  source_value: string;
+  source_dt: string;
+}
+
+export interface BriefingResponseSection {
+  section: string;
+  summary: string;
+  claims: ClinicalClaim[];
+}
+
 export interface BriefingSection {
-  active_problems: string[];
-  recent_vitals: Record<string, string>;
-  medications: string[];
-  pending_results: string[];
-  clinical_summary: string;
+  patient_id: string;
+  name: string;
+  sections: BriefingResponseSection[];
+  alerts: string[];
+  generated_at: string;
 }
 
 export interface QueryAnswerData {

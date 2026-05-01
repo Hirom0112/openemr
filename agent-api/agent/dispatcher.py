@@ -155,11 +155,19 @@ def _build_system_blocks(session_context: dict[str, Any]) -> list[dict[str, Any]
 
     # Inject session context so the LLM can call tools without asking for IDs.
     # This is cached per session (ephemeral) — patient list is stable per rounding session.
+    if patient_ids:
+        patient_ids_line = f"Active census patient IDs: {', '.join(patient_ids)}"
+    else:
+        patient_ids_line = (
+            "Active census patient IDs: not yet loaded. "
+            "When the physician requests a census or morning rounds, call get_census_summary "
+            "with an empty patient_ids list — the tool will auto-discover all active patients from FHIR."
+        )
     session_info_lines = [
         "## Active Session Context",
         "",
         f"Provider ID: {provider_id}",
-        f"Active census patient IDs: {', '.join(patient_ids) if patient_ids else 'none'}",
+        patient_ids_line,
         "",
         "When calling tools, use these values for provider_id and patient_ids unless the "
         "physician specifies different values explicitly.",
@@ -292,8 +300,12 @@ async def dispatch(
                 generation_event.end(
                     output=response.content,
                     usage={
-                        "input_tokens": response.usage.input_tokens,
-                        "output_tokens": response.usage.output_tokens,
+                        "input": response.usage.input_tokens,
+                        "output": response.usage.output_tokens,
+                        "total": response.usage.input_tokens + response.usage.output_tokens,
+                        "unit": "TOKENS",
+                    },
+                    metadata={
                         "cache_read_input_tokens": cache_read,
                         "cache_creation_input_tokens": cache_create,
                     },

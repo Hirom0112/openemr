@@ -750,10 +750,10 @@ PATIENTS: list[dict[str, Any]] = [
         ],
     },
 
-    # ── pt-019: Linda Okonkwo — Observation after minor fall ──────────────
+    # ── pt-019: Linda Okonkwo — minor fall, admitted overnight (today) — Observation after minor fall ──────────────
     {
         "fname": "Linda", "lname": "Okonkwo", "dob": "1966-08-30", "sex": "Female",
-        "admit_date": "2026-04-28", "admit_reason": "Observation after minor fall — no fracture identified",
+        "admit_date": "2026-04-30", "admit_reason": "Observation after minor fall — no fracture identified",
         "conditions": [{"title": "Fall, unspecified", "icd": "W19.XXXA"}],
         "allergies": [],
         "medications": [{"title": "Acetaminophen 650mg PO q6h PRN"}],
@@ -861,6 +861,34 @@ PATIENTS: list[dict[str, Any]] = [
              "status": "final"},
         ],
     },
+
+    # ── pt-024: Alejandro Cruz — Intra-abdominal sepsis, admitted overnight (P1) ──
+    {
+        "fname": "Alejandro", "lname": "Cruz", "dob": "1971-05-20", "sex": "Male",
+        "admit_date": "2026-04-30", "admit_reason": "Intra-abdominal sepsis — secondary peritonitis, bed 528",
+        "conditions": [{"title": "Sepsis due to intra-abdominal infection", "icd": "A41.9"},
+                       {"title": "Secondary peritonitis", "icd": "K65.1"}],
+        "allergies": [],
+        "medications": [{"title": "Meropenem 1g IV q8h"},
+                        {"title": "Metronidazole 500mg IV q8h"},
+                        {"title": "Norepinephrine 0.05 mcg/kg/min IV"}],
+        "vitals": [
+            {"dt": "2026-04-30 04:15:00", "bps": 94, "bpd": 58,
+             "pulse": 114, "respiration": 26, "temperature": 38.7,
+             "oxygen_saturation": 93},
+        ],
+        "labs": [
+            {"loinc": "2518-9", "name": "Lactate", "collected_dt": "2026-04-30 03:00:00",
+             "value": "5.1", "units": "mmol/L", "range": "0.5-2.2", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "6690-2", "name": "WBC", "collected_dt": "2026-04-30 03:00:00",
+             "value": "24.6", "units": "K/uL", "range": "4.5-11.0", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-30 03:00:00",
+             "value": "2.1", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "high",
+             "status": "final"},
+        ],
+    },
 ]
 
 
@@ -900,8 +928,9 @@ def main() -> None:
     print("MySQL connected.\n")
 
     ok = 0
+    total = len(PATIENTS)
     for i, p_def in enumerate(PATIENTS, 1):
-        print(f"[{i:02d}/23] {p_def['fname']} {p_def['lname']} ...")
+        print(f"[{i:02d}/{total}] {p_def['fname']} {p_def['lname']} ...")
         try:
             load_patient(base_url, token, conn, p_def)
             ok += 1
@@ -910,8 +939,8 @@ def main() -> None:
         time.sleep(0.3)  # avoid rate-limiting
 
     conn.close()
-    print(f"\nDone: {ok}/23 patients loaded.")
-    if ok < 23:
+    print(f"\nDone: {ok}/{total} patients loaded.")
+    if ok < total:
         print("Re-run load.py to retry failed patients.", file=sys.stderr)
 
 

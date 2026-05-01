@@ -46,7 +46,7 @@
         "participant": [
           {
             "individual": {
-              "reference": "Practitioner/prov-chen"
+              "reference": "Practitioner/prov-other"
             }
           }
         ],
@@ -612,35 +612,6 @@
       "request": {
         "method": "PUT",
         "url": "Observation/pt-006-codestatus"
-      }
-    },
-    {
-      "fullUrl": "urn:uuid:efa8a53a-a360-5714-af6d-6b3bf8ff9e02",
-      "resource": {
-        "resourceType": "Flag",
-        "id": "pt-006-isolation",
-        "status": "inactive",
-        "category": [
-          {
-            "coding": [
-              {
-                "system": "http://terminology.hl7.org/CodeSystem/flag-category",
-                "code": "infection",
-                "display": "Infection Control Flag"
-              }
-            ]
-          }
-        ],
-        "code": {
-          "text": "No Isolation Required"
-        },
-        "subject": {
-          "reference": "Patient/pt-006"
-        }
-      },
-      "request": {
-        "method": "PUT",
-        "url": "Flag/pt-006-isolation"
       }
     }
   ]

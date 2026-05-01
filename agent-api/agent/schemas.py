@@ -64,8 +64,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "patient_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "minItems": 1,
-                    "description": "List of patient IDs on the active census.",
+                    "description": "List of patient IDs on the active census. Pass an empty array to auto-discover all patients from FHIR.",
                 },
             },
             "required": ["provider_id", "patient_ids"],

@@ -90,6 +90,7 @@ class FHIRClient:
 
     def __init__(self) -> None:
         self._base = settings.openemr_base_url.rstrip("/") + "/apis/default/fhir"
+        self._id_cache: dict[str, str] = {}
 
     async def get(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         token = await get_access_token()
@@ -123,15 +124,24 @@ class FHIRClient:
                 raise
 
     async def _resolve_patient_id(self, patient_id: str) -> str:
-        """Translate 'pt-NNN' synthetic IDs to FHIR UUIDs via identifier search.
+        """Translate synthetic or numeric PIDs to FHIR UUIDs via identifier search.
 
-        pt-001 → OpenEMR PID 1 → GET /Patient?identifier=1 → UUID.
-        Already-UUID IDs pass through unchanged.
+        pt-001 → PID 1, "1" (plain numeric) → PID 1 → GET /Patient?identifier=1 → UUID.
+        Already-UUID / FHIR-ID strings pass through unchanged.
         """
+        cached = self._id_cache.get(patient_id)
+        if cached is not None:
+            return cached
+
         m = re.match(r'^pt-(\d+)$', patient_id)
-        if not m:
-            return patient_id
-        pid_num = str(int(m.group(1)))  # "pt-001" → "1"
+        if m:
+            pid_num = str(int(m.group(1)))
+        elif patient_id.isdigit():
+            pid_num = patient_id
+        else:
+            self._id_cache[patient_id] = patient_id
+            return patient_id  # already a FHIR UUID
+
         result = await self.search("Patient", {"identifier": pid_num})
         entries = result.get("entry", [])
         if not entries:
@@ -141,7 +151,32 @@ class FHIRClient:
             "Resolved patient ID",
             extra={"pt_id": patient_id, "pid": pid_num, "fhir_id": fhir_id},
         )
+        self._id_cache[patient_id] = fhir_id
         return fhir_id
+
+    async def get_all_patient_ids(self, count: int = 200, provider_id: str | None = None) -> list[str]:
+        """Return FHIR UUIDs for patients (census auto-discovery).
+
+        If ``provider_id`` is supplied, only patients with an in-progress
+        Encounter participated in by that Practitioner are returned.
+        """
+        if provider_id:
+            result = await self.search("Encounter", {
+                "participant.individual": f"Practitioner/{provider_id}",
+                "status": "in-progress",
+                "_count": str(count),
+            })
+            seen: set[str] = set()
+            patient_ids: list[str] = []
+            for e in result.get("entry", []):
+                ref = e.get("resource", {}).get("subject", {}).get("reference", "")
+                pid = ref.split("/")[-1] if "/" in ref else ref
+                if pid and pid not in seen:
+                    seen.add(pid)
+                    patient_ids.append(pid)
+            return patient_ids
+        result = await self.search("Patient", {"_count": str(count)})
+        return [e["resource"]["id"] for e in result.get("entry", [])]
 
     async def get_patient(self, patient_id: str) -> dict[str, Any]:
         fhir_id = await self._resolve_patient_id(patient_id)
@@ -174,15 +209,17 @@ class FHIRClient:
 
         observation_params = [
             {"patient": fhir_id, "category": "vital-signs", "_count": "50"},
-            {"patient": fhir_id, "code": "8480-6", "_count": "10"},  # Systolic BP
-            {"patient": fhir_id, "code": "8462-4", "_count": "10"},  # Diastolic BP
+            {"patient": fhir_id, "code": "8480-6", "_count": "10"},   # Systolic BP
+            {"patient": fhir_id, "code": "8462-4", "_count": "10"},   # Diastolic BP
             {"patient": fhir_id, "category": "laboratory", "_count": "100"},
+            {"patient": fhir_id, "code": "81638-3", "_count": "5"},   # Code status — not in vital-signs or lab category
         ]
         other_resources = [
             ("MedicationRequest", {"patient": fhir_id, "status": "active"}),
             ("Condition", {"patient": fhir_id, "clinical-status": "active"}),
             ("AllergyIntolerance", {"patient": fhir_id}),
             ("Flag", {"patient": fhir_id}),
+            ("Encounter", {"patient": fhir_id, "status": "in-progress", "_count": "3"}),
         ]
 
         # Run all searches concurrently.

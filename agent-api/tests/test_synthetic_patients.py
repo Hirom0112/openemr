@@ -50,6 +50,22 @@ class TestMarcusWebb:
 
 
 @pytest.mark.hard_failure
+class TestAlejandroCruz:
+    """pt-024: Intra-abdominal sepsis — qSOFA=3, critical lactate → P1."""
+    def test_classified_as_sepsis(self):
+        result = rank(extract(_load_bundle("pt-024.json")))
+        assert result.level in (1, 2), f"Expected sepsis level (1-2), got {result.level}"
+
+    def test_critical_lactate_flagged(self):
+        criteria = extract(_load_bundle("pt-024.json"))
+        assert criteria.critical_lab is True
+
+    def test_qsofa_at_least_two(self):
+        criteria = extract(_load_bundle("pt-024.json"))
+        assert criteria.qsofa_score >= 2
+
+
+@pytest.mark.hard_failure
 class TestDeliaFontaine:
     """pt-002: Critical K+ 6.4 — critical lab, normal vitals."""
     def test_classified_as_critical_lab(self):
@@ -57,11 +73,16 @@ class TestDeliaFontaine:
         assert result.level == 3, f"Expected P3 (critical lab), got {result.level}"
 
 
+@pytest.mark.hard_failure
 class TestRaymondOkafor:
-    """pt-003: Abnormal labs, borderline SpO2=91 — no critical thresholds crossed."""
-    def test_classified_as_abnormal_lab(self):
+    """pt-003: COPD with SpO2=91 (59408-5) — pulse-ox below 92% critical threshold → P4."""
+    def test_classified_as_critical_vital(self):
         result = rank(extract(_load_bundle("pt-003.json")))
-        assert result.level == 7, f"Expected P7 (abnormal lab), got {result.level}"
+        assert result.level == 4, f"Expected P4 (critical vital — SpO2 91%), got {result.level}"
+
+    def test_spo2_below_critical_threshold(self):
+        criteria = extract(_load_bundle("pt-003.json"))
+        assert criteria.critical_vital is True, "SpO2=91 should flag critical_vital"
 
 
 class TestGloriaTran:

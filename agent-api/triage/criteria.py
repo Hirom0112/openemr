@@ -25,7 +25,8 @@ PAIN_HIGH_THRESHOLD = 8     # /10
 # LOINC codes
 LOINC_RR = "9279-1"
 LOINC_HR = "8867-4"
-LOINC_SPO2 = "2708-6"
+LOINC_SPO2 = "2708-6"       # arterial (ABG)
+LOINC_SPO2_PULSE = "59408-5"  # pulse oximetry — most common in OpenEMR
 LOINC_SBP = "8480-6"
 LOINC_GCS_TOTAL = "9269-2"
 LOINC_PAIN = "72514-3"
@@ -56,8 +57,10 @@ CRITICAL_LAB_LOINCS = {
 #   (3.0, None)   → value < 3.0 is critical low
 #   (50.0, 500.0) → value < 50 OR value > 500 is critical
 CRITICAL_LAB_VALUE_RANGES: dict[str, tuple[float | None, float | None]] = {
-    "2823-3":     (3.0, 6.0),     # K+:      < 3.0 or > 6.0 critical
+    "2823-3":     (3.0, 6.0),     # K+ (serum/plasma): < 3.0 or > 6.0 critical
+    "6298-4":     (3.0, 6.0),     # K+ (blood — OpenEMR common variant): same thresholds
     "1558-6":     (50.0, 500.0),  # Glucose: < 50  or > 500 critical
+    "2345-7":     (50.0, 500.0),  # Glucose (serum — OpenEMR common variant): same thresholds
     "718-7":      (7.0, None),    # Hgb:     < 7.0 critical low
     "777-3":      (50_000, None), # Plt:     < 50k critical low
     "6690-2":     (None, 30_000), # WBC:     > 30k critical high
@@ -258,7 +261,13 @@ def extract(bundle: dict[str, Any]) -> TriageCriteria:
     criteria.qsofa_score = score
 
     # ── Critical vitals ────────────────────────────────────────────────────────
-    spo2 = vitals.get(LOINC_SPO2)
+    # Accept both arterial SpO2 (2708-6) and pulse oximetry (59408-5 — most
+    # common in OpenEMR bedside charting).  Use whichever is present; prefer
+    # the lower value if both exist (more conservative for safety).
+    spo2_abg = vitals.get(LOINC_SPO2)
+    spo2_pulse = vitals.get(LOINC_SPO2_PULSE)
+    spo2_candidates = [v for v in (spo2_abg, spo2_pulse) if v is not None]
+    spo2 = min(spo2_candidates) if spo2_candidates else None
     hr = vitals.get(LOINC_HR)
     rr = vitals.get(LOINC_RR)
     map_val = vitals.get(LOINC_MAP)

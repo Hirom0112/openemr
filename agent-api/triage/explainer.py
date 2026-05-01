@@ -14,15 +14,18 @@ so the triage list is never blocked on an LLM response.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 from typing import Any
 
 import anthropic
+import redis.asyncio as aioredis
 from langfuse import Langfuse
 
 from agent.response_schemas import PRODUCE_TRIAGE_EXPLANATION
 from config import settings
-from triage.census import CensusEntry
+from triage.census import _CACHE_TTL, CensusEntry
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +107,58 @@ async def explain_one(
         return _fallback_explanation(entry)
 
 
+def _explanation_cache_key(entry: CensusEntry) -> str:
+    payload = json.dumps(
+        {
+            "pid": entry.patient_id,
+            "level": entry.triage_level,
+            "criteria": entry.matched_criteria,
+            "vitals": entry.vitals_summary,
+        },
+        sort_keys=True,
+    )
+    return "copilot:explanation:" + hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+async def _explain_with_cache(
+    entry: CensusEntry,
+    client: anthropic.AsyncAnthropic,
+    langfuse: Langfuse | None,
+    redis_client: aioredis.Redis | None,
+) -> str:
+    if redis_client is None:
+        return await explain_one(entry, client, langfuse)
+
+    cache_key = _explanation_cache_key(entry)
+    try:
+        cached = await redis_client.get(cache_key)
+        if cached:
+            text = cached.decode() if isinstance(cached, bytes) else cached
+            if text:
+                return text
+    except Exception as exc:
+        logger.warning(
+            "Explanation cache read failed",
+            extra={"patient_id": entry.patient_id, "error": str(exc)},
+        )
+
+    explanation = await explain_one(entry, client, langfuse)
+
+    try:
+        await redis_client.setex(cache_key, _CACHE_TTL, explanation)
+    except Exception as exc:
+        logger.warning(
+            "Explanation cache write failed",
+            extra={"patient_id": entry.patient_id, "error": str(exc)},
+        )
+
+    return explanation
+
+
 async def explain_census(
     entries: list[CensusEntry],
     langfuse: Langfuse | None = None,
+    redis_client: aioredis.Redis | None = None,
 ) -> list[dict[str, Any]]:
     """Annotate each census entry with a one-line explanation.
 
@@ -116,7 +168,7 @@ async def explain_census(
     anthropic_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     explanations = await asyncio.gather(
-        *[explain_one(e, anthropic_client, langfuse) for e in entries]
+        *[_explain_with_cache(e, anthropic_client, langfuse, redis_client) for e in entries]
     )
 
     return [
@@ -124,10 +176,13 @@ async def explain_census(
             "patient_id": e.patient_id,
             "name": e.name,
             "mrn": e.mrn,
+            "openemr_pid": e.openemr_pid,
             "triage_level": e.triage_level,
             "triage_label": e.triage_label,
             "explanation": explanation,
             "matched_criteria": e.matched_criteria,
+            "admit_date": e.admit_date,
+            "days_since_admit": e.days_since_admit,
         }
         for e, explanation in zip(entries, explanations)
     ]

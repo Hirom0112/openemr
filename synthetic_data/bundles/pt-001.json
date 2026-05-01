@@ -752,42 +752,6 @@
         "method": "PUT",
         "url": "Observation/pt-001-codestatus"
       }
-    },
-    {
-      "fullUrl": "urn:uuid:86e6f605-08e5-5c72-9bde-9914b7b40cfc",
-      "resource": {
-        "resourceType": "Flag",
-        "id": "pt-001-isolation",
-        "status": "active",
-        "category": [
-          {
-            "coding": [
-              {
-                "system": "http://terminology.hl7.org/CodeSystem/flag-category",
-                "code": "infection",
-                "display": "Infection Control Flag"
-              }
-            ]
-          }
-        ],
-        "code": {
-          "text": "Droplet Precautions",
-          "coding": [
-            {
-              "system": "http://snomed.info/sct",
-              "code": "409527004",
-              "display": "Droplet precautions"
-            }
-          ]
-        },
-        "subject": {
-          "reference": "Patient/pt-001"
-        }
-      },
-      "request": {
-        "method": "PUT",
-        "url": "Flag/pt-001-isolation"
-      }
     }
   ]
 }

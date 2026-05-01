@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generates 18 synthetic FHIR R4 patient bundles for the Clinical Co-Pilot pilot.
+Generates 24 synthetic FHIR R4 patient bundles for the Clinical Co-Pilot pilot.
 Fixed seed: 42. Output: synthetic_data/bundles/pt-NNN.json
 
 Scenarios covered:
@@ -351,7 +351,8 @@ def build_pt004() -> dict:
     vt = ts(-1.5)
     resources = [
         patient_resource(pid, "Tran", "Gloria", "1958-09-03", "MRN-10004", "female"),
-        encounter_resource(eid, pid, "514", admit_date(2), "Acute decompensated heart failure", "84114007"),
+        encounter_resource(eid, pid, "514", admit_date(2), "Acute decompensated heart failure", "84114007",
+                           provider_id=PROVIDER_OTHER),
         observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 156.0, "mmHg", vt),
         observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 94.0, "mmHg", vt),
         observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 96.0, "/min", vt),
@@ -394,7 +395,8 @@ def build_pt005() -> dict:
     vt = ts(-1.0)
     resources = [
         patient_resource(pid, "Kowalski", "Bernard", "1973-02-18", "MRN-10005", "male"),
-        encounter_resource(eid, pid, "503", admit_date(1), "Community-acquired pneumonia", "233604007"),
+        encounter_resource(eid, pid, "503", admit_date(1), "Community-acquired pneumonia", "233604007",
+                           provider_id=PROVIDER_OTHER),
         observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 122.0, "mmHg", vt),
         observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 76.0, "mmHg", vt),
         observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 90.0, "/min", vt),
@@ -430,7 +432,8 @@ def build_pt006() -> dict:
     vt = ts(-1.5)
     resources = [
         patient_resource(pid, "Nakamura", "Ingrid", "1965-07-29", "MRN-10006", "female"),
-        encounter_resource(eid, pid, "518", admit_date(3), "Suspected pulmonary embolism", "59282003", discharge_note=True),
+        encounter_resource(eid, pid, "518", admit_date(3), "Suspected pulmonary embolism", "59282003",
+                           provider_id=PROVIDER_OTHER, discharge_note=True),
         observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 118.0, "mmHg", vt),
         observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 72.0, "mmHg", vt),
         observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 102.0, "/min", vt),
@@ -547,12 +550,14 @@ STABLE_PATIENTS = [
         "Urinary tract infection", "68566005",
         [("372687004", "Trimethoprim-sulfamethoxazole 160/800mg PO BID"), ("1191", "Aspirin 81mg PO daily")],
         "nka", [("6690-2", "Leukocytes [#/volume] in Blood", 13.2, "10*3/uL", "H")],
+        PROVIDER_OTHER,
     ),
     (
         "010", "Patel", "Rajiv", "1948-03-24", "MRN-10010", "male", "506", 2,
         "Cellulitis left lower extremity", "128045006",
         [("7980", "Cephalexin 500mg PO QID"), ("29046", "Lisinopril 5mg PO daily")],
         "nka", [("6690-2", "Leukocytes [#/volume] in Blood", 14.8, "10*3/uL", "H")],
+        PROVIDER_OTHER,
     ),
     (
         "011", "Bergstrom", "Karl", "1971-11-02", "MRN-10011", "male", "508", 2,
@@ -560,6 +565,7 @@ STABLE_PATIENTS = [
         [("7646", "Pantoprazole 40mg IV q12h"), ("1049502", "Ondansetron 4mg IV q8h PRN")],
         "nka", [("2345-7", "Glucose [Mass/volume] in Serum or Plasma", 98.0, "mg/dL", None),
                 ("718-7", "Hemoglobin [Mass/volume] in Blood", 8.4, "g/dL", "L")],
+        PROVIDER_OTHER,
     ),
     (
         "012", "Johnson", "Miriam", "1939-05-15", "MRN-10012", "female", "510", 3,
@@ -581,6 +587,7 @@ STABLE_PATIENTS = [
         [("7646", "Pantoprazole 40mg IV daily"), ("1049502", "Ondansetron 4mg IV q6h PRN"),
          ("1049521", "Morphine 2mg IV q4h PRN")],
         "nka", [("1742-7", "Alanine aminotransferase [Enzymatic activity/volume] in Serum or Plasma", 88.0, "U/L", "H")],
+        PROVIDER_OTHER,
     ),
     (
         "015", "Williams", "Dorothy", "1944-07-04", "MRN-10015", "female", "515", 3,
@@ -588,6 +595,7 @@ STABLE_PATIENTS = [
         [("4603", "Furosemide 40mg PO daily"), ("29046", "Lisinopril 5mg PO daily"),
          ("41493", "Carvedilol 6.25mg PO BID")],
         "nka", [("42637-9", "Natriuretic peptide B [Units/volume] in Serum or Plasma", 560.0, "pg/mL", "H")],
+        PROVIDER_OTHER,
     ),
     (
         "016", "Huang", "Wei", "1983-10-20", "MRN-10016", "male", "516", 1,
@@ -601,19 +609,22 @@ STABLE_PATIENTS = [
         [("5691", "Lorazepam 2mg IV q1h PRN CIWA>8"), ("202991", "Thiamine 100mg IV daily"),
          ("4891", "Folate 1mg PO daily")],
         "nka", [("2345-7", "Glucose [Mass/volume] in Serum or Plasma", 112.0, "mg/dL", None)],
+        PROVIDER_OTHER,
     ),
 ]
 
 
 def build_stable(num: str, family: str, given: str, dob: str, mrn: str, gender: str,
                  bed: str, days_ago: int, dx_text: str, dx_snomed: str,
-                 meds: list, allergy_fn: str, labs: list) -> dict:
+                 meds: list, allergy_fn: str, labs: list,
+                 provider_id: str = PROVIDER_CHEN) -> dict:
     pid = f"pt-{num}"
     eid = f"enc-{num}"
     vt = ts(-1.0)
     resources = [
         patient_resource(pid, family, given, dob, mrn, gender),
-        encounter_resource(eid, pid, bed, admit_date(days_ago), dx_text, dx_snomed),
+        encounter_resource(eid, pid, bed, admit_date(days_ago), dx_text, dx_snomed,
+                           provider_id=provider_id),
         observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure",
                           random.uniform(108, 145), "mmHg", vt),
         observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure",
@@ -690,11 +701,298 @@ def build_pt018() -> dict:
 
 
 # ===========================================================================
+# Helpers for pt-019..024 (Flag + code-status observation)
+# ===========================================================================
+
+def code_status_obs(pid: str, eff_ts: str, value: str = "Full Code") -> dict:
+    return {
+        "resourceType": "Observation",
+        "id": f"{pid}-codestatus",
+        "status": "final",
+        "code": {"coding": [{"system": "http://loinc.org", "code": "81638-3", "display": "Code status"}]},
+        "subject": {"reference": f"Patient/{pid}"},
+        "effectiveDateTime": eff_ts,
+        "valueCodeableConcept": {"text": value},
+    }
+
+
+def flag_no_isolation(pid: str) -> dict:
+    return {
+        "resourceType": "Flag",
+        "id": f"{pid}-isolation",
+        "status": "inactive",
+        "category": [{"coding": [{
+            "system": "http://terminology.hl7.org/CodeSystem/flag-category",
+            "code": "infection",
+            "display": "Infection Control Flag",
+        }]}],
+        "code": {"text": "No Isolation Required"},
+        "subject": {"reference": f"Patient/{pid}"},
+    }
+
+
+def flag_airborne(pid: str) -> dict:
+    return {
+        "resourceType": "Flag",
+        "id": f"{pid}-isolation",
+        "status": "active",
+        "category": [{"coding": [{
+            "system": "http://terminology.hl7.org/CodeSystem/flag-category",
+            "code": "infection",
+            "display": "Infection Control Flag",
+        }]}],
+        "code": {
+            "text": "Airborne Precautions",
+            "coding": [{"system": "http://snomed.info/sct", "code": "409526008", "display": "Airborne precautions"}],
+        },
+        "subject": {"reference": f"Patient/{pid}"},
+    }
+
+
+# ===========================================================================
+# pt-019  Linda Okonkwo  Blank code status (no codestatus obs)  → P9
+# ===========================================================================
+def build_pt019() -> dict:
+    pid = "pt-019"
+    eid = "enc-019"
+    vt = ts(-1.0)  # 06:00
+    lab_t = ts(-3.0)  # 04:00
+    resources = [
+        patient_resource(pid, "Okonkwo", "Linda", "1966-08-30", "MRN-10019", "female"),
+        encounter_resource(eid, pid, "523", admit_date(1),
+                           "Observation after minor fall — no fracture identified", "312681000"),
+        observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 124.0, "mmHg", vt),
+        observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 76.0, "mmHg", vt),
+        observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 72.0, "/min", vt),
+        observation_vital(f"{pid}-rr",  pid, eid, "9279-1", "Respiratory rate", 15.0, "/min", vt),
+        observation_vital(f"{pid}-temp",pid, eid, "8310-5", "Body temperature", 37.0, "Cel", vt),
+        observation_vital(f"{pid}-spo2",pid, eid, "59408-5", "Oxygen saturation", 97.0, "%", vt),
+        observation_lab(f"{pid}-glucose", pid, eid, "2345-7", "Glucose [Mass/volume] in Serum or Plasma",
+                        98.0, "mg/dL", lab_t),
+        observation_lab(f"{pid}-creat", pid, eid, "2160-0", "Creatinine [Mass/volume] in Serum or Plasma",
+                        0.9, "mg/dL", lab_t),
+        no_known_allergy(f"{pid}-allergy", pid),
+        flag_no_isolation(pid),
+        # Code status Observation intentionally absent — this drives blank_code_status → P9.
+    ]
+    return bundle(resources)
+
+
+# ===========================================================================
+# pt-020  Robert Finch  Pre-procedure observation  → P10 routine
+# ===========================================================================
+def build_pt020() -> dict:
+    pid = "pt-020"
+    eid = "enc-020"
+    vt = ts(-1.0)  # 06:00
+    lab_t = ts(-2.0)  # 05:00
+    resources = [
+        patient_resource(pid, "Finch", "Robert", "1959-03-17", "MRN-10020", "male"),
+        encounter_resource(eid, pid, "524", admit_date(0),
+                           "Pre-procedure observation — elective colonoscopy prep", "73761001"),
+        observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 118.0, "mmHg", vt),
+        observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 74.0, "mmHg", vt),
+        observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 68.0, "/min", vt),
+        observation_vital(f"{pid}-rr",  pid, eid, "9279-1", "Respiratory rate", 14.0, "/min", vt),
+        observation_vital(f"{pid}-temp",pid, eid, "8310-5", "Body temperature", 36.8, "Cel", vt),
+        observation_vital(f"{pid}-spo2",pid, eid, "59408-5", "Oxygen saturation", 98.0, "%", vt),
+        observation_lab(f"{pid}-glucose", pid, eid, "2345-7", "Glucose [Mass/volume] in Serum or Plasma",
+                        94.0, "mg/dL", lab_t),
+        observation_lab(f"{pid}-creat", pid, eid, "2160-0", "Creatinine [Mass/volume] in Serum or Plasma",
+                        0.8, "mg/dL", lab_t),
+        no_known_allergy(f"{pid}-allergy", pid),
+        code_status_obs(pid, admit_date(0)),
+        flag_no_isolation(pid),
+    ]
+    return bundle(resources)
+
+
+# ===========================================================================
+# pt-021  Priya Anand  Suspected sepsis qSOFA=2 (SBP=96, RR=24)  → P2
+# ===========================================================================
+def build_pt021() -> dict:
+    pid = "pt-021"
+    eid = "enc-021"
+    vt = ts(-0.5)  # 06:30
+    lab_t = ts(-1.0)  # 06:00
+    resources = [
+        patient_resource(pid, "Anand", "Priya", "1975-04-12", "MRN-10021", "female"),
+        encounter_resource(eid, pid, "525", admit_date(0),
+                           "Suspected sepsis — source under investigation", "10001005"),
+        observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 96.0, "mmHg", vt),
+        observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 62.0, "mmHg", vt),
+        observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 108.0, "/min", vt),
+        observation_vital(f"{pid}-rr",  pid, eid, "9279-1", "Respiratory rate", 24.0, "/min", vt),
+        observation_vital(f"{pid}-temp",pid, eid, "8310-5", "Body temperature", 38.6, "Cel", vt),
+        observation_vital(f"{pid}-spo2",pid, eid, "59408-5", "Oxygen saturation", 94.0, "%", vt),
+        observation_lab(f"{pid}-wbc", pid, eid, "6690-2", "Leukocytes [#/volume] in Blood",
+                        14.2, "10*3/uL", lab_t, "H"),
+        observation_lab(f"{pid}-lactate", pid, eid, "2518-9", "Lactate [Moles/volume] in Blood",
+                        1.8, "mmol/L", lab_t),
+        condition_resource(f"{pid}-cond1", pid, eid, "10001005", "Septicemia"),
+        med_request(f"{pid}-med1", pid, eid, "7454", "Vancomycin 1g IV", lab_t),
+        med_request(f"{pid}-med2", pid, eid, "25789", "Piperacillin-tazobactam 3.375g IV", lab_t),
+        no_known_allergy(f"{pid}-allergy", pid),
+        code_status_obs(pid, admit_date(0)),
+        flag_airborne(pid),
+    ]
+    return bundle(resources)
+
+
+# ===========================================================================
+# pt-022  James Whitfield  Acute delirium GCS=14  → P5 (mental_status_alert)
+# ===========================================================================
+def build_pt022() -> dict:
+    pid = "pt-022"
+    eid = "enc-022"
+    vt = ts(-1.0)  # 06:00
+    lab_t = ts(-3.0)  # 04:00
+    resources = [
+        patient_resource(pid, "Whitfield", "James", "1942-10-05", "MRN-10022", "male"),
+        encounter_resource(eid, pid, "526", admit_date(1),
+                           "Acute delirium — hyperactive type", "409966000"),
+        observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 128.0, "mmHg", vt),
+        observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 74.0, "mmHg", vt),
+        observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 88.0, "/min", vt),
+        observation_vital(f"{pid}-rr",  pid, eid, "9279-1", "Respiratory rate", 17.0, "/min", vt),
+        observation_vital(f"{pid}-temp",pid, eid, "8310-5", "Body temperature", 37.3, "Cel", vt),
+        observation_vital(f"{pid}-spo2",pid, eid, "59408-5", "Oxygen saturation", 96.0, "%", vt),
+        # GCS=14 → triggers mental_status_alert and qSOFA +1.
+        {
+            "resourceType": "Observation",
+            "id": f"{pid}-gcs",
+            "status": "final",
+            "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                                       "code": "vital-signs"}]}],
+            "code": {"coding": [{"system": "http://loinc.org", "code": "9269-2",
+                                  "display": "Glasgow coma score total"}]},
+            "subject": {"reference": f"Patient/{pid}"},
+            "encounter": {"reference": f"Encounter/{eid}"},
+            "effectiveDateTime": vt,
+            "valueInteger": 14,
+            "interpretation": [{"coding": [{
+                "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation",
+                "code": "L",
+            }]}],
+        },
+        observation_lab(f"{pid}-bmp", pid, eid, "2823-3", "Potassium [Moles/volume] in Blood",
+                        4.0, "mmol/L", lab_t),
+        observation_lab(f"{pid}-creat", pid, eid, "2160-0", "Creatinine [Mass/volume] in Serum or Plasma",
+                        1.1, "mg/dL", lab_t),
+        condition_resource(f"{pid}-cond1", pid, eid, "409966000", "Delirium"),
+        med_request(f"{pid}-med1", pid, eid, "1049502", "Haloperidol 0.5mg IV PRN", ts(-2.0)),
+        no_known_allergy(f"{pid}-allergy", pid),
+        code_status_obs(pid, admit_date(1)),
+        flag_no_isolation(pid),
+    ]
+    return bundle(resources)
+
+
+# ===========================================================================
+# pt-023  Keisha Balogun  Sickle cell crisis pain=9  → P6 (severe pain)
+# ===========================================================================
+def build_pt023() -> dict:
+    pid = "pt-023"
+    eid = "enc-023"
+    vt = ts(-1.0)  # 06:00
+    lab_t = ts(-3.0)  # 04:00
+    resources = [
+        patient_resource(pid, "Balogun", "Keisha", "1988-07-19", "MRN-10023", "female"),
+        encounter_resource(eid, pid, "527", admit_date(1),
+                           "Sickle cell disease with acute vaso-occlusive crisis", "127040003"),
+        observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 118.0, "mmHg", vt),
+        observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 72.0, "mmHg", vt),
+        observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 98.0, "/min", vt),
+        observation_vital(f"{pid}-rr",  pid, eid, "9279-1", "Respiratory rate", 18.0, "/min", vt),
+        observation_vital(f"{pid}-temp",pid, eid, "8310-5", "Body temperature", 37.5, "Cel", vt),
+        observation_vital(f"{pid}-spo2",pid, eid, "59408-5", "Oxygen saturation", 96.0, "%", vt),
+        # Pain 9/10 → pain_score_high → P6
+        {
+            "resourceType": "Observation",
+            "id": f"{pid}-pain",
+            "status": "final",
+            "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                                       "code": "vital-signs"}]}],
+            "code": {"coding": [{"system": "http://loinc.org", "code": "72514-3",
+                                  "display": "Pain severity - 0-10 verbal numeric rating [Score] - Reported"}]},
+            "subject": {"reference": f"Patient/{pid}"},
+            "encounter": {"reference": f"Encounter/{eid}"},
+            "effectiveDateTime": vt,
+            "valueQuantity": {"value": 9.0, "unit": "{score}", "system": "http://unitsofmeasure.org"},
+        },
+        observation_lab(f"{pid}-hgb", pid, eid, "718-7", "Hemoglobin [Mass/volume] in Blood",
+                        8.2, "g/dL", lab_t),
+        observation_lab(f"{pid}-creat", pid, eid, "2160-0", "Creatinine [Mass/volume] in Serum or Plasma",
+                        0.8, "mg/dL", lab_t),
+        condition_resource(f"{pid}-cond1", pid, eid, "127040003", "Sickle cell crisis"),
+        med_request(f"{pid}-med1", pid, eid, "1049521", "Morphine 4mg IV q3h PRN pain", lab_t),
+        med_request(f"{pid}-med2", pid, eid, "1049502", "Ketorolac 15mg IV q6h", lab_t),
+        no_known_allergy(f"{pid}-allergy", pid),
+        code_status_obs(pid, admit_date(1)),
+        flag_no_isolation(pid),
+    ]
+    return bundle(resources)
+
+
+# ===========================================================================
+# pt-024  Alejandro Cruz  Intra-abdominal sepsis qSOFA=3 + critical lactate → P1
+# ===========================================================================
+def build_pt024() -> dict:
+    pid = "pt-024"
+    eid = "enc-024"
+    vt = ts(-1.5)
+    lab_t = ts(-2.0)
+    resources = [
+        patient_resource(pid, "Cruz", "Alejandro", "1971-05-20", "MRN-10024", "male"),
+        encounter_resource(eid, pid, "528", admit_date(1),
+                           "Intra-abdominal sepsis", "444814009"),
+        observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 94.0, "mmHg", vt),
+        observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 58.0, "mmHg", vt),
+        observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 114.0, "/min", vt),
+        observation_vital(f"{pid}-rr",  pid, eid, "9279-1", "Respiratory rate", 26.0, "/min", vt),
+        observation_vital(f"{pid}-temp",pid, eid, "8310-5", "Body temperature", 38.7, "Cel", vt),
+        observation_vital(f"{pid}-spo2",pid, eid, "59408-5", "Oxygen saturation", 93.0, "%", vt),
+        # GCS=13 → mental_status_alert and qSOFA +1.
+        {
+            "resourceType": "Observation",
+            "id": f"{pid}-gcs",
+            "status": "final",
+            "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                                       "code": "vital-signs"}]}],
+            "code": {"coding": [{"system": "http://loinc.org", "code": "9269-2",
+                                  "display": "Glasgow coma score total"}]},
+            "subject": {"reference": f"Patient/{pid}"},
+            "encounter": {"reference": f"Encounter/{eid}"},
+            "effectiveDateTime": vt,
+            "valueInteger": 13,
+            "interpretation": [{"coding": [{
+                "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation",
+                "code": "L",
+            }]}],
+        },
+        observation_lab(f"{pid}-lactate", pid, eid, "2518-9", "Lactate [Moles/volume] in Blood",
+                        5.1, "mmol/L", lab_t, "HH"),
+        observation_lab(f"{pid}-wbc", pid, eid, "6690-2", "Leukocytes [#/volume] in Blood",
+                        24.6, "10*3/uL", lab_t, "H"),
+        observation_lab(f"{pid}-creat", pid, eid, "2160-0", "Creatinine [Mass/volume] in Serum or Plasma",
+                        2.1, "mg/dL", lab_t, "H"),
+        condition_resource(f"{pid}-cond1", pid, eid, "444814009", "Intra-abdominal sepsis"),
+        condition_resource(f"{pid}-cond2", pid, eid, "74474003", "Secondary peritonitis"),
+        med_request(f"{pid}-med1", pid, eid, "7454", "Meropenem 1g IV q8h", ts(-3.0)),
+        med_request(f"{pid}-med2", pid, eid, "41493", "Metronidazole 500mg IV q8h", ts(-3.0)),
+        med_request(f"{pid}-med3", pid, eid, "1049521", "Norepinephrine 0.05 mcg/kg/min", ts(-1.0)),
+        no_known_allergy(f"{pid}-allergy", pid),
+        code_status_obs(pid, admit_date(1)),
+    ]
+    return bundle(resources)
+
+
+# ===========================================================================
 # Main
 # ===========================================================================
 
 def main() -> None:
-    print(f"Generating 18 FHIR R4 bundles (seed={SEED}) → {OUTPUT_DIR}")
+    print(f"Generating 24 FHIR R4 bundles (seed={SEED}) → {OUTPUT_DIR}")
 
     save("pt-001", build_pt001())  # S1 qSOFA >= 2
     save("pt-002", build_pt002())  # S2 critical unacknowledged K+
@@ -709,8 +1007,14 @@ def main() -> None:
         save(f"pt-{row[0]}", build_stable(*row))
 
     save("pt-018", build_pt018())  # S10 out-of-census patient
+    save("pt-019", build_pt019())  # P9 blank code status
+    save("pt-020", build_pt020())  # P10 routine
+    save("pt-021", build_pt021())  # P2 sepsis concern
+    save("pt-022", build_pt022())  # P5 altered mental status
+    save("pt-023", build_pt023())  # P6 severe pain
+    save("pt-024", build_pt024())  # P1 sepsis with critical lactate
 
-    print("Done. S9 (census > 16) satisfied by 18-patient total.")
+    print("Done. 24 patients (14 prov-chen + 10 prov-other).")
 
 
 if __name__ == "__main__":
