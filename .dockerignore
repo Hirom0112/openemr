@@ -1,10 +1,11 @@
-# Exclude bulk of OpenEMR source — Railway only needs the Dockerfile and our
-# custom module. Everything else is already in openemr/openemr:latest base image.
+# Whitelist only the directories the Dockerfile actually COPYs onto the
+# openemr/openemr:latest base image. Everything else (vendor/, public/,
+# tests/, sql/, .git/, node_modules/) is either provided by the base image
+# or irrelevant at runtime.
 *
 !Dockerfile
 !docker-entrypoint-wrapper.sh
+!src/
+!src/**
 !interface/
-!interface/modules/
-!interface/modules/custom_modules/
-!interface/modules/custom_modules/oe-module-clinical-copilot/
-!interface/modules/custom_modules/oe-module-clinical-copilot/**
+!interface/**
