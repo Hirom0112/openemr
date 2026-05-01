@@ -19,7 +19,6 @@ declare(strict_types=1);
 require_once __DIR__ . '/../../../globals.php';
 
 use OpenEMR\Common\Acl\AclMain;
-use OpenEMR\Common\Session\SessionWrapperFactory;
 
 if (!AclMain::aclCheckCore('patients', 'med')) {
     http_response_code(403);
@@ -28,7 +27,6 @@ if (!AclMain::aclCheckCore('patients', 'med')) {
 }
 
 $oemrSession  = $_SESSION['OpenEMR'] ?? [];
-$session      = SessionWrapperFactory::getInstance()->getActiveSession();
 $agentApiUrl  = getenv('COPILOT_AGENT_API_URL') ?: ($GLOBALS['copilot_agent_api_url'] ?? 'http://localhost:8400');
 $providerId   = (int) ($oemrSession['authUserID'] ?? 0);
 $providerName = (string) ($oemrSession['authUser'] ?? '');
@@ -79,8 +77,49 @@ $configJson = json_encode($config, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT 
     </style>
 </head>
 <body>
+    <span class="title" style="display:none;">Clinical Co-Pilot</span>
     <div id="copilot-root"></div>
     <script type="application/json" id="copilot-config"><?php echo $configJson; ?></script>
+    <script>
+    // Force the parent OpenEMR tab title to "Clinical Co-Pilot". The default
+    // Knockout binding sniffs the iframe document and falls back to "Unknown"
+    // when its heuristics miss; setting tabsList[i].title() directly bypasses
+    // that path entirely.
+    (function () {
+        function setTabTitle() {
+            try {
+                var topWin = window.parent;
+                if (!topWin || topWin === window || !topWin.app_view_model) { return; }
+                var tabs = topWin.app_view_model.application_data
+                    && topWin.app_view_model.application_data.tabs
+                    && topWin.app_view_model.application_data.tabs.tabsList;
+                if (typeof tabs !== 'function') { return; }
+                var list = tabs();
+                var hit = 0;
+                for (var i = 0; i < list.length; i++) {
+                    var t = list[i];
+                    var name = (t && typeof t.name === 'function') ? t.name() : null;
+                    var url  = (t && typeof t.url  === 'function') ? t.url()  : '';
+                    var matches = (name === 'cop')
+                        || (typeof url === 'string' && url.indexOf('oe-module-clinical-copilot') !== -1);
+                    if (matches && typeof t.title === 'function') {
+                        t.title('Clinical Co-Pilot');
+                        hit++;
+                    }
+                }
+                console.log('[Co-Pilot] setTabTitle ran, matched ' + hit + ' tab(s)');
+            } catch (e) {
+                console.warn('[Co-Pilot] setTabTitle error:', e);
+            }
+        }
+        // Run now and again after the parent's iframe-load handler fires,
+        // which would otherwise sniff the iframe and may overwrite the title.
+        setTabTitle();
+        setTimeout(setTabTitle, 0);
+        setTimeout(setTabTitle, 250);
+        setTimeout(setTabTitle, 1000);
+    })();
+    </script>
     <script src="public/copilot.js?v=<?php echo filemtime(__DIR__ . '/public/copilot.js'); ?>"></script>
 </body>
 </html>

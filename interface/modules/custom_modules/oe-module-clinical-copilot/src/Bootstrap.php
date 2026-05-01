@@ -29,12 +29,27 @@ use Symfony\Contracts\EventDispatcher\EventDispatcherInterface;
 
 class Bootstrap
 {
-    private const MODULE_URL = '/interface/modules/custom_modules/oe-module-clinical-copilot/index.php';
+    private const MODULE_PATH = '/interface/modules/custom_modules/oe-module-clinical-copilot/index.php';
     private const JSON_FLAGS = JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP;
 
     public function __construct(
         private readonly EventDispatcherInterface $eventDispatcher,
     ) {}
+
+    /**
+     * Module URL with a cache-buster derived from index.php's mtime.
+     *
+     * The Co-Pilot iframe is pushed onto the tab bar via JavaScript at runtime,
+     * so a browser hard-reload of the parent page does NOT bypass the iframe's
+     * subresource cache. Without a versioned URL, edits to index.php (e.g. the
+     * tab-title bootstrap script) can be served from cache indefinitely.
+     */
+    private function moduleUrl(): string
+    {
+        $indexFile = __DIR__ . '/../index.php';
+        $version   = @filemtime($indexFile) ?: time();
+        return self::MODULE_PATH . '?v=' . $version;
+    }
 
     public function subscribeToEvents(): void
     {
@@ -57,7 +72,7 @@ class Bootstrap
         $item->label       = xlt('Co-Pilot');
         $item->menu_id     = 'cop0';
         $item->target      = 'cop';
-        $item->url         = self::MODULE_URL;
+        $item->url         = $this->moduleUrl();
         $item->children    = [];
         $item->requirement = 0;
 
@@ -91,9 +106,10 @@ class Bootstrap
 
         $payloadJson     = json_encode($payload, self::JSON_FLAGS);
         $agentApiUrlJson = json_encode($agentApiUrl, self::JSON_FLAGS);
-        $moduleUrlJson   = json_encode(self::MODULE_URL, self::JSON_FLAGS);
+        $moduleUrlJson   = json_encode($this->moduleUrl(), self::JSON_FLAGS);
+        $modulePathJson  = json_encode(self::MODULE_PATH, self::JSON_FLAGS);
 
-        if ($payloadJson === false || $agentApiUrlJson === false || $moduleUrlJson === false) {
+        if ($payloadJson === false || $agentApiUrlJson === false || $moduleUrlJson === false || $modulePathJson === false) {
             return;
         }
 
@@ -104,6 +120,7 @@ class Bootstrap
         var agentApiUrl = {$agentApiUrlJson};
         var payload = {$payloadJson};
         var moduleUrl = {$moduleUrlJson};
+        var modulePath = {$modulePathJson};
 
         // Fix 1: warm agent caches in the background.
         try {
@@ -127,7 +144,8 @@ class Bootstrap
                 for (var i = 0; i < existing.length; i++) {
                     var t = existing[i];
                     var tUrl = (t && typeof t.url === 'function') ? t.url() : (t && t.url);
-                    if (tUrl && String(tUrl).indexOf('cop') !== -1 && String(tUrl).indexOf(moduleUrl) !== -1) {
+                    // Match by path so a bumped cache-buster does not produce a duplicate.
+                    if (tUrl && String(tUrl).indexOf(modulePath) !== -1) {
                         return true;
                     }
                 }
