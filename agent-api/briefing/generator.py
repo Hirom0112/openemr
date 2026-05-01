@@ -83,7 +83,13 @@ async def generate_briefing(
         return briefing
 
     except ValidationError as exc:
-        logger.error("Briefing tool_use output failed schema validation", extra={"patient_id": ctx.patient_id, "error": str(exc)})
+        # Log the validation message inline (extra= dict is dropped by the default formatter
+        # on this deployment) and dump the raw tool_use payload so we can see which fields
+        # the model returned in a non-conforming shape.
+        logger.error(
+            "Briefing tool_use output failed schema validation patient_id=%s errors=%s payload=%s",
+            ctx.patient_id, exc.errors(), tool_block.input if tool_block is not None else None,
+        )
         return _fallback_briefing(ctx)
     except Exception as exc:
         logger.error("Briefing generation failed", extra={"patient_id": ctx.patient_id, "error": str(exc)})
