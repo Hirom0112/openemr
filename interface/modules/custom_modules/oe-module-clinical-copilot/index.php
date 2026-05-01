@@ -63,7 +63,9 @@ $config = [
     'providerId'   => $providerId,
     'providerName' => $providerName,
     'sessionId'    => $sessionId,
-    'patientIds'   => array_values($patientIds),
+    // Cast to strings — the agent API's Pydantic schema validates patient_ids
+    // as list[str], and coerce_numbers_to_str doesn't reach nested list items.
+    'patientIds'   => array_map('strval', array_values($patientIds)),
 ];
 
 $configJson = json_encode($config, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_THROW_ON_ERROR);
