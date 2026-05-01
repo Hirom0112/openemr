@@ -27,7 +27,12 @@ class BriefingSection(BaseModel):
 class BriefingResponse(BaseModel):
     patient_id: str
     name: str
-    sections: list[BriefingSection]
+    # The LLM occasionally omits `sections` entirely when the only thing it has to
+    # report are alerts (e.g., a patient with no documented vitals or labs visible
+    # via FHIR). Default to [] rather than rejecting the response — the alerts list
+    # carries the information either way, and rejection currently surfaces as a
+    # blank briefing in the UI.
+    sections: list[BriefingSection] = Field(default_factory=list)
     alerts: list[str] = Field(
         default_factory=list,
         description="Hard alerts that must always be shown: critical labs, blank code status, stale values.",
