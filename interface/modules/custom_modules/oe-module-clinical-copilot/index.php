@@ -87,7 +87,9 @@ if (empty($patientIds) && $providerId > 0) {
 
 $config = [
     'agentApiUrl'  => $agentApiUrl,
-    'providerId'   => $providerId,
+    // Cast to string: deployed agent-api versions without coerce_numbers_to_str
+    // reject integer provider_id with 422 on /agent/prefetch and /agent/query.
+    'providerId'   => (string) $providerId,
     'providerName' => $providerName,
     'sessionId'    => $sessionId,
     // Cast to strings — the agent API's Pydantic schema validates patient_ids
