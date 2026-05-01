@@ -8,3 +8,15 @@ dockerfilePath = "Dockerfile"
 # Add "/meta/health/readyz" after confirming first boot completes successfully.
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
+
+# Synthetic-data seed
+# -------------------
+# The Clinical Co-Pilot census expects synthetic patients in the database.
+# Run scripts/seed-railway.sh manually once after the OpenEMR service is up:
+#
+#   railway run -s clinical-copilot-openemr -- ./scripts/seed-railway.sh
+#
+# The script is idempotent (probes for the Marcus Webb marker row) so re-runs
+# are safe. It is not wired as a Railway release/predeploy hook because such
+# hooks fire on every container restart, and the seed talks to the public
+# OpenEMR REST API which is not guaranteed to be ready at restart time.
