@@ -28,6 +28,19 @@ _token_cache: dict[str, Any] = {}
 _token_lock = asyncio.Lock()
 
 
+def _token_cache_key() -> str:
+    """Cache key includes client_id + scopes so different scope sets don't collide."""
+    return f"{settings.fhir_client_id}|{settings.fhir_scopes}"
+
+
+def invalidate_token_cache() -> None:
+    """Drop any cached token so the next call refetches."""
+    _token_cache.pop("token", None)
+    _token_cache.pop("expiry", None)
+    _token_cache.pop("key", None)
+    logger.info("FHIR token cache invalidated")
+
+
 async def _fetch_token() -> tuple[str, float]:
     """Obtain an access token via password grant with FHIR scopes."""
     token_url = settings.resolved_fhir_token_url
@@ -53,16 +66,19 @@ async def _fetch_token() -> tuple[str, float]:
 
     if response.status_code != 200:
         logger.error(
-            "FHIR token request failed",
-            extra={"status": response.status_code, "body": response.text[:300]},
+            "FHIR token request failed status=%s body=%s",
+            response.status_code,
+            response.text[:500],
         )
     response.raise_for_status()
     try:
         payload = response.json()
     except Exception as json_exc:
         logger.error(
-            "FHIR token response is not valid JSON",
-            extra={"status": response.status_code, "body": response.text[:300], "error": str(json_exc)},
+            "FHIR token response is not valid JSON status=%s body=%s error=%s",
+            response.status_code,
+            response.text[:500],
+            json_exc,
         )
         raise RuntimeError(f"FHIR token response is not valid JSON: {response.text[:200]}") from json_exc
 
@@ -70,18 +86,38 @@ async def _fetch_token() -> tuple[str, float]:
         raise RuntimeError(f"No access_token in FHIR token response: {payload}")
 
     expires_in = int(payload.get("expires_in", 300))
-    return payload["access_token"], time.monotonic() + expires_in - 30
+    expiry = time.monotonic() + max(expires_in - 30, 30)
+    logger.info("FHIR token acquired expires_in=%s s", expires_in)
+    return payload["access_token"], expiry
 
 
-async def get_access_token() -> str:
-    """Return a valid access token, refreshing if within 30 s of expiry."""
+async def get_access_token(force_refresh: bool = False) -> str:
+    """Return a valid access token. If force_refresh, fetch a new one.
+
+    Cache key combines client_id + scope so a scope change re-fetches.
+    """
     async with _token_lock:
+        cache_key = _token_cache_key()
         expiry = _token_cache.get("expiry", 0.0)
-        if time.monotonic() >= expiry:
-            logger.info("Fetching new FHIR access token")
+        cached_key = _token_cache.get("key")
+        token = _token_cache.get("token")
+        needs_refresh = (
+            force_refresh
+            or token is None
+            or cached_key != cache_key
+            or time.monotonic() >= expiry
+        )
+        if needs_refresh:
+            logger.info(
+                "Fetching new FHIR access token force_refresh=%s key_changed=%s expired=%s",
+                force_refresh,
+                cached_key != cache_key,
+                time.monotonic() >= expiry,
+            )
             token, new_expiry = await _fetch_token()
             _token_cache["token"] = token
             _token_cache["expiry"] = new_expiry
+            _token_cache["key"] = cache_key
         return _token_cache["token"]
 
 
@@ -93,8 +129,50 @@ class FHIRClient:
         self._id_cache: dict[str, str] = {}
 
     async def get(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
-        token = await get_access_token()
         url = f"{self._base}/{path.lstrip('/')}"
+        response = await self._request_once(url, params, force_refresh_token=False)
+
+        # Retry once on auth/bad-request: invalidate token and refetch.
+        # 400 is included because OpenEMR sometimes returns 400 when the
+        # presented bearer token is for a rotated keypair instead of 401.
+        if response.status_code in (400, 401):
+            logger.warning(
+                "FHIR GET %s returned status=%s body=%s — invalidating token and retrying once",
+                url,
+                response.status_code,
+                response.text[:500],
+            )
+            invalidate_token_cache()
+            response = await self._request_once(url, params, force_refresh_token=True)
+
+        if response.status_code != 200:
+            logger.error(
+                "FHIR GET failed method=GET url=%s params=%s status=%s body=%s",
+                url,
+                params,
+                response.status_code,
+                response.text[:500],
+            )
+        response.raise_for_status()
+        try:
+            return response.json()
+        except Exception as json_exc:
+            logger.error(
+                "FHIR GET response not JSON url=%s status=%s body=%s error=%s",
+                url,
+                response.status_code,
+                response.text[:500],
+                json_exc,
+            )
+            raise
+
+    async def _request_once(
+        self,
+        url: str,
+        params: dict[str, str] | None,
+        force_refresh_token: bool,
+    ) -> httpx.Response:
+        token = await get_access_token(force_refresh=force_refresh_token)
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get(
                 url,
@@ -104,24 +182,15 @@ class FHIRClient:
                     "Accept": "application/fhir+json",
                 },
             )
-            logger.info(
-                "FHIR GET response",
-                extra={"url": url, "status": response.status_code, "body_len": len(response.text), "body_preview": response.text[:200]},
-            )
-            if response.status_code != 200:
-                logger.error(
-                    "FHIR GET failed",
-                    extra={"url": url, "status": response.status_code, "body": response.text[:500]},
-                )
-            response.raise_for_status()
-            try:
-                return response.json()
-            except Exception as json_exc:
-                logger.error(
-                    "FHIR GET response not JSON",
-                    extra={"url": url, "status": response.status_code, "body": response.text[:500], "error": str(json_exc)},
-                )
-                raise
+        logger.info(
+            "FHIR GET url=%s params=%s status=%s body_len=%s preview=%s",
+            url,
+            params,
+            response.status_code,
+            len(response.text),
+            response.text[:200],
+        )
+        return response
 
     async def _resolve_patient_id(self, patient_id: str) -> str:
         """Translate synthetic or numeric PIDs to FHIR UUIDs via identifier search.
@@ -148,8 +217,10 @@ class FHIRClient:
             raise ValueError(f"No FHIR Patient found for identifier {pid_num} (from {patient_id})")
         fhir_id: str = entries[0]["resource"]["id"]
         logger.info(
-            "Resolved patient ID",
-            extra={"pt_id": patient_id, "pid": pid_num, "fhir_id": fhir_id},
+            "Resolved patient ID pt_id=%s pid=%s fhir_id=%s",
+            patient_id,
+            pid_num,
+            fhir_id,
         )
         self._id_cache[patient_id] = fhir_id
         return fhir_id
@@ -178,8 +249,9 @@ class FHIRClient:
             if patient_ids:
                 return patient_ids
             logger.info(
-                "Participant-based encounter search returned 0 results; falling back to all patients",
-                extra={"provider_id": provider_id},
+                "Participant-based encounter search returned 0 results; "
+                "falling back to all patients provider_id=%s",
+                provider_id,
             )
         result = await self.search("Patient", {"_count": str(count)})
         return [e["resource"]["id"] for e in result.get("entry", [])]
@@ -197,8 +269,11 @@ class FHIRClient:
             return await self.search(resource, params)
         except httpx.HTTPError as exc:
             logger.warning(
-                "FHIR fetch failed",
-                extra={"resource": resource, "params": params, "patient_id": patient_id, "error": str(exc)},
+                "FHIR fetch failed resource=%s params=%s patient_id=%s error=%s",
+                resource,
+                params,
+                patient_id,
+                exc,
             )
             return {}
 

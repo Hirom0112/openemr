@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # App
     log_level: str = "INFO"
 
+    # When set (truthy), exposes GET /diag/fhir for live FHIR connectivity probes.
+    # Disabled by default; enable on Railway via COPILOT_DIAG=1 for one-curl
+    # confirmation after a deploy.
+    copilot_diag: str = ""
+
     # Phase 13 cutover flag — set to False once all cutover gates pass and the
     # legacy endpoints have been stable for one full release cycle.
     legacy_endpoints_enabled: bool = True

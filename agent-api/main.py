@@ -50,7 +50,11 @@ from agent.tools import (
     get_triage_rationale,
     query_patient_records,
 )
-from auth.fhir_client import fhir_client
+from auth.fhir_client import (
+    fhir_client,
+    get_access_token,
+    invalidate_token_cache,
+)
 from briefing.schema import BriefingResponse
 from checkpointer.redis_saver import RedisSaver
 from checkpointer.sqlite_saver import SqliteSaver
@@ -165,8 +169,79 @@ async def get_patient(patient_id: str) -> dict:
     try:
         return await fhir_client.get_patient(patient_id)
     except Exception as exc:
-        logger.error("FHIR patient fetch failed", extra={"patient_id": patient_id, "error": str(exc)})
+        logger.error("FHIR patient fetch failed patient_id=%s error=%s", patient_id, exc)
         raise HTTPException(status_code=502, detail="FHIR upstream error") from exc
+
+
+# ── Diagnostic FHIR probe (gated by COPILOT_DIAG env) ────────────────────────
+
+@app.get("/diag/fhir")
+async def diag_fhir() -> dict:
+    """One-shot FHIR connectivity probe. Gated by COPILOT_DIAG env flag.
+
+    Forces a fresh token, performs GET /Patient?identifier=1, and returns
+    the resolved URL, status, body snippet, and token metadata. Never logs
+    or returns the bearer token itself.
+    """
+    if not settings.copilot_diag:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    base_url = settings.openemr_base_url.rstrip("/") + "/apis/default/fhir"
+    target_url = f"{base_url}/Patient"
+    params = {"identifier": "1"}
+
+    # Force a fresh token so a stale cached one cannot mask the symptom.
+    invalidate_token_cache()
+    try:
+        token = await get_access_token(force_refresh=True)
+    except Exception as exc:
+        return {
+            "stage": "token",
+            "ok": False,
+            "error": str(exc),
+            "token_url": settings.resolved_fhir_token_url,
+        }
+
+    import httpx as _httpx
+    async with _httpx.AsyncClient(timeout=30) as client:
+        try:
+            resp = await client.get(
+                target_url,
+                params=params,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/fhir+json",
+                },
+            )
+        except Exception as exc:
+            return {
+                "stage": "fhir_get",
+                "ok": False,
+                "url": target_url,
+                "params": params,
+                "error": str(exc),
+            }
+
+    body_preview = resp.text[:500]
+    parsed_total = None
+    try:
+        parsed = resp.json()
+        parsed_total = parsed.get("total")
+    except Exception:
+        pass
+
+    return {
+        "stage": "fhir_get",
+        "ok": resp.status_code == 200,
+        "url": str(resp.request.url),
+        "request_url_built": target_url,
+        "params": params,
+        "status": resp.status_code,
+        "body_preview": body_preview,
+        "total": parsed_total,
+        "token_len": len(token),
+        "token_url": settings.resolved_fhir_token_url,
+    }
 
 
 # ── UC-1 Triage Census ──────────────────────────────────────────────────────── LEGACY — retire after Phase 13 cutover
@@ -191,7 +266,7 @@ async def triage_census(body: CensusRequest) -> dict:
             TRIAGE_LEVEL_COUNTER.labels(level=str(entry.get("triage_level", "?"))).inc()
         return result
     except Exception as exc:
-        logger.error("Triage census failed", extra={"error": str(exc)})
+        logger.error("Triage census failed error=%s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Triage census failed") from exc
 
 
@@ -208,7 +283,7 @@ async def briefing(patient_id: str) -> BriefingResponse:
         BRIEFING_DURATION.observe(time.perf_counter() - _t0)
         return BriefingResponse.model_validate(tool_result["result"])
     except Exception as exc:
-        logger.error("Briefing failed", extra={"patient_id": patient_id, "error": str(exc)})
+        logger.error("Briefing failed patient_id=%s error=%s", patient_id, exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Briefing generation failed") from exc
 
 
@@ -316,7 +391,7 @@ async def agent_query(request: AgentQueryRequest) -> dict:
     try:
         return await dispatch(request.message, request.session_id, session_context)
     except Exception as exc:
-        logger.error("Dispatcher error", extra={"session_id": request.session_id, "error": str(exc)})
+        logger.error("Dispatcher error session_id=%s error=%s", request.session_id, exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Dispatcher error") from exc
 
 
