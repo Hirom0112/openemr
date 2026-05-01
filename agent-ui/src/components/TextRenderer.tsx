@@ -1,22 +1,14 @@
 import type { Citation } from '../types';
-import CitationLink from './CitationLink';
 
 interface TextRendererProps {
   narrative: string;
   citations: Citation[];
 }
 
-export default function TextRenderer({ narrative, citations }: TextRendererProps) {
+export default function TextRenderer({ narrative }: TextRendererProps) {
   return (
-    <div style={{ fontSize: 13, color: '#333', lineHeight: 1.5 }}>
-      <p style={{ margin: '0 0 6px' }}>{narrative}</p>
-      {citations.length > 0 && (
-        <div style={{ marginTop: 4 }}>
-          {citations.map((c, i) => (
-            <CitationLink key={`${c.resource_id}-${i}`} citation={c} />
-          ))}
-        </div>
-      )}
+    <div>
+      <p style={{ margin: 0, fontSize: 13, color: '#374151', lineHeight: 1.6 }}>{narrative}</p>
     </div>
   );
 }

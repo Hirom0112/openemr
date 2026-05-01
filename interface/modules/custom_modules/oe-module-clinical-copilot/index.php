@@ -1,13 +1,11 @@
 <?php
 
 /**
- * Clinical Co-Pilot — sidebar shell page.
+ * Clinical Co-Pilot — tab page.
  *
- * Authenticates the OpenEMR session, extracts provider context, and
- * returns an HTML page that loads the compiled React bundle.
- *
- * This file does no request handling, no proxying, and no state management.
- * Every rounding query travels directly from the React panel to agent-api.
+ * Loaded by OpenEMR in the content iframe when the user clicks the
+ * "Co-Pilot" navigation tab. Authenticates the session, builds config,
+ * and renders the React bundle mount point.
  *
  * @package   OpenEMR
  * @link      https://www.open-emr.org
@@ -18,31 +16,55 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../../../../globals.php';
+require_once __DIR__ . '/../../../globals.php';
 
 use OpenEMR\Common\Acl\AclMain;
-use OpenEMR\Common\Csrf\CsrfUtils;
+use OpenEMR\Common\Session\SessionWrapperFactory;
 
-// Require a valid OpenEMR session with at least patient-data read access.
 if (!AclMain::aclCheckCore('patients', 'med')) {
     http_response_code(403);
     echo 'Access denied.';
     exit;
 }
 
-// Prefer the environment variable (set in Railway / Docker) over the OpenEMR
-// globals table so Railway deployments need no database configuration step.
+$oemrSession  = $_SESSION['OpenEMR'] ?? [];
+$session      = SessionWrapperFactory::getInstance()->getActiveSession();
 $agentApiUrl  = getenv('COPILOT_AGENT_API_URL') ?: ($GLOBALS['copilot_agent_api_url'] ?? 'http://localhost:8400');
-$csrfToken    = CsrfUtils::collectCsrfToken();
-$providerId   = (string) ($_SESSION['authUserID'] ?? '');
-$providerName = (string) ($_SESSION['authUser'] ?? 'Provider');
-// Tie the rounding session to the OpenEMR PHP session so the agent checkpointer
-// and the browser share the same session key across page reloads.
+$providerId   = (int) ($oemrSession['authUserID'] ?? 0);
+$providerName = (string) ($oemrSession['authUser'] ?? '');
 $sessionId    = session_id() ?: uniqid('copilot-', true);
-// Patient IDs are pre-populated by the census workflow that launches this panel.
-// Empty array is safe — the React panel auto-dispatches a census query on mount
-// which loads the full list from the agent-api checkpointer.
-$patientIds   = $_SESSION['copilot_patient_ids'] ?? [];
+$patientIds   = $oemrSession['copilot_patient_ids'] ?? [];
+if (empty($patientIds) && !empty($_GET['pids'])) {
+    $patientIds = array_filter(array_map('intval', explode(',', $_GET['pids'])));
+}
+
+// Auto-populate from open encounters assigned to this provider in the last 7 days.
+// date_end IS NULL means the encounter has not been closed/discharged yet.
+// Falls back to this only when neither the session variable nor ?pids= is set.
+if (empty($patientIds) && $providerId > 0) {
+    $encounterResult = sqlStatement(
+        "SELECT DISTINCT pid
+           FROM form_encounter
+          WHERE provider_id = ?
+            AND (date_end IS NULL OR date_end = '0000-00-00 00:00:00')
+            AND date >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+          ORDER BY date ASC",
+        [$providerId]
+    );
+    while ($row = sqlFetchArray($encounterResult)) {
+        $patientIds[] = (int) $row['pid'];
+    }
+}
+
+$config = [
+    'agentApiUrl'  => $agentApiUrl,
+    'providerId'   => $providerId,
+    'providerName' => $providerName,
+    'sessionId'    => $sessionId,
+    'patientIds'   => array_values($patientIds),
+];
+
+$configJson = json_encode($config, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_THROW_ON_ERROR);
 
 ?>
 <!DOCTYPE html>
@@ -51,20 +73,14 @@ $patientIds   = $_SESSION['copilot_patient_ids'] ?? [];
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Clinical Co-Pilot</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; overflow: hidden; }
+    </style>
 </head>
 <body>
     <div id="copilot-root"></div>
-
-    <script>
-        window.__COPILOT_CONFIG__ = {
-            agentApiUrl:  <?php echo json_encode($agentApiUrl, JSON_THROW_ON_ERROR); ?>,
-            providerId:   <?php echo json_encode($providerId, JSON_THROW_ON_ERROR); ?>,
-            providerName: <?php echo json_encode($providerName, JSON_THROW_ON_ERROR); ?>,
-            csrfToken:    <?php echo json_encode($csrfToken, JSON_THROW_ON_ERROR); ?>,
-            sessionId:    <?php echo json_encode($sessionId, JSON_THROW_ON_ERROR); ?>,
-            patientIds:   <?php echo json_encode(array_values($patientIds), JSON_THROW_ON_ERROR); ?>
-        };
-    </script>
-    <script src="public/copilot.js"></script>
+    <script type="application/json" id="copilot-config"><?php echo $configJson; ?></script>
+    <script src="public/copilot.js?v=<?php echo filemtime(__DIR__ . '/public/copilot.js'); ?>"></script>
 </body>
 </html>

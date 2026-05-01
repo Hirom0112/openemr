@@ -60,6 +60,32 @@ export default function PatientCard({ patient, rank, selected, onExpand, onSelec
         <div style={{ fontSize: 12, color: '#444', marginTop: 2 }}>{patient.one_line}</div>
       </div>
       <button
+        onClick={(e) => {
+          e.stopPropagation();
+          window.open(
+            `${window.location.origin}/interface/patient_file/summary/demographics_full.php?set_pid=${patient.patient_id}`,
+            '_blank'
+          );
+        }}
+        title="View patient chart"
+        style={{
+          flexShrink: 0,
+          fontSize: 11,
+          fontWeight: 600,
+          padding: '3px 9px',
+          background: '#2c3e9e',
+          color: '#fff',
+          borderRadius: 4,
+          border: 'none',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          letterSpacing: 0.1,
+          fontFamily: 'inherit',
+        }}
+      >
+        View in Chart ↗
+      </button>
+      <button
         onClick={(e) => { e.stopPropagation(); onExpand(patient.patient_id); }}
         title="Show triage rationale"
         style={{

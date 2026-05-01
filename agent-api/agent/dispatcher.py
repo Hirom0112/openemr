@@ -243,9 +243,16 @@ async def dispatch(
     langfuse = session_context.get("langfuse")
     t_start = time.monotonic()
 
+    langfuse_trace = None
     dispatch_span = None
     if langfuse is not None:
-        dispatch_span = langfuse.span(
+        langfuse_trace = langfuse.trace(
+            name="dispatch",
+            session_id=session_id,
+            input={"message": message},
+            metadata={"provider_id": session_context.get("provider_id")},
+        )
+        dispatch_span = langfuse_trace.span(
             name="dispatch",
             input={"message": message, "session_id": session_id},
             metadata={"provider_id": session_context.get("provider_id")},
@@ -274,8 +281,8 @@ async def dispatch(
             turn_count += 1
 
             generation_event = None
-            if langfuse is not None:
-                generation_event = langfuse.generation(
+            if langfuse_trace is not None:
+                generation_event = langfuse_trace.generation(
                     name=f"llm_call_turn_{turn_count}",
                     model=_MODEL,
                     input=messages,
@@ -381,8 +388,8 @@ async def dispatch(
                         tool_result_content = json.dumps({"error": f"Unknown tool: {tool_name}"})
                     else:
                         tool_span = None
-                        if langfuse is not None:
-                            tool_span = langfuse.span(
+                        if langfuse_trace is not None:
+                            tool_span = langfuse_trace.span(
                                 name=f"tool_{tool_name}",
                                 input=tool_input,
                                 metadata={"tool_use_id": tool_use_id},

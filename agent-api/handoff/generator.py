@@ -130,13 +130,37 @@ async def _generate_one(
         )
 
 
+_CONCURRENCY = 4          # max parallel Anthropic calls
+_PATIENT_TIMEOUT = 25.0   # seconds per patient before returning error stub
+
+
 async def generate_handoffs(
     patient_ids: list[str],
     langfuse: Langfuse | None = None,
 ) -> list[HandoffSummary]:
     """Generate handoff summaries for all patients in parallel."""
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    summaries = await asyncio.gather(*[_generate_one(pid, client, langfuse) for pid in patient_ids])
+    sem = asyncio.Semaphore(_CONCURRENCY)
+
+    async def _bounded(pid: str) -> HandoffSummary:
+        async with sem:
+            try:
+                return await asyncio.wait_for(
+                    _generate_one(pid, client, langfuse),
+                    timeout=_PATIENT_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Handoff timed out", extra={"patient_id": pid})
+                return HandoffSummary(
+                    patient_id=pid, name="Unknown", mrn="", triage_level=10,
+                    illness_severity="Unknown",
+                    patient_summary="Handoff timed out — review chart directly.",
+                    action_list=[], situation_awareness="", contingency_plan="",
+                    generated_at=datetime.now(timezone.utc).isoformat(),
+                    error="timeout",
+                )
+
+    summaries = await asyncio.gather(*[_bounded(pid) for pid in patient_ids])
     result = list(summaries)
     result.sort(key=lambda s: s.triage_level)
     return result

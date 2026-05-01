@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     # Langfuse
     langfuse_secret_key: str = "secret"
     langfuse_public_key: str = "public"
-    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_host: str = "https://us.cloud.langfuse.com"
 
     # App
     log_level: str = "INFO"

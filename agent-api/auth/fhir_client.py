@@ -157,13 +157,14 @@ class FHIRClient:
     async def get_all_patient_ids(self, count: int = 200, provider_id: str | None = None) -> list[str]:
         """Return FHIR UUIDs for patients (census auto-discovery).
 
-        If ``provider_id`` is supplied, only patients with an in-progress
-        Encounter participated in by that Practitioner are returned.
+        If ``provider_id`` is supplied, attempts to filter by Encounter participant.
+        OpenEMR's FHIR implementation does not populate Encounter.participant, so
+        this falls back to all patients when the participant search returns nothing.
         """
         if provider_id:
             result = await self.search("Encounter", {
                 "participant.individual": f"Practitioner/{provider_id}",
-                "status": "in-progress",
+                "status": "finished",
                 "_count": str(count),
             })
             seen: set[str] = set()
@@ -174,7 +175,12 @@ class FHIRClient:
                 if pid and pid not in seen:
                     seen.add(pid)
                     patient_ids.append(pid)
-            return patient_ids
+            if patient_ids:
+                return patient_ids
+            logger.info(
+                "Participant-based encounter search returned 0 results; falling back to all patients",
+                extra={"provider_id": provider_id},
+            )
         result = await self.search("Patient", {"_count": str(count)})
         return [e["resource"]["id"] for e in result.get("entry", [])]
 
@@ -219,7 +225,7 @@ class FHIRClient:
             ("Condition", {"patient": fhir_id, "clinical-status": "active"}),
             ("AllergyIntolerance", {"patient": fhir_id}),
             ("Flag", {"patient": fhir_id}),
-            ("Encounter", {"patient": fhir_id, "status": "in-progress", "_count": "3"}),
+            ("Encounter", {"patient": fhir_id, "status": "finished", "_count": "3"}),
         ]
 
         # Run all searches concurrently.
