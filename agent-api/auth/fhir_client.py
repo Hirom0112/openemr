@@ -297,7 +297,11 @@ class FHIRClient:
         ]
         other_resources = [
             ("MedicationRequest", {"patient": fhir_id, "status": "active"}),
-            ("Condition", {"patient": fhir_id, "clinical-status": "active"}),
+            # Don't filter by clinical-status here: OpenEMR's FHIR search parameter
+            # for clinical-status returns 0 results even when the resource carries
+            # clinicalStatus.coding[0].code = "active". Fetch all conditions and
+            # let the criteria extractor decide which ones count.
+            ("Condition", {"patient": fhir_id}),
             ("AllergyIntolerance", {"patient": fhir_id}),
             ("Flag", {"patient": fhir_id}),
             ("Encounter", {"patient": fhir_id, "status": "finished", "_count": "3"}),

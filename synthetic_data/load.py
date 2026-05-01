@@ -337,7 +337,7 @@ def load_patient(base_url: str, token: str, conn,
 
         # Assign provider_id in form_encounter so index.php census filter works.
         # "other" patients get provider_id=0 (excluded from Chen's panel).
-        # Chen patients get her real user_id so they show on her 14-patient panel.
+        # Chen patients get her real user_id so they show on her 15-patient panel.
         target_provider_id = 0 if p_def.get("provider") == "other" else chen_user_id
         with conn.cursor() as cur:
             cur.execute(
@@ -800,11 +800,12 @@ PATIENTS: list[dict[str, Any]] = [
         ],
     },
 
-    # ── pt-019: Linda Okonkwo — minor fall, admitted overnight (today) — Observation after minor fall ──────────────
+    # ── pt-019: Linda Okonkwo — minor fall, code-status documented, no active dx (P10 Routine) ──────────────
     {
         "fname": "Linda", "lname": "Okonkwo", "dob": "1966-08-30", "sex": "Female",
-        "admit_date": "2026-04-30", "admit_reason": "Observation after minor fall — no fracture identified",
-        "conditions": [{"title": "Fall, unspecified", "icd": "W19.XXXA"}],
+        "admit_date": "2026-04-30", "admit_reason": "Observation after minor fall — no fracture, no active diagnosis",
+        # No active conditions — pure observation stay so the rules engine reaches level 10 (Routine).
+        "conditions": [],
         "allergies": [],
         "medications": [{"title": "Acetaminophen 650mg PO q6h PRN"}],
         "vitals": [
@@ -819,14 +820,19 @@ PATIENTS: list[dict[str, Any]] = [
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-28 20:00:00",
              "value": "0.9", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
              "status": "final"},
+            # Resuscitation status documented — clears the blank-code-status flag so this patient can land at P10.
+            {"loinc": "81638-3", "name": "Resuscitation status", "collected_dt": "2026-04-29 06:00:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
+             "status": "final"},
         ],
     },
 
-    # ── pt-020: Robert Finch — Pre-procedure observation (colonoscopy) ────
+    # ── pt-020: Robert Finch — Pre-procedure obs, no active dx, code status undocumented (P9) ────
     {
         "fname": "Robert", "lname": "Finch", "dob": "1959-03-17", "sex": "Male",
         "admit_date": "2026-04-29", "admit_reason": "Pre-procedure observation — elective colonoscopy prep",
-        "conditions": [{"title": "Encounter for screening colonoscopy", "icd": "Z12.11"}],
+        # No active conditions and no code-status observation — rules engine drops to level 9 (Blank Code Status).
+        "conditions": [],
         "allergies": [],
         "medications": [{"title": "Polyethylene glycol 3350 solution PO"}],
         "vitals": [
@@ -867,7 +873,7 @@ PATIENTS: list[dict[str, Any]] = [
         ],
     },
 
-    # ── pt-022: James Whitfield — Acute delirium ──────────────────────────
+    # ── pt-022: James Whitfield — Acute delirium with documented GCS<15 (P5 Mental Status Alert) ──────────────
     {
         "fname": "James", "lname": "Whitfield", "dob": "1942-10-05", "sex": "Male",
         "admit_date": "2026-04-28", "admit_reason": "Acute delirium — hyperactive type",
@@ -886,10 +892,15 @@ PATIENTS: list[dict[str, Any]] = [
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 03:00:00",
              "value": "1.1", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
              "status": "final"},
+            # GCS Total 12 — emitted via the lab path so it lands as a FHIR Observation with LOINC 9269-2.
+            # The triage extractor reads any observation by LOINC, so this trips mental_status_alert and lands the patient at P5.
+            {"loinc": "9269-2", "name": "Glasgow Coma Scale Total", "collected_dt": "2026-04-29 06:00:00",
+             "value": "12", "units": "{score}", "range": "13-15", "abnormal": "normal",
+             "status": "final"},
         ],
     },
 
-    # ── pt-023: Keisha Balogun — Sickle cell vaso-occlusive crisis ────────
+    # ── pt-023: Keisha Balogun — Sickle cell vaso-occlusive crisis with pain 9/10 (P6 Severe Pain) ────────
     {
         "fname": "Keisha", "lname": "Balogun", "dob": "1988-07-19", "sex": "Female",
         "admit_date": "2026-04-28", "admit_reason": "Sickle cell disease with acute vaso-occlusive crisis",
@@ -908,6 +919,11 @@ PATIENTS: list[dict[str, Any]] = [
              "status": "final"},
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 02:00:00",
              "value": "0.8", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
+             "status": "final"},
+            # Pain score 9/10 — emitted via the lab path. Triage extractor scans any observation by LOINC,
+            # so this trips pain_score_high and the patient lands at P6 (ahead of the P7 abnormal-lab tier).
+            {"loinc": "72514-3", "name": "Pain severity 0-10", "collected_dt": "2026-04-29 06:00:00",
+             "value": "9", "units": "{score}", "range": "0-3", "abnormal": "normal",
              "status": "final"},
         ],
     },
@@ -936,6 +952,30 @@ PATIENTS: list[dict[str, Any]] = [
              "status": "final"},
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-30 03:00:00",
              "value": "2.1", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "high",
+             "status": "final"},
+        ],
+    },
+
+    # ── pt-025: Marisol Vega — Stable hypertension follow-up (P8 Active Condition Stable) ──
+    # Existing P8 holders (Linda, Robert, James) moved to other tiers, so this patient
+    # carries the "active condition, vitals/labs unremarkable" tier on Chen's panel.
+    {
+        "fname": "Marisol", "lname": "Vega", "dob": "1964-02-09", "sex": "Female",
+        "admit_date": "2026-04-29", "admit_reason": "Stable essential hypertension — observation",
+        "conditions": [{"title": "Essential hypertension", "icd": "I10"}],
+        "allergies": [],
+        "medications": [{"title": "Amlodipine 5mg PO daily"}],
+        "vitals": [
+            {"dt": "2026-04-29 06:00:00", "bps": 134, "bpd": 82,
+             "pulse": 76, "respiration": 16, "temperature": 36.9,
+             "oxygen_saturation": 98},
+        ],
+        "labs": [
+            {"loinc": "2345-7", "name": "Glucose", "collected_dt": "2026-04-29 04:00:00",
+             "value": "92", "units": "mg/dL", "range": "70-100", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 04:00:00",
+             "value": "0.9", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
              "status": "final"},
         ],
     },
@@ -982,14 +1022,22 @@ def main() -> None:
 
     # Look up the integer user_id for the authenticated user (Sara Chen).
     # This is written into form_encounter.provider_id so index.php's census
-    # filter returns exactly her 14 patients and no others.
+    # filter returns her panel and no others.
+    # Provider lookup is distinct from the OAuth principal: the seeder may auth
+    # as admin (broad API privileges) while still attributing encounters to the
+    # clinician whose panel the demo expects (Sara Chen). PROVIDER_USER lets the
+    # caller override this; default to "sara" with a fallback to the auth user.
+    provider_username = os.environ.get("PROVIDER_USER", "sara")
     chen_user_id = 0
     with conn.cursor() as cur:
-        cur.execute("SELECT id FROM users WHERE username = %s LIMIT 1", (oe_user,))
+        cur.execute("SELECT id FROM users WHERE username = %s LIMIT 1", (provider_username,))
         row = cur.fetchone()
+        if not row and provider_username != oe_user:
+            cur.execute("SELECT id FROM users WHERE username = %s LIMIT 1", (oe_user,))
+            row = cur.fetchone()
         if row:
             chen_user_id = int(row[0])
-    print(f"Provider user_id for '{oe_user}': {chen_user_id}\n")
+    print(f"Provider user_id for '{provider_username}': {chen_user_id}\n")
 
     ok = 0
     total = len(PATIENTS)

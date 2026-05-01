@@ -1014,7 +1014,7 @@ def main() -> None:
     save("pt-023", build_pt023())  # P6 severe pain
     save("pt-024", build_pt024())  # P1 sepsis with critical lactate
 
-    print("Done. 24 patients (14 prov-chen + 10 prov-other).")
+    print("Done. 25 patients (15 prov-chen + 10 prov-other).")
 
 
 if __name__ == "__main__":
