@@ -293,7 +293,8 @@ def insert_lab(conn, pid: int, eid: int, ordered_dt: str, collected_dt: str,
 # ---------------------------------------------------------------------------
 
 def load_patient(base_url: str, token: str, conn,
-                 p_def: dict[str, Any]) -> None:
+                 p_def: dict[str, Any],
+                 chen_user_id: int = 0) -> None:
     """Load one patient and all their clinical data."""
     name = f"{p_def['fname']} {p_def['lname']}"
     try:
@@ -305,6 +306,17 @@ def load_patient(base_url: str, token: str, conn,
         reason = p_def.get("admit_reason", "Inpatient admission")
         eid, _ = create_encounter(base_url, token, puuid, admit_date, reason)
         print(f"  Encounter eid={eid}")
+
+        # Assign provider_id in form_encounter so index.php census filter works.
+        # "other" patients get provider_id=0 (excluded from Chen's panel).
+        # Chen patients get her real user_id so they show on her 14-patient panel.
+        target_provider_id = 0 if p_def.get("provider") == "other" else chen_user_id
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE form_encounter SET provider_id = %s WHERE encounter = %s",
+                (target_provider_id, eid),
+            )
+        conn.commit()
 
         # Allergies
         for alg in p_def.get("allergies", []):
@@ -432,6 +444,7 @@ PATIENTS: list[dict[str, Any]] = [
 
     # ── S4: Gloria Tran — Incomplete allergy section (WATCH) ──────────────
     {
+        "provider": "other",
         "fname": "Gloria", "lname": "Tran", "dob": "1958-04-30", "sex": "Female",
         "admit_date": "2026-04-27", "admit_reason": "CHF exacerbation",
         "conditions": [{"title": "Congestive heart failure", "icd": "I50.9"}],
@@ -456,6 +469,7 @@ PATIENTS: list[dict[str, Any]] = [
 
     # ── S5: Bernard Kowalski — Penicillin allergy + Amoxicillin (WATCH P5) ─
     {
+        "provider": "other",
         "fname": "Bernard", "lname": "Kowalski", "dob": "1962-09-18", "sex": "Male",
         "admit_date": "2026-04-28", "admit_reason": "Community-acquired pneumonia",
         "conditions": [{"title": "Community-acquired pneumonia", "icd": "J18.1"}],
@@ -477,6 +491,7 @@ PATIENTS: list[dict[str, Any]] = [
 
     # ── S6: Ingrid Nakamura — Discharge plan + pending CT (WATCH P6) ──────
     {
+        "provider": "other",
         "fname": "Ingrid", "lname": "Nakamura", "dob": "1971-02-14", "sex": "Female",
         "admit_date": "2026-04-26", "admit_reason": "PE workup — dyspnea",
         "conditions": [{"title": "Pulmonary embolism workup", "icd": "Z03.89"},
@@ -551,6 +566,7 @@ PATIENTS: list[dict[str, Any]] = [
 
     # ── pt-009: Stable — UTI ───────────────────────────────────────────────
     {
+        "provider": "other",
         "fname": "Patricia", "lname": "Nguyen", "dob": "1975-08-19", "sex": "Female",
         "admit_date": "2026-04-28", "admit_reason": "Uncomplicated UTI",
         "conditions": [{"title": "Urinary tract infection", "icd": "N39.0"}],
@@ -570,6 +586,7 @@ PATIENTS: list[dict[str, Any]] = [
 
     # ── pt-010: Stable — Cellulitis ───────────────────────────────────────
     {
+        "provider": "other",
         "fname": "Gerald", "lname": "Hoffman", "dob": "1980-01-25", "sex": "Male",
         "admit_date": "2026-04-28", "admit_reason": "Left leg cellulitis",
         "conditions": [{"title": "Cellulitis, left lower leg", "icd": "L03.116"}],
@@ -589,6 +606,7 @@ PATIENTS: list[dict[str, Any]] = [
 
     # ── pt-011: Stable — GI Bleed ─────────────────────────────────────────
     {
+        "provider": "other",
         "fname": "Rosemary", "lname": "Delgado", "dob": "1950-05-12", "sex": "Female",
         "admit_date": "2026-04-27", "admit_reason": "Upper GI bleed",
         "conditions": [{"title": "Acute upper GI hemorrhage", "icd": "K92.0"}],
@@ -652,6 +670,7 @@ PATIENTS: list[dict[str, Any]] = [
 
     # ── pt-014: Stable — Pancreatitis ─────────────────────────────────────
     {
+        "provider": "other",
         "fname": "Jerome", "lname": "Whitfield", "dob": "1969-07-16", "sex": "Male",
         "admit_date": "2026-04-28", "admit_reason": "Acute pancreatitis",
         "conditions": [{"title": "Acute pancreatitis", "icd": "K85.90"}],
@@ -672,6 +691,7 @@ PATIENTS: list[dict[str, Any]] = [
 
     # ── pt-015: Stable — CHF (compensated) ───────────────────────────────
     {
+        "provider": "other",
         "fname": "Lillian", "lname": "Archer", "dob": "1943-04-02", "sex": "Female",
         "admit_date": "2026-04-27", "admit_reason": "CHF — volume overload",
         "conditions": [{"title": "Congestive heart failure", "icd": "I50.32"}],
@@ -712,6 +732,7 @@ PATIENTS: list[dict[str, Any]] = [
 
     # ── pt-017: Stable — Atrial Fibrillation ─────────────────────────────
     {
+        "provider": "other",
         "fname": "Sandra", "lname": "Morrow", "dob": "1956-09-14", "sex": "Female",
         "admit_date": "2026-04-28", "admit_reason": "New-onset atrial fibrillation",
         "conditions": [{"title": "Atrial fibrillation, new onset", "icd": "I48.0"}],
@@ -732,6 +753,7 @@ PATIENTS: list[dict[str, Any]] = [
 
     # ── S10 / pt-018: Thomas Greer — Out-of-census (prov-other) ──────────
     {
+        "provider": "other",
         "fname": "Thomas", "lname": "Greer", "dob": "1983-05-22", "sex": "Male",
         "admit_date": "2026-04-29", "admit_reason": "Chest pain — rule out ACS",
         "conditions": [{"title": "Chest pain, unspecified", "icd": "R07.9"}],
@@ -927,12 +949,23 @@ def main() -> None:
     })
     print("MySQL connected.\n")
 
+    # Look up the integer user_id for the authenticated user (Sara Chen).
+    # This is written into form_encounter.provider_id so index.php's census
+    # filter returns exactly her 14 patients and no others.
+    chen_user_id = 0
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM users WHERE username = %s LIMIT 1", (oe_user,))
+        row = cur.fetchone()
+        if row:
+            chen_user_id = int(row[0])
+    print(f"Provider user_id for '{oe_user}': {chen_user_id}\n")
+
     ok = 0
     total = len(PATIENTS)
     for i, p_def in enumerate(PATIENTS, 1):
         print(f"[{i:02d}/{total}] {p_def['fname']} {p_def['lname']} ...")
         try:
-            load_patient(base_url, token, conn, p_def)
+            load_patient(base_url, token, conn, p_def, chen_user_id=chen_user_id)
             ok += 1
         except Exception as exc:
             print(f"  FAIL: {exc}", file=sys.stderr)
