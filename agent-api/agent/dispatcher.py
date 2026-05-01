@@ -443,6 +443,13 @@ async def dispatch(
 
                 messages.append({"role": "user", "content": tool_results})
 
+                # Handoff: all rendering is done by HandoffRenderer from structured data.
+                # Skip the narrative LLM turn — the tool result is too large for a useful
+                # summary and the renderer doesn't need it.
+                if response_type == "handoff" and final_data is not None:
+                    final_narrative = f"Handoff generated for {final_data.get('total', len(final_data.get('patients', [])))} patients."
+                    break
+
                 # Self-correction: if misroute detected and not yet corrected, inject hint
                 if misroute_detected and not correction_attempted:
                     correction_attempted = True
