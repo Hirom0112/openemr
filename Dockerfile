@@ -18,3 +18,12 @@ RUN mkdir -p /var/www/localhost/htdocs/openemr/sites/default && \
 # we layer our module on top so it is present on every container start.
 COPY interface/modules/custom_modules/oe-module-clinical-copilot/ \
      /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-copilot/
+
+# The OpenEMR entrypoint (run.sh) sets all files to 400 and dirs to 500 owned by
+# www. That is correct — but it runs every boot and overwrites whatever we set here.
+# We wrap the entrypoint: run.sh runs first, then we re-fix the module permissions
+# so PHP (running as www) can read the bootstrap file.
+COPY docker-entrypoint-wrapper.sh /docker-entrypoint-wrapper.sh
+RUN chmod +x /docker-entrypoint-wrapper.sh
+
+ENTRYPOINT ["/docker-entrypoint-wrapper.sh"]

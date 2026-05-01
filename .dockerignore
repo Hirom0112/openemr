@@ -2,4 +2,8 @@
 # custom module. Everything else is already in openemr/openemr:latest base image.
 *
 !Dockerfile
+!interface/
+!interface/modules/
+!interface/modules/custom_modules/
 !interface/modules/custom_modules/oe-module-clinical-copilot/
+!interface/modules/custom_modules/oe-module-clinical-copilot/**
