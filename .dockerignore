@@ -7,5 +7,9 @@
 !docker-entrypoint-wrapper.sh
 !src/
 !src/**
+!library/
+!library/**
 !interface/
 !interface/**
+!templates/
+!templates/**

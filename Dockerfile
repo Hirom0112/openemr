@@ -23,7 +23,9 @@ RUN mkdir -p /var/www/localhost/htdocs/openemr/sites/default && \
 # either built/installed by the base image or contain runtime config we are
 # already managing above (sqlconf.php).
 COPY src/        /var/www/localhost/htdocs/openemr/src/
+COPY library/    /var/www/localhost/htdocs/openemr/library/
 COPY interface/  /var/www/localhost/htdocs/openemr/interface/
+COPY templates/  /var/www/localhost/htdocs/openemr/templates/
 
 # Docker COPY creates files owned by root:root. The openemr/openemr base image
 # owns all files as apache:root, and its entrypoint only runs chmod (not chown).
@@ -32,4 +34,6 @@ COPY interface/  /var/www/localhost/htdocs/openemr/interface/
 # leaves them readable by Apache.
 RUN chown -R apache:root \
     /var/www/localhost/htdocs/openemr/src/ \
-    /var/www/localhost/htdocs/openemr/interface/
+    /var/www/localhost/htdocs/openemr/library/ \
+    /var/www/localhost/htdocs/openemr/interface/ \
+    /var/www/localhost/htdocs/openemr/templates/
