@@ -20,6 +20,7 @@ CRITICAL_SPO2_LOW = 92.0    # %
 CRITICAL_HR_HIGH = 120      # bpm
 CRITICAL_RR_HIGH = 24       # breaths/min
 CRITICAL_MAP_LOW = 65.0     # mmHg
+CRITICAL_SBP_LOW = 100      # mmHg — symptomatic hypotension threshold (matches qSOFA cutoff)
 PAIN_HIGH_THRESHOLD = 8     # /10
 
 # LOINC codes
@@ -271,11 +272,13 @@ def extract(bundle: dict[str, Any]) -> TriageCriteria:
     hr = vitals.get(LOINC_HR)
     rr = vitals.get(LOINC_RR)
     map_val = vitals.get(LOINC_MAP)
+    sbp = vitals.get(LOINC_SBP)
     if (
         (spo2 is not None and spo2 < CRITICAL_SPO2_LOW)
         or (hr is not None and hr > CRITICAL_HR_HIGH)
         or (rr is not None and rr > CRITICAL_RR_HIGH)
         or (map_val is not None and map_val < CRITICAL_MAP_LOW)
+        or (sbp is not None and sbp <= CRITICAL_SBP_LOW)
     ):
         criteria.critical_vital = True
 

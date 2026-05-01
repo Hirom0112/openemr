@@ -258,6 +258,9 @@ export default function CensusRenderer({ data, citations, onBrief, providerName 
                 padding: '6px 10px', borderRadius: 6,
                 background: AMB.bg, borderLeft: `3px solid ${AMB.border}`,
               }}>
+                <span style={{ fontSize: 11, fontWeight: 500, color: AMB.text, flexShrink: 0, minWidth: 22 }}>
+                  P{p.triage_level}
+                </span>
                 <span style={{ flex: 1, minWidth: 0 }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 13, fontWeight: 500, color: AMB.text }}>{p.name}</span>
