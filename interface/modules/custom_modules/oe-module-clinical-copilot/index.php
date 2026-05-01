@@ -31,7 +31,34 @@ if (!AclMain::aclCheckCore('patients', 'med')) {
 // after the HttpSessionFactory refactor. Read from both so the module works
 // against either layout.
 $oemrSession  = $_SESSION['OpenEMR'] ?? [];
-$agentApiUrl  = getenv('COPILOT_AGENT_API_URL') ?: ($GLOBALS['copilot_agent_api_url'] ?? 'http://localhost:8400');
+
+// Resolve the agent API URL. Order:
+//   1. COPILOT_AGENT_API_URL env var (production / Railway)
+//   2. $GLOBALS['copilot_agent_api_url'] override
+//   3. localhost default — only when the request itself looks local OR
+//      COPILOT_DEV_MODE=1 is set. In a deployed container, falling back
+//      to http://localhost:8400 silently breaks the panel because the
+//      browser then tries to hit the *user's* localhost. Prefer to fail
+//      loud with a visible banner so the misconfiguration is fixable.
+$envAgentApiUrl    = getenv('COPILOT_AGENT_API_URL');
+$globalAgentApiUrl = $GLOBALS['copilot_agent_api_url'] ?? null;
+$httpHost          = (string) ($_SERVER['HTTP_HOST'] ?? '');
+$isLocalRequest    = $httpHost === ''
+    || str_contains($httpHost, 'localhost')
+    || str_contains($httpHost, '127.0.0.1');
+$devMode           = getenv('COPILOT_DEV_MODE') === '1';
+$agentApiUrl       = '';
+$agentApiMisconfigured = false;
+if (is_string($envAgentApiUrl) && $envAgentApiUrl !== '') {
+    $agentApiUrl = $envAgentApiUrl;
+} elseif (is_string($globalAgentApiUrl) && $globalAgentApiUrl !== '') {
+    $agentApiUrl = $globalAgentApiUrl;
+} elseif ($isLocalRequest || $devMode) {
+    $agentApiUrl = 'http://localhost:8400';
+} else {
+    $agentApiMisconfigured = true;
+    error_log('[clinical-copilot] COPILOT_AGENT_API_URL is not set; agent panel will not load');
+}
 $providerId   = (int) ($oemrSession['authUserID'] ?? $_SESSION['authUserID'] ?? 0);
 $providerName = (string) ($oemrSession['authUser'] ?? $_SESSION['authUser'] ?? '');
 $sessionId    = session_id() ?: uniqid('copilot-', true);
@@ -84,6 +111,13 @@ $configJson = json_encode($config, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT 
 </head>
 <body>
     <span class="title" style="display:none;">Clinical Co-Pilot</span>
+<?php if ($agentApiMisconfigured) { ?>
+    <div role="alert" style="margin:1rem;padding:1rem;border:1px solid #b00020;background:#fff3f3;color:#7a0014;font-family:system-ui,sans-serif;border-radius:4px;">
+        <strong>Clinical Co-Pilot is not configured.</strong>
+        The <code>COPILOT_AGENT_API_URL</code> environment variable is missing on this deployment.
+        Ask an administrator to set it to the public URL of the agent-api service and restart the container.
+    </div>
+<?php } ?>
     <div id="copilot-root"></div>
     <script type="application/json" id="copilot-config"><?php echo $configJson; ?></script>
     <script>
