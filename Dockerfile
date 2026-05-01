@@ -19,11 +19,10 @@ RUN mkdir -p /var/www/localhost/htdocs/openemr/sites/default && \
 COPY interface/modules/custom_modules/oe-module-clinical-copilot/ \
      /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-copilot/
 
-# The OpenEMR entrypoint (run.sh) sets all files to 400 and dirs to 500 owned by
-# www. That is correct — but it runs every boot and overwrites whatever we set here.
-# We wrap the entrypoint: run.sh runs first, then we re-fix the module permissions
-# so PHP (running as www) can read the bootstrap file.
-COPY docker-entrypoint-wrapper.sh /docker-entrypoint-wrapper.sh
-RUN chmod +x /docker-entrypoint-wrapper.sh
-
-ENTRYPOINT ["/docker-entrypoint-wrapper.sh"]
+# Docker COPY creates files owned by root:root. The openemr/openemr base image
+# owns all files as apache:root, and its entrypoint only runs chmod (not chown).
+# So without this fix, module files end up root:root 400 — unreadable by Apache
+# (which runs as user 'apache'). Match the base image ownership so chmod 400
+# leaves them readable by Apache.
+RUN chown -R apache:root \
+    /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-clinical-copilot/
