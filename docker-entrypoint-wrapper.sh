@@ -5,7 +5,7 @@
 # which should work — but something in the Alpine/PHP setup prevents is_readable()
 # from returning true. Explicitly re-chmod to 644/755 after Apache starts.
 
-/run.sh &
+cd /var/www/localhost/htdocs/openemr && ./openemr.sh &
 OPENEMR_PID=$!
 
 # Wait until Apache is actually serving requests (up to 60s)
