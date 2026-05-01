@@ -37,7 +37,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+import random
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 try:
@@ -292,6 +293,32 @@ def insert_lab(conn, pid: int, eid: int, ordered_dt: str, collected_dt: str,
 # Patient loader functions — one per scenario
 # ---------------------------------------------------------------------------
 
+# The static admit dates in the PATIENTS list span 2026-04-26..2026-04-30.
+# That window is fine on the day the data was authored, but the Co-Pilot
+# census query filters `form_encounter.date >= NOW() - 7 DAY`, so once the
+# deploy clock advances past ANCHOR_DATE + 7 days these encounters silently
+# fall out of the panel. Map each static date to a rolling date relative to
+# today so the panel keeps working without re-seeding.
+_ANCHOR_DATE = date(2026, 4, 30)
+
+
+def rolling_admit_date(static_admit_date: str) -> str:
+    """Map a static YYYY-MM-DD admit date to today - (ANCHOR - static) days.
+
+    The most recent static date (ANCHOR) becomes today; earlier static dates
+    are spread out as the same number of days earlier than today. Preserves
+    the relative ordering and spacing of the original dataset.
+    """
+    try:
+        d = datetime.strptime(static_admit_date, "%Y-%m-%d").date()
+    except ValueError:
+        return static_admit_date
+    offset = (_ANCHOR_DATE - d).days
+    if offset < 0:
+        offset = 0
+    return (date.today() - timedelta(days=offset)).isoformat()
+
+
 def load_patient(base_url: str, token: str, conn,
                  p_def: dict[str, Any],
                  chen_user_id: int = 0) -> None:
@@ -301,8 +328,9 @@ def load_patient(base_url: str, token: str, conn,
         pid, puuid = create_patient(base_url, token, p_def)
         print(f"  Patient  pid={pid} puuid={puuid[:8]}...")
 
-        # Encounter
-        admit_date = p_def.get("admit_date", "2026-04-27")
+        # Encounter — use a rolling date so the encounter never ages out of
+        # the 7-day census window.
+        admit_date = rolling_admit_date(p_def.get("admit_date", "2026-04-27"))
         reason = p_def.get("admit_reason", "Inpatient admission")
         eid, _ = create_encounter(base_url, token, puuid, admit_date, reason)
         print(f"  Encounter eid={eid}")
@@ -919,6 +947,9 @@ PATIENTS: list[dict[str, Any]] = [
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # Fixed seed keeps any future randomized fields deterministic across runs.
+    random.seed(42)
+
     base_url = os.environ.get("BASE_URL", "").rstrip("/")
     client_id = os.environ.get("CLIENT_ID", "")
     client_secret = os.environ.get("CLIENT_SECRET", "")
