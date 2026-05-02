@@ -120,9 +120,11 @@ def _patient_pid(patient_resource: dict) -> str:
         # OpenEMR emits system="http://.../pid" for the integer PID identifier
         if "pid" in system and value.isdigit():
             return value
-        # Some OpenEMR versions use type code MR with a numeric value
+        # OpenEMR's FHIR exposes the integer pid via type code MR (medical
+        # record number) on some versions and PT (patient external id, v2-0203)
+        # on others. Both carry the numeric patient_data.pid as the value.
         code = ident.get("type", {}).get("coding", [{}])[0].get("code", "")
-        if code == "MR" and value.isdigit():
+        if code in {"MR", "PT"} and value.isdigit():
             return value
     return ""
 
