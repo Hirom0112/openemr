@@ -484,7 +484,8 @@ def build_pt007() -> dict:
     vt = ts(-1.0)
     resources = [
         patient_resource(pid, "Simmons", "Darnell", "1980-04-11", "MRN-10007", "male"),
-        encounter_resource(eid, pid, "522", admit_date(2), "Hypertensive urgency with AKI", "38341003"),
+        encounter_resource(eid, pid, "522", admit_date(2), "Hypertensive urgency with AKI", "38341003",
+                           provider_id=PROVIDER_OTHER),
         observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 192.0, "mmHg", vt),
         observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 114.0, "mmHg", vt),
         observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 82.0, "/min", vt),
@@ -584,7 +585,7 @@ STABLE_PATIENTS = [
     ),
     (
         "012", "Johnson", "Miriam", "1939-05-15", "MRN-10012", "female", "510", 3,
-        "Ischemic stroke — left MCA territory", "422504002",
+        "Essential hypertension — chronic management", "38341003",
         [("1191", "Aspirin 325mg PO daily"), ("41493", "Atorvastatin 40mg PO daily"), ("29046", "Lisinopril 10mg PO daily")],
         "nka", [("2160-0", "Creatinine [Mass/volume] in Serum or Plasma", 1.0, "mg/dL", None)],
     ),
@@ -595,6 +596,7 @@ STABLE_PATIENTS = [
          ("202991", "Sodium chloride 0.9% IV 125 mL/hr")],
         "nka", [("2345-7", "Glucose [Mass/volume] in Serum or Plasma", 420.0, "mg/dL", "HH"),
                 ("6298-4", "Potassium [Moles/volume] in Blood", 3.3, "mmol/L", "L")],
+        PROVIDER_OTHER,
     ),
     (
         "014", "Osei", "Abena", "1962-01-28", "MRN-10014", "female", "513", 2,
@@ -617,6 +619,7 @@ STABLE_PATIENTS = [
         "Post-operative day 1 — laparoscopic cholecystectomy", "174431009",
         [("1049521", "Ketorolac 15mg IV q6h"), ("1049502", "Ondansetron 4mg IV q8h PRN")],
         "nka", [("6690-2", "Leukocytes [#/volume] in Blood", 10.4, "10*3/uL", None)],
+        PROVIDER_OTHER,
     ),
     (
         "017", "Murphy", "Sean", "1957-03-13", "MRN-10017", "male", "517", 2,
@@ -688,9 +691,9 @@ def build_pt018() -> dict:
     vt = ts(-1.5)
     resources = [
         patient_resource(pid, "Greer", "Thomas", "1950-06-01", "MRN-10018", "male"),
-        # S10: provider is prov-other — NOT prov-chen — no CareTeam link to Dr. Chen
+        # Reassigned to prov-chen so Sara's panel covers P5 (circulatory).
         encounter_resource(eid, pid, "520", admit_date(1), "Atrial fibrillation with RVR", "195080001",
-                           provider_id=PROVIDER_OTHER),
+                           provider_id=PROVIDER_CHEN),
         observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 128.0, "mmHg", vt),
         observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 80.0, "mmHg", vt),
         observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 136.0, "/min", vt),
@@ -699,8 +702,8 @@ def build_pt018() -> dict:
         observation_vital(f"{pid}-spo2",pid, eid, "59408-5", "Oxygen saturation", 96.0, "%", vt),
         observation_lab(f"{pid}-tsh", pid, eid, "3016-3", "Thyrotropin [Units/volume] in Serum or Plasma", 0.8, "mIU/L", ts(-3.0)),
         condition_resource(f"{pid}-cond1", pid, eid, "195080001", "Atrial fibrillation"),
-        med_request(f"{pid}-med1", pid, eid, "3407", "Metoprolol succinate 25mg PO daily", admit_date(1), PROVIDER_OTHER),
-        med_request(f"{pid}-med2", pid, eid, "1037045", "Apixaban 5mg PO BID", admit_date(1), PROVIDER_OTHER),
+        med_request(f"{pid}-med1", pid, eid, "3407", "Metoprolol succinate 25mg PO daily", admit_date(1), PROVIDER_CHEN),
+        med_request(f"{pid}-med2", pid, eid, "1037045", "Apixaban 5mg PO BID", admit_date(1), PROVIDER_CHEN),
         no_known_allergy(f"{pid}-allergy", pid),
         {
             "resourceType": "Observation",
@@ -804,7 +807,8 @@ def build_pt020() -> dict:
     resources = [
         patient_resource(pid, "Finch", "Robert", "1959-03-17", "MRN-10020", "male"),
         encounter_resource(eid, pid, "524", admit_date(0),
-                           "Pre-procedure observation — elective colonoscopy prep", "73761001"),
+                           "Pre-procedure observation — elective colonoscopy prep", "73761001",
+                           provider_id=PROVIDER_OTHER),
         observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 118.0, "mmHg", vt),
         observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 74.0, "mmHg", vt),
         observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 68.0, "/min", vt),
@@ -914,7 +918,8 @@ def build_pt023() -> dict:
     resources = [
         patient_resource(pid, "Balogun", "Keisha", "1988-07-19", "MRN-10023", "female"),
         encounter_resource(eid, pid, "527", admit_date(1),
-                           "Sickle cell disease with acute vaso-occlusive crisis", "127040003"),
+                           "Sickle cell disease with acute vaso-occlusive crisis", "127040003",
+                           provider_id=PROVIDER_OTHER),
         observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 118.0, "mmHg", vt),
         observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 72.0, "mmHg", vt),
         observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 98.0, "/min", vt),
@@ -960,7 +965,8 @@ def build_pt024() -> dict:
     resources = [
         patient_resource(pid, "Cruz", "Alejandro", "1971-05-20", "MRN-10024", "male"),
         encounter_resource(eid, pid, "528", admit_date(1),
-                           "Intra-abdominal sepsis", "444814009"),
+                           "Intra-abdominal sepsis", "444814009",
+                           provider_id=PROVIDER_OTHER),
         observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 94.0, "mmHg", vt),
         observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 58.0, "mmHg", vt),
         observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 114.0, "/min", vt),
@@ -1003,11 +1009,61 @@ def build_pt024() -> dict:
 
 
 # ===========================================================================
+# pt-025  Maya Lindgren  Severe pain (8/10) with chronic HTN  → P7
+# ===========================================================================
+# Demonstrates rule precedence: this patient has an active chronic condition
+# (essential hypertension, code in chronic_conditions.yaml) that would match
+# the tightened P9 rule on its own, but P7 (Severe Pain) fires first because
+# pain_score_high is set and P7 sits above P9 in the ladder.
+def build_pt025() -> dict:
+    pid = "pt-025"
+    eid = "enc-025"
+    vt = ts(-1.0)
+    lab_t = ts(-3.0)
+    resources = [
+        patient_resource(pid, "Lindgren", "Maya", "1972-02-09", "MRN-10025", "female"),
+        encounter_resource(eid, pid, "529", admit_date(1),
+                           "Acute musculoskeletal back pain with chronic hypertension", "279039007",
+                           provider_id=PROVIDER_CHEN),
+        observation_vital(f"{pid}-sbp", pid, eid, "8480-6", "Systolic blood pressure", 134.0, "mmHg", vt),
+        observation_vital(f"{pid}-dbp", pid, eid, "8462-4", "Diastolic blood pressure", 82.0, "mmHg", vt),
+        observation_vital(f"{pid}-hr",  pid, eid, "8867-4", "Heart rate", 92.0, "/min", vt),
+        observation_vital(f"{pid}-rr",  pid, eid, "9279-1", "Respiratory rate", 18.0, "/min", vt),
+        observation_vital(f"{pid}-temp",pid, eid, "8310-5", "Body temperature", 37.0, "Cel", vt),
+        observation_vital(f"{pid}-spo2",pid, eid, "59408-5", "Oxygen saturation", 98.0, "%", vt),
+        {
+            "resourceType": "Observation",
+            "id": f"{pid}-pain",
+            "status": "final",
+            "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category",
+                                       "code": "vital-signs"}]}],
+            "code": {"coding": [{"system": "http://loinc.org", "code": "72514-3",
+                                  "display": "Pain severity - 0-10 verbal numeric rating [Score] - Reported"}]},
+            "subject": {"reference": f"Patient/{pid}"},
+            "encounter": {"reference": f"Encounter/{eid}"},
+            "effectiveDateTime": vt,
+            "valueQuantity": {"value": 8.0, "unit": "{score}", "system": "http://unitsofmeasure.org"},
+        },
+        observation_lab(f"{pid}-glucose", pid, eid, "2345-7", "Glucose [Mass/volume] in Serum or Plasma",
+                        96.0, "mg/dL", lab_t),
+        observation_lab(f"{pid}-creat", pid, eid, "2160-0", "Creatinine [Mass/volume] in Serum or Plasma",
+                        0.9, "mg/dL", lab_t),
+        condition_resource(f"{pid}-cond1", pid, eid, "38341003", "Essential hypertension"),
+        med_request(f"{pid}-med1", pid, eid, "29046", "Lisinopril 10mg PO daily", admit_date(1)),
+        med_request(f"{pid}-med2", pid, eid, "1049502", "Ketorolac 15mg IV q6h PRN pain", lab_t),
+        no_known_allergy(f"{pid}-allergy", pid),
+        code_status_obs(pid, admit_date(1)),
+        flag_no_isolation(pid),
+    ]
+    return bundle(resources)
+
+
+# ===========================================================================
 # Main
 # ===========================================================================
 
 def main() -> None:
-    print(f"Generating 24 FHIR R4 bundles (seed={SEED}) → {OUTPUT_DIR}")
+    print(f"Generating 25 FHIR R4 bundles (seed={SEED}) → {OUTPUT_DIR}")
 
     save("pt-001", build_pt001())  # S1 qSOFA >= 2
     save("pt-002", build_pt002())  # S2 critical unacknowledged K+
@@ -1028,8 +1084,9 @@ def main() -> None:
     save("pt-022", build_pt022())  # P5 altered mental status
     save("pt-023", build_pt023())  # P6 severe pain
     save("pt-024", build_pt024())  # P1 sepsis with critical lactate
+    save("pt-025", build_pt025())  # P7 severe pain (Sara's panel)
 
-    print("Done. 25 patients (15 prov-chen + 10 prov-other).")
+    print("Done. 25 patients (10 prov-chen + 15 prov-other).")
 
 
 if __name__ == "__main__":
