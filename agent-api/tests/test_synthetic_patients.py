@@ -135,7 +135,12 @@ class TestKarlBergstrom:
 
 
 class TestMiriamJohnson:
-    """pt-012: No abnormal labs, active conditions — stable."""
+    """pt-012: Essential hypertension (chronic) — stable.
+
+    Demonstrates the tightened P9 logic: active_condition fires only when at
+    least one Condition matches the curated chronic-disease list
+    (chronic_conditions.yaml). Hypertension SNOMED 38341003 is on that list.
+    """
     def test_classified_as_stable(self):
         result = rank(extract(_load_bundle("pt-012.json")))
         assert result.level == 9, f"Expected P9 (active condition, stable), got {result.level}"
@@ -162,17 +167,21 @@ class TestDorothyWilliams:
 
 
 class TestWeiHuang:
-    """pt-016: No abnormal labs, active conditions — stable."""
-    def test_classified_as_stable(self):
+    """pt-016: Post-op cholecystectomy — acute, not chronic.
+
+    Under the tightened P9 rule, post-op recovery does not match the chronic
+    disease list, so this patient now falls through to P11 (Routine).
+    """
+    def test_classified_as_routine(self):
         result = rank(extract(_load_bundle("pt-016.json")))
-        assert result.level == 9
+        assert result.level == 11
 
 
 class TestSeanMurphy:
-    """pt-017: No abnormal labs, active conditions — stable."""
-    def test_classified_as_stable(self):
+    """pt-017: Alcohol withdrawal — acute, not chronic → P11 under tightened P9."""
+    def test_classified_as_routine(self):
         result = rank(extract(_load_bundle("pt-017.json")))
-        assert result.level == 9
+        assert result.level == 11
 
 
 @pytest.mark.hard_failure
@@ -248,6 +257,30 @@ class TestRobertFinch:
         ])
 
 
+@pytest.mark.hard_failure
+class TestMayaLindgren:
+    """pt-025: Severe pain (8/10) with chronic hypertension → P7.
+
+    Demonstrates rule precedence: Maya has an active chronic condition
+    (essential hypertension, SNOMED 38341003) that would match the tightened
+    P9 rule on its own, but P7 (Severe Pain) sits above P9 in the ladder so
+    fires first.
+    """
+    def test_classified_as_severe_pain(self):
+        result = rank(extract(_load_bundle("pt-025.json")))
+        assert result.level == 7, f"Expected P7 (severe pain), got {result.level}"
+
+    def test_pain_score_high_flag_set(self):
+        criteria = extract(_load_bundle("pt-025.json"))
+        assert criteria.pain_score_high is True
+
+    def test_chronic_active_condition_matched(self):
+        criteria = extract(_load_bundle("pt-025.json"))
+        assert criteria.active_condition is True, (
+            "Hypertension is in the chronic condition list — active_condition should fire"
+        )
+
+
 # ── Eval corpus coverage ──────────────────────────────────────────────────────
 
 @pytest.mark.hard_failure
@@ -280,10 +313,44 @@ class TestEvalCorpusCoverage:
             if not fname.endswith(".json"):
                 continue
             covered.add(rank(extract(_load_bundle(fname))).level)
-        # The corpus does not include a circulatory-only patient (P5 under
-        # the new ladder); pt-018 was the previous critical-vital exemplar
-        # and now lands at P5, but P5 may be absent if its timestamps stale.
-        # Still require the ladder backbone: 1, 3, 4, 6, 7, 8, 9, 10, 11.
-        required = {1, 3, 4, 6, 7, 8, 9, 10, 11}
+        # Full ladder coverage: every priority level 1..11 must have at least
+        # one exemplar in the corpus. P7 is now covered by pt-025 (Maya
+        # Lindgren — severe pain) which closed the previous gap.
+        required = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
         missing = required - covered
         assert not missing, f"Required priority levels not covered: {sorted(missing)} (covered: {sorted(covered)})"
+
+
+def _provider_id_of(bundle_data: dict) -> str | None:
+    for entry in bundle_data.get("entry", []):
+        resource = entry.get("resource", {})
+        if resource.get("resourceType") == "Encounter":
+            for participant in resource.get("participant", []):
+                ref = participant.get("individual", {}).get("reference", "")
+                if ref.startswith("Practitioner/"):
+                    return ref.removeprefix("Practitioner/")
+    return None
+
+
+@pytest.mark.hard_failure
+def test_sara_chen_panel_has_one_per_priority_level():
+    """Sara Chen's panel (prov-chen) is exactly 10 patients, one per P1..P10.
+
+    Filtering all patient bundles by encounter participant == prov-chen must
+    return ten patients whose triage levels cover {1..10} as a set.
+    """
+    panel: list[tuple[str, int]] = []
+    for fname in sorted(os.listdir(_BUNDLE_DIR)):
+        if not fname.endswith(".json"):
+            continue
+        raw = json.loads((_BUNDLE_DIR / fname).read_text())
+        if _provider_id_of(raw) != "prov-chen":
+            continue
+        level = rank(extract(_load_bundle(fname))).level
+        panel.append((fname, level))
+
+    assert len(panel) == 10, f"Sara Chen's panel must be exactly 10 patients, got {len(panel)}: {panel}"
+    levels = {level for _, level in panel}
+    assert levels == set(range(1, 11)), (
+        f"Sara's panel must cover P1..P10 exactly once each. Got levels {sorted(levels)} from {panel}"
+    )

@@ -65,8 +65,8 @@
             "coding": [
               {
                 "system": "http://snomed.info/sct",
-                "code": "422504002",
-                "display": "Ischemic stroke \u2014 left MCA territory"
+                "code": "38341003",
+                "display": "Essential hypertension \u2014 chronic management"
               }
             ]
           }
@@ -108,7 +108,7 @@
         "encounter": {
           "reference": "Encounter/enc-012"
         },
-        "effectiveDateTime": "2026-05-02T03:34:07Z",
+        "effectiveDateTime": "2026-05-02T17:10:40Z",
         "performer": [
           {
             "reference": "Practitioner/prov-chen"
@@ -156,7 +156,7 @@
         "encounter": {
           "reference": "Encounter/enc-012"
         },
-        "effectiveDateTime": "2026-05-02T03:34:07Z",
+        "effectiveDateTime": "2026-05-02T17:10:40Z",
         "performer": [
           {
             "reference": "Practitioner/prov-chen"
@@ -204,7 +204,7 @@
         "encounter": {
           "reference": "Encounter/enc-012"
         },
-        "effectiveDateTime": "2026-05-02T03:34:07Z",
+        "effectiveDateTime": "2026-05-02T17:10:40Z",
         "performer": [
           {
             "reference": "Practitioner/prov-chen"
@@ -252,7 +252,7 @@
         "encounter": {
           "reference": "Encounter/enc-012"
         },
-        "effectiveDateTime": "2026-05-02T03:34:07Z",
+        "effectiveDateTime": "2026-05-02T17:10:40Z",
         "performer": [
           {
             "reference": "Practitioner/prov-chen"
@@ -300,7 +300,7 @@
         "encounter": {
           "reference": "Encounter/enc-012"
         },
-        "effectiveDateTime": "2026-05-02T03:34:07Z",
+        "effectiveDateTime": "2026-05-02T17:10:40Z",
         "performer": [
           {
             "reference": "Practitioner/prov-chen"
@@ -348,7 +348,7 @@
         "encounter": {
           "reference": "Encounter/enc-012"
         },
-        "effectiveDateTime": "2026-05-02T03:34:07Z",
+        "effectiveDateTime": "2026-05-02T17:10:40Z",
         "performer": [
           {
             "reference": "Practitioner/prov-chen"
@@ -382,8 +382,8 @@
           "coding": [
             {
               "system": "http://snomed.info/sct",
-              "code": "422504002",
-              "display": "Ischemic stroke \u2014 left MCA territory"
+              "code": "38341003",
+              "display": "Essential hypertension \u2014 chronic management"
             }
           ]
         },
@@ -557,7 +557,7 @@
         "encounter": {
           "reference": "Encounter/enc-012"
         },
-        "effectiveDateTime": "2026-05-02T01:34:07Z",
+        "effectiveDateTime": "2026-05-02T15:10:40Z",
         "performer": [
           {
             "reference": "Practitioner/prov-lab"
