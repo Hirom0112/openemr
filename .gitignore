@@ -31,6 +31,13 @@ ccdaservice/node_modules
 # testing
 .phpunit.result.cache
 
+# python build artifacts
+__pycache__/
+*.py[cod]
+
+# claude code worktrees / scratch
+.claude/
+
 # dev tool local overrides
 phpcs.xml
 phpstan.neon
