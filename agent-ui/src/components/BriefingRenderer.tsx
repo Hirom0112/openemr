@@ -1,11 +1,8 @@
 import type { BriefingSection, BriefingResponseSection, Citation } from '../types';
 import DisclaimerIcon from './DisclaimerIcon';
-
-const RED = { bg: '#FCEBEB', border: '#E24B4A', text: '#7F1D1D', secondary: '#991B1B' };
-const AMB = { bg: '#FAEEDA', border: '#EF9F27', text: '#78350F', secondary: '#92400E' };
-const NEU = { bg: '#F8F9FA', border: '#E5E7EB', text: '#374151', secondary: '#6B7280' };
-
-type ColorToken = typeof NEU;
+import { RED, AMB, NEU, MUTED, cardStyle } from '../styles/tokens';
+import type { ColorToken } from '../styles/tokens';
+import { SectionHeading, ClaimRow, Pill, DisclaimerFooter } from './primitives';
 
 const SECTION_META: Record<string, { label: string; color: ColorToken }> = {
   diagnosis:   { label: 'Active problems',    color: NEU },
@@ -20,40 +17,6 @@ interface BriefingRendererProps {
   data: BriefingSection;
   narrative: string;
   citations: Citation[];
-}
-
-function SectionLabel({ label, color }: { label: string; color: ColorToken }) {
-  return (
-    <div style={{
-      fontSize: 11, fontWeight: 500, textTransform: 'uppercase',
-      letterSpacing: '0.06em', color: color.text, marginBottom: 6, marginTop: 14,
-    }}>
-      {label}
-    </div>
-  );
-}
-
-function ClaimRow({ text, color }: { text: string; color: ColorToken }) {
-  return (
-    <div style={{
-      background: color.bg, borderLeft: `3px solid ${color.border}`,
-      borderRadius: 6, padding: '6px 10px', marginBottom: 3,
-      fontSize: 13, color: color.text, lineHeight: 1.5,
-    }}>
-      {text}
-    </div>
-  );
-}
-
-function VitalPill({ text, color }: { text: string; color: ColorToken }) {
-  return (
-    <span style={{
-      background: color.bg, color: color.text, border: `1px solid ${color.border}`,
-      borderRadius: 999, padding: '3px 10px', fontSize: 12, fontWeight: 500,
-    }}>
-      {text}
-    </span>
-  );
 }
 
 function renderSection(sec: BriefingResponseSection) {
@@ -71,13 +34,13 @@ function renderSection(sec: BriefingResponseSection) {
 
   return (
     <div key={sec.section}>
-      <SectionLabel label={label} color={color} />
+      <SectionHeading color={color}>{label}</SectionHeading>
       {isVitals ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {items.map((text, i) => <VitalPill key={i} text={text} color={color} />)}
+          {items.map((text, i) => <Pill key={i} color={color} label={text} />)}
         </div>
       ) : (
-        items.map((text, i) => <ClaimRow key={i} text={text} color={color} />)
+        items.map((text, i) => <ClaimRow key={i} color={color}>{text}</ClaimRow>)
       )}
     </div>
   );
@@ -85,7 +48,7 @@ function renderSection(sec: BriefingResponseSection) {
 
 export default function BriefingRenderer({ data, narrative, citations }: BriefingRendererProps) {
   if (!data?.sections) {
-    return <p style={{ margin: 0, fontSize: 13, color: '#374151', lineHeight: 1.6 }}>{narrative}</p>;
+    return <p style={{ margin: 0, fontSize: 13, color: NEU.text, lineHeight: 1.6 }}>{narrative}</p>;
   }
 
   return (
@@ -96,7 +59,7 @@ export default function BriefingRenderer({ data, narrative, citations }: Briefin
           {data.name}
         </div>
         {data.generated_at && (
-          <div style={{ fontSize: 11, color: '#9CA3AF' }}>
+          <div style={{ fontSize: 11, color: MUTED }}>
             {new Date(data.generated_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
           </div>
         )}
@@ -104,14 +67,17 @@ export default function BriefingRenderer({ data, narrative, citations }: Briefin
 
       {/* Hard alerts — always shown first */}
       {data.alerts?.length > 0 && (
-        <div style={{
-          background: RED.bg, border: `1px solid ${RED.border}`,
-          borderRadius: 8, padding: '10px 12px', marginBottom: 10,
-        }}>
-          <div style={{
-            fontSize: 11, fontWeight: 500, textTransform: 'uppercase',
-            letterSpacing: '0.06em', color: RED.text, marginBottom: 6,
-          }}>
+        <div style={{ ...cardStyle(RED), marginBottom: 10 }}>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 500,
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              color: RED.text,
+              marginBottom: 6,
+            }}
+          >
             Alerts
           </div>
           {data.alerts.map((a, i) => (
@@ -125,9 +91,9 @@ export default function BriefingRenderer({ data, narrative, citations }: Briefin
       {/* Sections in order returned by backend */}
       {data.sections.map((sec) => renderSection(sec))}
 
-      <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end' }}>
+      <DisclaimerFooter>
         <DisclaimerIcon citations={citations} date={data.generated_at} />
-      </div>
+      </DisclaimerFooter>
     </div>
   );
 }

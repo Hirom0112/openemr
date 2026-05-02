@@ -1,7 +1,7 @@
 import type { Citation, QueryAnswerData } from '../types';
 import DisclaimerIcon from './DisclaimerIcon';
-import { NEU } from '../styles/tokens';
-import { Header, Pill, SectionHeading } from './primitives';
+import { NEU, cardStyle } from '../styles/tokens';
+import { Header, Pill, SectionHeading, DisclaimerFooter } from './primitives';
 
 interface QueryAnswerRendererProps {
   data: QueryAnswerData;
@@ -21,10 +21,12 @@ export default function QueryAnswerRenderer({ data, narrative, citations }: Quer
       <div>
         <Header title="Query answer" subtitle={data.searched} pill={windowPill} />
         <SectionHeading color={NEU}>No results found</SectionHeading>
-        <p style={{ margin: 0, fontSize: 13, color: '#374151', lineHeight: 1.6 }}>{text}</p>
-        <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end' }}>
-          <DisclaimerIcon citations={citations} />
+        <div style={cardStyle(NEU)}>
+          <p style={{ margin: 0, fontSize: 13, color: NEU.text, lineHeight: 1.6 }}>{text}</p>
         </div>
+        <DisclaimerFooter>
+          <DisclaimerIcon citations={citations} />
+        </DisclaimerFooter>
       </div>
     );
   }
@@ -32,10 +34,12 @@ export default function QueryAnswerRenderer({ data, narrative, citations }: Quer
   return (
     <div>
       <Header title="Query answer" subtitle={data.searched} pill={windowPill} />
-      <p style={{ margin: 0, fontSize: 13, color: '#374151', lineHeight: 1.6 }}>{text}</p>
-      <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end' }}>
-        <DisclaimerIcon citations={citations} />
+      <div style={cardStyle(NEU)}>
+        <p style={{ margin: 0, fontSize: 13, color: NEU.text, lineHeight: 1.6 }}>{text}</p>
       </div>
+      <DisclaimerFooter>
+        <DisclaimerIcon citations={citations} />
+      </DisclaimerFooter>
     </div>
   );
 }

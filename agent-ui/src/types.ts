@@ -66,6 +66,7 @@ export interface PatientSummary {
   bed: string;
   priority: string;   // "P1" … "P10"
   one_line: string;
+  openemr_pid?: string;
 }
 
 /** Census payload as returned by the backend get_census_summary tool */

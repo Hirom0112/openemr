@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Citation } from '../types';
 import { buildCitationUrl } from '../utils/citations';
-import { NEU, MUTED, secondaryButtonStyle } from '../styles/tokens';
+import { NEU, MUTED, cardStyle, secondaryButtonStyle } from '../styles/tokens';
 
 function openInChart(url: string): void {
   window.parent.postMessage({ type: 'copilot:openChart', url }, window.location.origin);
@@ -80,12 +80,11 @@ export default function CitationsPanel({ citations, patientOrder }: CitationsPan
               <div
                 key={`${c.resource_id}-${i}`}
                 style={{
+                  ...cardStyle(NEU),
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
                   padding: '6px 10px',
-                  background: NEU.bg,
-                  border: `1px solid ${NEU.border}`,
                   borderRadius: 6,
                   fontSize: 12,
                 }}

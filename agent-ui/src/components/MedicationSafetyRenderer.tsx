@@ -1,7 +1,7 @@
 import type { Citation, MedicationSafetyData } from '../types';
 import DisclaimerIcon from './DisclaimerIcon';
-import { RED, AMB, NEU } from '../styles/tokens';
-import { Header, SectionHeading, ClaimRow } from './primitives';
+import { RED, AMB, NEU, cardStyle } from '../styles/tokens';
+import { Header, SectionHeading, ClaimRow, DisclaimerFooter } from './primitives';
 
 interface MedicationSafetyRendererProps {
   data: MedicationSafetyData;
@@ -15,7 +15,7 @@ export default function MedicationSafetyRenderer({ data, narrative, citations }:
   const hasMeds = data.current_medications && data.current_medications.length > 0;
 
   return (
-    <div style={{ fontSize: 13, color: '#374151', fontFamily: 'inherit' }}>
+    <div style={{ fontSize: 13, color: NEU.text, fontFamily: 'inherit' }}>
       <Header title="Medication safety" />
 
       {hasAllergies && (
@@ -46,12 +46,14 @@ export default function MedicationSafetyRenderer({ data, narrative, citations }:
       )}
 
       {narrative && (
-        <p style={{ margin: '8px 0 0', fontSize: 13, color: '#374151', lineHeight: 1.6 }}>{narrative}</p>
+        <div style={{ ...cardStyle(NEU), marginTop: 8 }}>
+          <p style={{ margin: 0, fontSize: 13, color: NEU.text, lineHeight: 1.6 }}>{narrative}</p>
+        </div>
       )}
 
-      <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end' }}>
+      <DisclaimerFooter>
         <DisclaimerIcon citations={citations} />
-      </div>
+      </DisclaimerFooter>
     </div>
   );
 }
