@@ -47,6 +47,8 @@ def _criteria_as_dict(c: TriageCriteria) -> dict[str, Any]:
         "rapid_response": c.rapid_response,
         "abnormal_lab": c.abnormal_lab,
         "critical_vital": c.critical_vital,
+        "critical_vital_respiratory": c.critical_vital_respiratory,
+        "critical_vital_circulatory": c.critical_vital_circulatory,
         "mental_status_alert": c.mental_status_alert,
         "pain_score_high": c.pain_score_high,
         "active_condition": c.active_condition,

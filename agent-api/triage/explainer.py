@@ -23,9 +23,13 @@ import anthropic
 import redis.asyncio as aioredis
 from langfuse import Langfuse
 
+from agent.metrics import (
+    agent_data_cache_hits_total,
+    agent_data_cache_misses_total,
+)
 from agent.response_schemas import PRODUCE_TRIAGE_EXPLANATION
 from config import settings
-from triage.census import _CACHE_TTL, CensusEntry
+from triage.census import CensusEntry
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,8 @@ _SYSTEM = (
     "Use the produce_triage_explanation tool to return exactly one sentence (≤20 words) "
     "explaining the most urgent clinical finding. "
     "State a specific value (e.g. K+ 6.4, RR 26) and its source (vital sign or lab). "
+    "Cite ONLY values present in the input — never invent a lab name, a value, or a unit. "
+    "If the input contains no specific values, restate the priority label without inventing data. "
     "Never speculate. Never add clinical recommendations."
 )
 
@@ -56,12 +62,23 @@ def _build_user_prompt(entry: CensusEntry) -> str:
     vitals_lines = ", ".join(
         f"{code}={val:.1f}" for code, val in entry.vitals_summary.items()
     )
+    if entry.abnormal_labs:
+        labs_lines = "; ".join(
+            f"{lab['name']} {lab['value']}{(' ' + lab['unit']) if lab.get('unit') else ''} "
+            f"(LOINC {lab.get('loinc') or '?'}, interp {lab.get('interp') or '?'})"
+            for lab in entry.abnormal_labs
+        )
+    else:
+        labs_lines = "none"
     return (
         f"Patient: {entry.name}\n"
         f"Priority level: {entry.triage_level} ({entry.triage_label})\n"
         f"Matched criteria: {entry.matched_criteria}\n"
         f"Latest vitals (LOINC code=value): {vitals_lines or 'none'}\n"
-        f"Call produce_triage_explanation with one sentence explaining the most urgent finding."
+        f"Abnormal labs: {labs_lines}\n"
+        f"Cite a value from the lists above (vitals or labs). Do not invent a lab name "
+        f"or value that does not appear in the lists. Call produce_triage_explanation with "
+        f"one sentence explaining the most urgent finding."
     )
 
 
@@ -135,6 +152,7 @@ async def _explain_with_cache(
         if cached:
             text = cached.decode() if isinstance(cached, bytes) else cached
             if text:
+                agent_data_cache_hits_total.labels(cache="explanation").inc()
                 return text
     except Exception as exc:
         logger.warning(
@@ -142,10 +160,11 @@ async def _explain_with_cache(
             extra={"patient_id": entry.patient_id, "error": str(exc)},
         )
 
+    agent_data_cache_misses_total.labels(cache="explanation").inc()
     explanation = await explain_one(entry, client, langfuse)
 
     try:
-        await redis_client.setex(cache_key, _CACHE_TTL, explanation)
+        await redis_client.setex(cache_key, settings.explanation_cache_ttl_seconds, explanation)
     except Exception as exc:
         logger.warning(
             "Explanation cache write failed",

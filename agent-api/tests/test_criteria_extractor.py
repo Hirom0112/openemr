@@ -276,22 +276,31 @@ class TestCriticalLabThresholds:
 @pytest.mark.clinical_accuracy
 class TestMostRecentVitalPrecedence:
     def test_later_timestamp_wins(self):
-        # Two HR observations: older=55 (normal), newer=130 (critical)
+        # Two HR observations: older=55 (normal), newer=130 (critical).
+        # Anchor on now() so vitals are within the 24h freshness window.
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        older = (now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        newer = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         older_hr = _obs(LOINC_HR, {"valueQuantity": {"value": 55}},
-                        category="vital-signs", effective="2024-01-01T06:00:00Z")
+                        category="vital-signs", effective=older)
         newer_hr = _obs(LOINC_HR, {"valueQuantity": {"value": 130}},
-                        category="vital-signs", effective="2024-01-01T07:00:00Z")
+                        category="vital-signs", effective=newer)
         bundle = _bundle(older_hr, newer_hr)
         criteria = extract(bundle)
         assert criteria.latest_vitals.get(LOINC_HR) == 130.0
         assert criteria.critical_vital is True
 
     def test_earlier_timestamp_does_not_overwrite(self):
-        # Array order has older first — newer (high value) should win
+        # Array order has older first — newer (high value) should win.
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        newer = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        older = (now - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
         newer_rr = _obs(LOINC_RR, {"valueQuantity": {"value": 26}},
-                        category="vital-signs", effective="2024-01-01T07:30:00Z")
+                        category="vital-signs", effective=newer)
         older_rr = _obs(LOINC_RR, {"valueQuantity": {"value": 14}},
-                        category="vital-signs", effective="2024-01-01T05:00:00Z")
+                        category="vital-signs", effective=older)
         # Bundle has newer first in array — older should NOT overwrite
         bundle = _bundle(newer_rr, older_rr)
         criteria = extract(bundle)
@@ -308,6 +317,47 @@ class TestMostRecentVitalPrecedence:
         criteria = extract(bundle)
         # Without timestamps, insertion order wins — first value (88) is kept
         assert criteria.latest_vitals.get(LOINC_SPO2) == 88.0
+
+
+# ── extract() — pain freshness gate ──────────────────────────────────────────
+
+@pytest.mark.hard_failure
+@pytest.mark.clinical_accuracy
+class TestPainFreshness:
+    """Pain reading must be recent (≤ 4h) to fire pain_score_high.
+
+    Regression: previously the pain handler iterated raw observations and
+    would fire on a multi-day-old severe-pain reading.
+    """
+
+    def test_recent_severe_pain_fires(self):
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        recent = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        pain = _obs("72514-3", {"valueQuantity": {"value": 9}},
+                    category="vital-signs", effective=recent)
+        criteria = extract(_bundle(pain))
+        assert criteria.pain_score_high is True
+
+    def test_stale_severe_pain_does_not_fire(self):
+        # 4-day-old pain=9 must not fire — previously did.
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        stale = (now - timedelta(days=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        pain = _obs("72514-3", {"valueQuantity": {"value": 9}},
+                    category="vital-signs", effective=stale)
+        criteria = extract(_bundle(pain))
+        assert criteria.pain_score_high is False
+
+    def test_pain_just_outside_4h_window_does_not_fire(self):
+        # Boundary: 5h old should not fire on the 4h pain window.
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        ts = (now - timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        pain = _obs("72514-3", {"valueQuantity": {"value": 9}},
+                    category="vital-signs", effective=ts)
+        criteria = extract(_bundle(pain))
+        assert criteria.pain_score_high is False
 
 
 # ── extract() — uncategorized critical lab integration ───────────────────────
