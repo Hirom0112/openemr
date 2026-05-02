@@ -51,7 +51,7 @@
           }
         ],
         "period": {
-          "start": "2026-04-26T08:00:00Z"
+          "start": "2026-04-29T08:00:00Z"
         },
         "location": [
           {
@@ -114,7 +114,7 @@
         "encounter": {
           "reference": "Encounter/enc-006"
         },
-        "effectiveDateTime": "2026-04-29T05:30:00Z",
+        "effectiveDateTime": "2026-05-02T03:04:07Z",
         "performer": [
           {
             "reference": "Practitioner/prov-chen"
@@ -162,7 +162,7 @@
         "encounter": {
           "reference": "Encounter/enc-006"
         },
-        "effectiveDateTime": "2026-04-29T05:30:00Z",
+        "effectiveDateTime": "2026-05-02T03:04:07Z",
         "performer": [
           {
             "reference": "Practitioner/prov-chen"
@@ -210,7 +210,7 @@
         "encounter": {
           "reference": "Encounter/enc-006"
         },
-        "effectiveDateTime": "2026-04-29T05:30:00Z",
+        "effectiveDateTime": "2026-05-02T03:04:07Z",
         "performer": [
           {
             "reference": "Practitioner/prov-chen"
@@ -258,7 +258,7 @@
         "encounter": {
           "reference": "Encounter/enc-006"
         },
-        "effectiveDateTime": "2026-04-29T05:30:00Z",
+        "effectiveDateTime": "2026-05-02T03:04:07Z",
         "performer": [
           {
             "reference": "Practitioner/prov-chen"
@@ -306,7 +306,7 @@
         "encounter": {
           "reference": "Encounter/enc-006"
         },
-        "effectiveDateTime": "2026-04-29T05:30:00Z",
+        "effectiveDateTime": "2026-05-02T03:04:07Z",
         "performer": [
           {
             "reference": "Practitioner/prov-chen"
@@ -354,7 +354,7 @@
         "encounter": {
           "reference": "Encounter/enc-006"
         },
-        "effectiveDateTime": "2026-04-29T05:30:00Z",
+        "effectiveDateTime": "2026-05-02T03:04:07Z",
         "performer": [
           {
             "reference": "Practitioner/prov-chen"
@@ -402,7 +402,7 @@
         "encounter": {
           "reference": "Encounter/enc-006"
         },
-        "effectiveDateTime": "2026-04-29T02:00:00Z",
+        "effectiveDateTime": "2026-05-01T23:34:07Z",
         "performer": [
           {
             "reference": "Practitioner/prov-lab"
@@ -485,7 +485,7 @@
         "encounter": {
           "reference": "Encounter/enc-006"
         },
-        "authoredOn": "2026-04-29T01:00:00Z",
+        "authoredOn": "2026-05-01T22:34:07Z",
         "requester": {
           "reference": "Practitioner/prov-chen"
         }
@@ -517,7 +517,7 @@
         "encounter": {
           "reference": "Encounter/enc-006"
         },
-        "authoredOn": "2026-04-29T02:00:00Z",
+        "authoredOn": "2026-05-01T23:34:07Z",
         "requester": {
           "reference": "Practitioner/prov-chen"
         }
@@ -579,7 +579,7 @@
         "encounter": {
           "reference": "Encounter/enc-006"
         },
-        "issued": "2026-04-28T23:00:00Z"
+        "issued": "2026-05-01T20:34:07Z"
       },
       "request": {
         "method": "PUT",
@@ -604,7 +604,7 @@
         "subject": {
           "reference": "Patient/pt-006"
         },
-        "effectiveDateTime": "2026-04-26T08:00:00Z",
+        "effectiveDateTime": "2026-04-29T08:00:00Z",
         "valueCodeableConcept": {
           "text": "Full Code"
         }

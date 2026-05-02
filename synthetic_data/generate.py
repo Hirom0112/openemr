@@ -18,6 +18,7 @@ Scenarios covered:
 """
 
 import json
+import os
 import pathlib
 import random
 import uuid
@@ -30,7 +31,18 @@ random.seed(SEED)
 OUTPUT_DIR = pathlib.Path(__file__).parent / "bundles"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-BASE_DATE = datetime(2026, 4, 29, 7, 0, 0, tzinfo=timezone.utc)
+# Anchor on now() so vitals are always within the 24h freshness window.
+# The triage engine ignores observations older than 24h for rule evaluation;
+# a fixed BASE_DATE rotted the corpus the moment current time drifted past it.
+# SYNTHETIC_DATA_BASE_DATE (ISO 8601) env-gates a fixed BASE_DATE for deterministic fixtures.
+_base_date_env = os.environ.get("SYNTHETIC_DATA_BASE_DATE")
+if _base_date_env:
+    _parsed = datetime.fromisoformat(_base_date_env.replace("Z", "+00:00"))
+    if _parsed.tzinfo is None:
+        _parsed = _parsed.replace(tzinfo=timezone.utc)
+    BASE_DATE = _parsed.replace(microsecond=0)
+else:
+    BASE_DATE = datetime.now(timezone.utc).replace(microsecond=0)
 PROVIDER_CHEN = "prov-chen"
 PROVIDER_OTHER = "prov-other"
 
@@ -283,7 +295,10 @@ def build_pt001() -> dict:
 def build_pt002() -> dict:
     pid = "pt-002"
     eid = "enc-002"
-    critical_k_ts = "2026-04-29T03:12:00Z"
+    # Anchor on now() with the same relative offset (~2.5h ago) the original
+    # frozen timestamp used relative to its vitals — keeps the unacknowledged-lab
+    # narrative intact while staying inside the freshness window.
+    critical_k_ts = ts(-2.5)
     vt = ts(-2.0)
     resources = [
         patient_resource(pid, "Fontaine", "Delia", "1952-11-07", "MRN-10002", "female"),
@@ -506,7 +521,7 @@ def build_pt008() -> dict:
     pid = "pt-008"
     eid = "enc-008"
     vt = ts(-1.0)
-    same_ts = "2026-04-29T04:00:00Z"
+    same_ts = ts(-2.0)
     resources = [
         patient_resource(pid, "Castillo", "Yvonne", "1960-12-30", "MRN-10008", "female"),
         encounter_resource(eid, pid, "509", admit_date(2), "Diabetic nephropathy — monitoring", "127013003"),
