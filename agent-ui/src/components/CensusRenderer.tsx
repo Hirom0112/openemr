@@ -47,6 +47,7 @@ interface CensusRendererProps {
   narrative: string;
   citations: Citation[];
   onBrief: (patientName: string, patientId?: string) => void;
+  onMeds: (patientName: string, patientId?: string) => void;
   providerName?: string;
 }
 
@@ -77,9 +78,14 @@ function CensusSectionHeading({ label, color, aside }: { label: string; color: C
   );
 }
 
-function CensusPatientRow({ patient, color, onBrief }: { patient: CensusPatient; color: ColorToken; onBrief: (name: string, patientId?: string) => void }) {
+function CensusPatientRow({ patient, color, onBrief, onMeds }: { patient: CensusPatient; color: ColorToken; onBrief: (name: string, patientId?: string) => void; onMeds: (name: string, patientId?: string) => void }) {
   const trigger = extractTrigger(patient.explanation);
   const briefBtnStyle: React.CSSProperties = {
+    flexShrink: 0, fontSize: 12, fontWeight: 500, padding: '4px 10px',
+    ...primaryButtonStyle(color),
+    borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+  };
+  const medsBtnStyle: React.CSSProperties = {
     flexShrink: 0, fontSize: 12, fontWeight: 500, padding: '4px 10px',
     ...primaryButtonStyle(color),
     borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
@@ -113,6 +119,13 @@ function CensusPatientRow({ patient, color, onBrief }: { patient: CensusPatient;
             Brief ↗
           </button>
           <button
+            aria-label={`Medications for ${patient.name}`}
+            onClick={() => onMeds(patient.name, patient.patient_id)}
+            style={medsBtnStyle}
+          >
+            Meds ↗
+          </button>
+          <button
             aria-label={`Open chart for ${patient.name}`}
             onClick={() => openPatientChart(patient.patient_id, patient.openemr_pid)}
             style={chartBtnStyle}
@@ -139,7 +152,7 @@ function LabSeverityBadge({ level }: { level: number }) {
   );
 }
 
-export default function CensusRenderer({ data, citations, onBrief, providerName }: CensusRendererProps) {
+export default function CensusRenderer({ data, citations, onBrief, onMeds, providerName }: CensusRendererProps) {
   const [labExpanded, setLabExpanded] = useState(false);
 
   const census = data?.census ?? [];
@@ -205,7 +218,7 @@ export default function CensusRenderer({ data, citations, onBrief, providerName 
       {immediate.length > 0 && (
         <section aria-labelledby="tier-immediate">
           <CensusSectionHeading label="Immediate attention" color={RED} />
-          {immediate.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} />)}
+          {immediate.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} onMeds={onMeds} />)}
         </section>
       )}
 
@@ -213,7 +226,7 @@ export default function CensusRenderer({ data, citations, onBrief, providerName 
       {criticalLab.length > 0 && (
         <section aria-labelledby="tier-critical-lab">
           <CensusSectionHeading label="Critical lab — unacknowledged" color={RED} />
-          {criticalLab.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} />)}
+          {criticalLab.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} onMeds={onMeds} />)}
         </section>
       )}
 
@@ -221,7 +234,7 @@ export default function CensusRenderer({ data, citations, onBrief, providerName 
       {criticalVital.length > 0 && (
         <section aria-labelledby="tier-critical">
           <CensusSectionHeading label="Critical vital sign" color={AMB} />
-          {criticalVital.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={AMB} onBrief={onBrief} />)}
+          {criticalVital.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={AMB} onBrief={onBrief} onMeds={onMeds} />)}
         </section>
       )}
 
@@ -229,7 +242,7 @@ export default function CensusRenderer({ data, citations, onBrief, providerName 
       {severePain.length > 0 && (
         <section aria-labelledby="tier-pain">
           <CensusSectionHeading label="Severe pain" color={AMB} />
-          {severePain.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={AMB} onBrief={onBrief} />)}
+          {severePain.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={AMB} onBrief={onBrief} onMeds={onMeds} />)}
         </section>
       )}
 
@@ -240,7 +253,7 @@ export default function CensusRenderer({ data, citations, onBrief, providerName 
           <div style={{ fontSize: 11, color: RED.secondary, marginBottom: 6, paddingLeft: 2 }}>
             Hard safety flag · verify before orders
           </div>
-          {codeStatus.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} />)}
+          {codeStatus.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} onMeds={onMeds} />)}
         </section>
       )}
 
@@ -281,6 +294,17 @@ export default function CensusRenderer({ data, citations, onBrief, providerName 
                         }}
                       >
                         Brief ↗
+                      </button>
+                      <button
+                        aria-label={`Medications for ${p.name}`}
+                        onClick={() => onMeds(p.name, p.patient_id)}
+                        style={{
+                          flexShrink: 0, fontSize: 12, fontWeight: 500, padding: '4px 10px',
+                          ...primaryButtonStyle(AMB),
+                          borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+                        }}
+                      >
+                        Meds ↗
                       </button>
                       <button
                         aria-label={`Open chart for ${p.name}`}

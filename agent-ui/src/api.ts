@@ -155,6 +155,100 @@ export async function fetchTriageRationale(patientId: string, sessionId?: string
   });
 }
 
+/**
+ * Direct-call briefing — bypasses the dispatcher's two extra Anthropic round-trips
+ * (~7s overhead) for explicit Brief clicks where we already know patient_id.
+ *
+ * The free-text "Brief Marcus Webb" path still routes through /agent/query.
+ */
+export interface GetBriefingResult {
+  response: AgentResponse;
+  requestId: string;
+  durationMs: number;
+}
+
+export async function getBriefing(
+  patientId: string,
+  sessionId: string,
+  onFirstByte?: (requestId: string) => void,
+): Promise<GetBriefingResult> {
+  const t0 = performance.now();
+  const result = await postWithMeta<import('./types').BriefingSection>(
+    `/briefing/${patientId}`,
+    {},
+    90_000,
+    onFirstByte,
+  );
+  const durationMs = performance.now() - t0;
+  postClientTiming({
+    action: 'brief_direct_total',
+    duration_ms: Math.round(durationMs),
+    request_id: result.requestId,
+    session_id: sessionId,
+    extra: { patient_id: patientId },
+  });
+  const response: AgentResponse = {
+    type: 'briefing',
+    data: result.data,
+    narrative: '',
+    citations: [],
+  };
+  return { response, requestId: result.requestId, durationMs };
+}
+
+/**
+ * Direct-call medication safety — bypasses the dispatcher's planner round-trips
+ * for explicit Meds clicks where we already know patient_id.
+ *
+ * The free-text "show meds for Marcus" path still routes through /agent/query.
+ */
+export interface GetMedicationSafetyResult {
+  response: AgentResponse;
+  requestId: string;
+  durationMs: number;
+}
+
+export async function getMedicationSafety(
+  patientId: string,
+  sessionId: string,
+  onFirstByte?: (requestId: string) => void,
+): Promise<GetMedicationSafetyResult> {
+  const t0 = performance.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 90_000);
+  const clientRequestId = generateRequestId();
+  try {
+    const res = await fetch(`${cfg().agentApiUrl}/medication/safety/${patientId}`, {
+      method: 'GET',
+      headers: { 'X-Request-ID': clientRequestId },
+      signal: controller.signal,
+    });
+    const serverRequestId = res.headers.get('X-Request-ID') ?? clientRequestId;
+    if (onFirstByte) {
+      try { onFirstByte(serverRequestId); } catch (err: unknown) { console.debug('[copilot] onFirstByte threw', err); }
+    }
+    if (!res.ok) throw new Error(`API error ${res.status}: /medication/safety/${patientId}`);
+    const data = (await res.json()) as import('./types').MedicationSafetyData;
+    const durationMs = performance.now() - t0;
+    postClientTiming({
+      action: 'meds_direct_total',
+      duration_ms: Math.round(durationMs),
+      request_id: serverRequestId,
+      session_id: sessionId,
+      extra: { patient_id: patientId },
+    });
+    const response: AgentResponse = {
+      type: 'medication_safety',
+      data,
+      narrative: '',
+      citations: [],
+    };
+    return { response, requestId: serverRequestId, durationMs };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ── Legacy endpoints (kept for backward compatibility) ────────────────────────
 
 export async function fetchCensus(patientIds: string[], sessionId: string) {
