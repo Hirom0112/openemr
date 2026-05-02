@@ -34,13 +34,80 @@ export function primaryButtonStyle(color: ColorToken): React.CSSProperties {
 }
 
 export function secondaryButtonStyle(): React.CSSProperties {
-  return { background: '#E8EDF8', color: '#374151', border: '1px solid #E5E7EB' };
+  return { background: LINK_TINT, color: NEU.text, border: `1px solid ${NEU.border}` };
 }
 
 export function footerDividerStyle(): React.CSSProperties {
-  return { borderTop: '1px solid #E5E7EB', marginTop: 16, paddingTop: 10, fontSize: 11, color: '#9CA3AF' };
+  return { borderTop: `1px solid ${NEU.border}`, marginTop: 16, paddingTop: 10, fontSize: 11, color: MUTED };
 }
 
 export function sectionHeadingStyle(color: ColorToken): React.CSSProperties {
   return { textTransform: 'uppercase', fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', color: color.text };
+}
+
+// Census visual primitives (extracted from CensusRenderer.tsx)
+export function summaryCardStyle(color: ColorToken): React.CSSProperties {
+  return {
+    background: color.bg,
+    border: `1px solid ${color.border}`,
+    borderRadius: 8,
+    padding: '8px 10px',
+    textAlign: 'center',
+  };
+}
+
+export function metricCardStyle(color: ColorToken): React.CSSProperties {
+  return summaryCardStyle(color);
+}
+
+export function patientRowStyle(color: ColorToken): React.CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '8px 12px',
+    borderRadius: 6,
+    background: color.bg,
+    borderLeft: `3px solid ${color.border}`,
+    marginBottom: 4,
+  };
+}
+
+export function livePillStyle(): React.CSSProperties {
+  return {
+    fontSize: 11,
+    fontWeight: 500,
+    color: GREEN_PILL.text,
+    background: GREEN_PILL.bg,
+    border: `1px solid ${GREEN_PILL.border}`,
+    borderRadius: 999,
+    padding: '3px 10px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 5,
+  };
+}
+
+export function admitBadgeStyle(badge: { bg: string; fg: string; border: string }): React.CSSProperties {
+  return {
+    fontSize: 10,
+    fontWeight: 500,
+    padding: '1px 6px',
+    borderRadius: 999,
+    background: badge.bg,
+    color: badge.fg,
+    border: `1px solid ${badge.border}`,
+    flexShrink: 0,
+  };
+}
+
+// P1-P3 = RED (immediate / sepsis / critical lab),
+// P4-P7 = AMB (critical vital, AMS, pain, abnormal lab),
+// P8+   = NEU (incl. P9 code-status which renderers re-skin red contextually).
+export function tierColor(level: string | number): ColorToken {
+  const n = typeof level === 'number' ? level : parseInt(String(level).replace(/^P/i, ''), 10);
+  if (!Number.isFinite(n)) return NEU;
+  if (n <= 3) return RED;
+  if (n <= 7) return AMB;
+  return NEU;
 }

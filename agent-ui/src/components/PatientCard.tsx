@@ -1,10 +1,6 @@
 import type { PatientSummary } from '../types';
-
-const PRIORITY_COLORS: Record<string, string> = {
-  P1: '#c0392b', P2: '#e74c3c', P3: '#e67e22', P4: '#f39c12',
-  P5: '#d4ac0d', P6: '#27ae60', P7: '#1abc9c', P8: '#2980b9',
-  P9: '#8e44ad', P10: '#7f8c8d',
-};
+import { resolvePatientPid } from '../utils/citations';
+import { tierColor, primaryButtonStyle, secondaryButtonStyle, NEU, LINK_TINT } from '../styles/tokens';
 
 interface PatientCardProps {
   patient: PatientSummary;
@@ -15,7 +11,7 @@ interface PatientCardProps {
 }
 
 export default function PatientCard({ patient, rank, selected, onExpand, onSelect }: PatientCardProps) {
-  const color = PRIORITY_COLORS[patient.priority] ?? '#7f8c8d';
+  const color = tierColor(patient.priority);
 
   return (
     <div
@@ -26,10 +22,10 @@ export default function PatientCard({ patient, rank, selected, onExpand, onSelec
         gap: 8,
         padding: '8px 10px',
         marginBottom: 5,
-        borderRadius: 4,
-        border: '1px solid #e0e0e0',
-        borderLeft: `4px solid ${color}`,
-        background: selected ? '#f0f4ff' : '#fff',
+        borderRadius: 6,
+        border: `1px solid ${NEU.border}`,
+        borderLeft: `3px solid ${color.border}`,
+        background: selected ? LINK_TINT : color.bg,
         cursor: 'pointer',
       }}
     >
@@ -38,7 +34,7 @@ export default function PatientCard({ patient, rank, selected, onExpand, onSelec
           minWidth: 26,
           height: 26,
           borderRadius: '50%',
-          background: color,
+          background: color.border,
           color: '#fff',
           fontSize: 11,
           fontWeight: 700,
@@ -52,18 +48,25 @@ export default function PatientCard({ patient, rank, selected, onExpand, onSelec
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <strong style={{ fontSize: 13 }}>{patient.name}</strong>
-          <span style={{ fontSize: 11, color: '#666', marginLeft: 6, flexShrink: 0 }}>
-            {patient.bed} &middot; <span style={{ color }}>{patient.priority}</span>
+          <strong style={{ fontSize: 13, color: color.text }}>{patient.name}</strong>
+          <span style={{ fontSize: 11, color: color.secondary, marginLeft: 6, flexShrink: 0 }}>
+            {patient.bed} &middot; <span style={{ color: color.text, fontWeight: 500 }}>{patient.priority}</span>
           </span>
         </div>
-        <div style={{ fontSize: 12, color: '#444', marginTop: 2 }}>{patient.one_line}</div>
+        <div style={{ fontSize: 12, color: color.secondary, marginTop: 2 }}>{patient.one_line}</div>
       </div>
       <button
         onClick={(e) => {
           e.stopPropagation();
+          // Prefer openemr_pid (numeric integer pid required by demographics_full.php).
+          // Fall back to resolvePatientPid for legacy pt-NNN synthetic IDs.
+          const pid = patient.openemr_pid ?? resolvePatientPid(patient.patient_id);
+          if (!/^\d+$/.test(pid)) {
+            console.warn('Cannot open chart: no integer pid available', { patient_id: patient.patient_id, openemr_pid: patient.openemr_pid });
+            return;
+          }
           window.open(
-            `${window.location.origin}/interface/patient_file/summary/demographics_full.php?set_pid=${patient.patient_id}`,
+            `${window.location.origin}/interface/patient_file/summary/demographics_full.php?set_pid=${pid}`,
             '_blank'
           );
         }}
@@ -71,15 +74,12 @@ export default function PatientCard({ patient, rank, selected, onExpand, onSelec
         style={{
           flexShrink: 0,
           fontSize: 11,
-          fontWeight: 600,
-          padding: '3px 9px',
-          background: '#2c3e9e',
-          color: '#fff',
-          borderRadius: 4,
-          border: 'none',
+          fontWeight: 500,
+          padding: '4px 10px',
+          ...primaryButtonStyle(color),
+          borderRadius: 6,
           cursor: 'pointer',
           whiteSpace: 'nowrap',
-          letterSpacing: 0.1,
           fontFamily: 'inherit',
         }}
       >
@@ -89,10 +89,11 @@ export default function PatientCard({ patient, rank, selected, onExpand, onSelec
         onClick={(e) => { e.stopPropagation(); onExpand(patient.patient_id); }}
         title="Show triage rationale"
         style={{
+          ...secondaryButtonStyle(),
           background: 'none',
           border: 'none',
           cursor: 'pointer',
-          color: '#999',
+          color: color.secondary,
           fontSize: 16,
           padding: '0 2px',
           flexShrink: 0,
