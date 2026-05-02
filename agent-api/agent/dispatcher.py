@@ -28,9 +28,11 @@ from typing import Any
 import anthropic
 
 from agent.metrics import (
-    agent_cache_hits_total,
-    agent_cache_misses_total,
+    agent_checkpointer_op_duration_seconds,
+    agent_checkpointer_ops_total,
     agent_dispatch_latency_seconds,
+    agent_prompt_cache_hits_total,
+    agent_prompt_cache_misses_total,
     agent_tool_calls_total,
     agent_tool_misroute_total,
 )
@@ -111,12 +113,30 @@ async def _load_history(session_id: str, session_context: dict[str, Any]) -> lis
     redis_saver = session_context.get("redis_saver")
     sqlite_saver = session_context.get("sqlite_saver")
     if redis_saver is not None:
+        t0 = time.monotonic()
         try:
-            return await redis_saver.load(session_id)
+            history = await redis_saver.load(session_id)
         except Exception as exc:
+            agent_checkpointer_op_duration_seconds.labels(op="load", backend="redis").observe(time.monotonic() - t0)
+            agent_checkpointer_ops_total.labels(op="load", backend="redis", outcome="error").inc()
             logger.warning("Redis load failed, falling back to SQLite", extra={"error": str(exc)})
+        else:
+            agent_checkpointer_op_duration_seconds.labels(op="load", backend="redis").observe(time.monotonic() - t0)
+            outcome = "hit" if history else "miss"
+            agent_checkpointer_ops_total.labels(op="load", backend="redis", outcome=outcome).inc()
+            return history
     if sqlite_saver is not None:
-        return await sqlite_saver.load(session_id)
+        t0 = time.monotonic()
+        try:
+            history = await sqlite_saver.load(session_id)
+        except Exception:
+            agent_checkpointer_op_duration_seconds.labels(op="load", backend="sqlite").observe(time.monotonic() - t0)
+            agent_checkpointer_ops_total.labels(op="load", backend="sqlite", outcome="error").inc()
+            raise
+        agent_checkpointer_op_duration_seconds.labels(op="load", backend="sqlite").observe(time.monotonic() - t0)
+        outcome = "hit" if history else "miss"
+        agent_checkpointer_ops_total.labels(op="load", backend="sqlite", outcome=outcome).inc()
+        return history
     return []
 
 
@@ -128,14 +148,28 @@ async def _save_turn(
 ) -> None:
     redis_saver = session_context.get("redis_saver")
     sqlite_saver = session_context.get("sqlite_saver")
-    try:
-        if redis_saver is not None:
+    if redis_saver is not None:
+        t0 = time.monotonic()
+        try:
             await redis_saver.append(session_id, role=role, content=content)
+        except Exception as exc:
+            agent_checkpointer_op_duration_seconds.labels(op="save", backend="redis").observe(time.monotonic() - t0)
+            agent_checkpointer_ops_total.labels(op="save", backend="redis", outcome="error").inc()
+            logger.warning("Redis save failed, falling back to SQLite", extra={"error": str(exc)})
+        else:
+            agent_checkpointer_op_duration_seconds.labels(op="save", backend="redis").observe(time.monotonic() - t0)
+            agent_checkpointer_ops_total.labels(op="save", backend="redis", outcome="hit").inc()
             return
-    except Exception as exc:
-        logger.warning("Redis save failed, falling back to SQLite", extra={"error": str(exc)})
     if sqlite_saver is not None:
-        await sqlite_saver.append(session_id, role=role, content=content)
+        t0 = time.monotonic()
+        try:
+            await sqlite_saver.append(session_id, role=role, content=content)
+        except Exception:
+            agent_checkpointer_op_duration_seconds.labels(op="save", backend="sqlite").observe(time.monotonic() - t0)
+            agent_checkpointer_ops_total.labels(op="save", backend="sqlite", outcome="error").inc()
+            raise
+        agent_checkpointer_op_duration_seconds.labels(op="save", backend="sqlite").observe(time.monotonic() - t0)
+        agent_checkpointer_ops_total.labels(op="save", backend="sqlite", outcome="hit").inc()
 
 
 # ── System blocks with cache_control ─────────────────────────────────────────
@@ -300,9 +334,9 @@ async def dispatch(
             cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
             cache_create = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
             if cache_read > 0:
-                agent_cache_hits_total.inc(cache_read)
+                agent_prompt_cache_hits_total.inc(cache_read)
             if cache_create > 0:
-                agent_cache_misses_total.inc(cache_create)
+                agent_prompt_cache_misses_total.inc(cache_create)
 
             if generation_event is not None:
                 generation_event.end(
@@ -407,6 +441,16 @@ async def dispatch(
                                 metadata={"tool_use_id": tool_use_id},
                             )
 
+                        logger.info(
+                            "tool_call_start",
+                            extra={
+                                "session_id": session_id,
+                                "tool": tool_name,
+                                "tool_use_id": tool_use_id,
+                                "turn": turn_count,
+                            },
+                        )
+                        _t_tool = time.monotonic()
                         try:
                             tool_result = await _call_tool_with_retry(tool_fn, tool_input, session_context, tool_name)
                             all_citations.extend(tool_result.get("citations", []))
@@ -421,6 +465,18 @@ async def dispatch(
                             if tool_span is not None:
                                 tool_span.end(output=result_data)
 
+                            logger.info(
+                                "tool_call_end",
+                                extra={
+                                    "session_id": session_id,
+                                    "tool": tool_name,
+                                    "tool_use_id": tool_use_id,
+                                    "turn": turn_count,
+                                    "duration_ms": int((time.monotonic() - _t_tool) * 1000),
+                                    "outcome": "ok",
+                                },
+                            )
+
                         except Exception as exc:
                             failure_class = _classify_failure(exc)
                             tool_result_content = json.dumps(
@@ -431,6 +487,18 @@ async def dispatch(
                             logger.error(
                                 "Tool call failed",
                                 extra={"tool": tool_name, "error": str(exc), "class": failure_class.value},
+                            )
+                            logger.info(
+                                "tool_call_end",
+                                extra={
+                                    "session_id": session_id,
+                                    "tool": tool_name,
+                                    "tool_use_id": tool_use_id,
+                                    "turn": turn_count,
+                                    "duration_ms": int((time.monotonic() - _t_tool) * 1000),
+                                    "outcome": "error",
+                                    "failure_class": failure_class.value,
+                                },
                             )
 
                     tool_results.append(

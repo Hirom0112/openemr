@@ -19,15 +19,19 @@ Exposes:
 import asyncio
 import logging
 import time
+import uuid
+from typing import Any
 
 import redis.asyncio as aioredis
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from langfuse import Langfuse
 from prometheus_client import Counter, Histogram, make_asgi_app
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 from pydantic import ConfigDict as _PydanticConfig
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 # PHP sends numeric PIDs and provider IDs as JSON numbers.
 # _CoerceModel tells Pydantic v2 to coerce numbers to str instead of 422-ing.
@@ -36,9 +40,12 @@ class _CoerceModel(BaseModel):
 
 from agent.dispatcher import dispatch
 from agent.metrics import (
-    agent_cache_hits_total,
-    agent_cache_misses_total,
+    agent_client_timing_seconds,
     agent_dispatch_latency_seconds,
+    agent_prewarm_duration_seconds,
+    agent_prewarm_runs_total,
+    agent_prompt_cache_hits_total,
+    agent_prompt_cache_misses_total,
     agent_tool_calls_total,
     agent_tool_misroute_total,
 )
@@ -49,6 +56,8 @@ from agent.tools import (
     get_patient_briefing,
     get_triage_rationale,
     query_patient_records,
+    warm_briefing_for_patient,
+    warm_bundle_for_patient,
 )
 from auth.fhir_client import (
     fhir_client,
@@ -59,9 +68,10 @@ from briefing.schema import BriefingResponse
 from checkpointer.redis_saver import RedisSaver
 from checkpointer.sqlite_saver import SqliteSaver
 from config import settings
-from triage.census import build_census
+from observability.json_logging import configure_json_logging, request_id_var
+from triage.census import build_census, census_cache_key
 
-logging.basicConfig(level=settings.log_level)
+configure_json_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 # ── Legacy per-endpoint metrics (kept for backward compatibility) ─────────────
@@ -86,6 +96,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Per-request request_id: read X-Request-ID or mint uuid4, propagate via ContextVar."""
+
+    async def dispatch(self, request: Request, call_next: Any) -> Response:
+        rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        request.state.request_id = rid
+        token = request_id_var.set(rid)
+        try:
+            response: Response = await call_next(request)
+        finally:
+            request_id_var.reset(token)
+        response.headers["X-Request-ID"] = rid
+        return response
+
+
+app.add_middleware(RequestIdMiddleware)
 
 Instrumentator().instrument(app).expose(app)
 
@@ -418,20 +446,98 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
     )
 
     async def _warm() -> None:
+        t_start = time.monotonic()
+        logger.info(
+            "Pre-fetch warm started",
+            extra={"session_id": request.session_id, "patient_count": len(request.patient_ids)},
+        )
         try:
-            await build_census(
+            entries = await build_census(
                 request.patient_ids,
                 redis_client=_redis,
-                cache_key=f"copilot:census:{request.session_id}",
+                cache_key=census_cache_key(request.provider_id, request.patient_ids),
+                provider_id=request.provider_id,
             )
         except Exception as exc:
+            duration_ms = int((time.monotonic() - t_start) * 1000)
+            agent_prewarm_duration_seconds.labels(outcome="failed").observe(time.monotonic() - t_start)
+            agent_prewarm_runs_total.labels(outcome="failed").inc()
             logger.warning(
                 "Pre-fetch cache warming failed",
-                extra={"session_id": request.session_id, "error": str(exc)},
+                extra={"session_id": request.session_id, "error": str(exc), "duration_ms": duration_ms},
             )
+            return
+
+        # After census builds, fan out bundle + briefing warmers, bounded
+        # by a small semaphore so we don't hammer FHIR / Anthropic. Each
+        # warmer EXISTS-checks before writing so re-mounts are cheap.
+        sem = asyncio.Semaphore(4)
+
+        async def _warm_one(pid: str) -> None:
+            async with sem:
+                await warm_bundle_for_patient(_redis, pid)
+                await warm_briefing_for_patient(_redis, pid, langfuse=_langfuse)
+
+        warm_tasks = [
+            asyncio.create_task(_warm_one(entry.patient_id))
+            for entry in entries
+        ]
+        results: list[Any] = []
+        if warm_tasks:
+            results = await asyncio.gather(*warm_tasks, return_exceptions=True)
+
+        failures = sum(1 for r in results if isinstance(r, Exception))
+        outcome = "success" if failures == 0 else ("partial" if failures < len(results) else "failed")
+        duration_s = time.monotonic() - t_start
+        duration_ms = int(duration_s * 1000)
+        agent_prewarm_duration_seconds.labels(outcome=outcome).observe(duration_s)
+        agent_prewarm_runs_total.labels(outcome=outcome).inc()
+        logger.info(
+            "Pre-fetch warm completed",
+            extra={
+                "session_id": request.session_id,
+                "duration_ms": duration_ms,
+                "outcome": outcome,
+                "census_entries": len(entries),
+                "bundle_warmed": len(warm_tasks),
+                "briefing_warmed": len(warm_tasks),
+                "warm_failures": failures,
+                "caches_populated": ["census", "bundle", "briefing"],
+            },
+        )
 
     asyncio.create_task(_warm())
     return {"status": "acknowledged", "session_id": request.session_id}
+
+
+# ── Client-side timing receiver ──────────────────────────────────────────────
+
+class ClientTimingRequest(BaseModel):
+    action: str
+    duration_ms: int
+    request_id: str | None = None
+    session_id: str | None = None
+    t_navigation_start_ms: int | None = None
+    extra: dict[str, Any] | None = None
+
+
+@app.post("/agent/client-timing", status_code=204)
+async def client_timing(body: ClientTimingRequest) -> Response:
+    """Receive a browser-reported timing sample. Logs + emits a histogram observation."""
+    duration_s = max(body.duration_ms, 0) / 1000.0
+    agent_client_timing_seconds.labels(action=body.action).observe(duration_s)
+    logger.info(
+        "client_timing",
+        extra={
+            "action": body.action,
+            "duration_ms": body.duration_ms,
+            "client_request_id": body.request_id,
+            "session_id": body.session_id,
+            "t_navigation_start_ms": body.t_navigation_start_ms,
+            "client_extra": body.extra,
+        },
+    )
+    return Response(status_code=204)
 
 
 # ── Raw conversation turns ────────────────────────────────────────────────────

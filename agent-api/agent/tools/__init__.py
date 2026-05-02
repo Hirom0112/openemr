@@ -32,13 +32,19 @@ from typing import Any
 import redis.asyncio as aioredis
 
 from agent.citation import Citation, CitationList, ClaimClass, citations_for_fhir_resource
+from agent.metrics import (
+    agent_data_cache_hits_total,
+    agent_data_cache_misses_total,
+)
+from observability.tool_logging import log_tool_outcome
 from auth.fhir_client import fhir_client
 from briefing.context_builder import build as build_briefing_context
 from briefing.generator import generate_briefing
 from briefing.schema import BriefingResponse
+from config import settings
 from handoff.generator import generate_handoffs
 from medication.safety import add_llm_summary, run_safety_checks
-from triage.census import _CACHE_TTL, build_census
+from triage.census import build_census, census_cache_key
 from triage.criteria import extract as extract_criteria
 from triage.explainer import explain_census
 from triage.rules_engine import rank
@@ -87,6 +93,154 @@ def _empty_metadata(tool: str, patient_id: str | None, duration_ms: int, resourc
     }
 
 
+# ── Redis cache helpers (shared by dispatcher tools and prefetch warmer) ─────
+
+
+def _bundle_cache_key(patient_id: str) -> str:
+    return f"copilot:bundle:{patient_id}"
+
+
+def _briefing_cache_key(patient_id: str) -> str:
+    return f"copilot:briefing:{patient_id}"
+
+
+async def _get_cached_bundle(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+) -> dict[str, Any] | None:
+    """Return the cached FHIR bundle for ``patient_id`` or None on miss/error.
+
+    Increments hit/miss metrics. Treats Redis exceptions as miss (logged).
+    """
+    if redis_client is None:
+        return None
+    key = _bundle_cache_key(patient_id)
+    try:
+        raw = await redis_client.get(key)
+    except Exception as exc:
+        logger.warning("Bundle cache read failed", extra={"patient_id": patient_id, "error": str(exc)})
+        agent_data_cache_misses_total.labels(cache="bundle").inc()
+        return None
+    if raw:
+        agent_data_cache_hits_total.labels(cache="bundle").inc()
+        try:
+            return json.loads(raw)
+        except Exception as exc:
+            logger.warning("Bundle cache decode failed", extra={"patient_id": patient_id, "error": str(exc)})
+            return None
+    agent_data_cache_misses_total.labels(cache="bundle").inc()
+    return None
+
+
+async def _set_cached_bundle(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+    bundle: dict[str, Any],
+) -> None:
+    if redis_client is None:
+        return
+    try:
+        await redis_client.setex(
+            _bundle_cache_key(patient_id),
+            settings.bundle_cache_ttl_seconds,
+            json.dumps(bundle),
+        )
+    except Exception as exc:
+        logger.warning("Bundle cache write failed", extra={"patient_id": patient_id, "error": str(exc)})
+
+
+async def _get_cached_briefing(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+) -> dict[str, Any] | None:
+    if redis_client is None:
+        return None
+    key = _briefing_cache_key(patient_id)
+    try:
+        raw = await redis_client.get(key)
+    except Exception as exc:
+        logger.warning("Briefing cache read failed patient_id=%s error=%s", patient_id, exc)
+        agent_data_cache_misses_total.labels(cache="briefing").inc()
+        return None
+    if raw:
+        agent_data_cache_hits_total.labels(cache="briefing").inc()
+        try:
+            return json.loads(raw)
+        except Exception as exc:
+            logger.warning("Briefing cache decode failed patient_id=%s error=%s", patient_id, exc)
+            return None
+    agent_data_cache_misses_total.labels(cache="briefing").inc()
+    return None
+
+
+async def _set_cached_briefing(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+    payload: dict[str, Any],
+) -> None:
+    if redis_client is None:
+        return
+    try:
+        await redis_client.setex(
+            _briefing_cache_key(patient_id),
+            settings.briefing_cache_ttl_seconds,
+            json.dumps(payload),
+        )
+    except Exception as exc:
+        logger.warning("Briefing cache write failed patient_id=%s error=%s", patient_id, exc)
+
+
+async def _redis_exists(redis_client: aioredis.Redis | None, key: str) -> bool:
+    """Return True iff the key exists. Treats Redis errors as False (caller warms)."""
+    if redis_client is None:
+        return False
+    try:
+        return bool(await redis_client.exists(key))
+    except Exception as exc:
+        logger.warning("Redis EXISTS failed", extra={"key": key, "error": str(exc)})
+        return False
+
+
+async def warm_bundle_for_patient(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+) -> None:
+    """Fire-and-forget bundle warmer. Skips if the key already exists."""
+    if redis_client is None:
+        return
+    if await _redis_exists(redis_client, _bundle_cache_key(patient_id)):
+        return
+    try:
+        bundle = await fhir_client.get_bundle_for_patient(patient_id)
+    except Exception as exc:
+        logger.warning("Bundle warm fetch failed", extra={"patient_id": patient_id, "error": str(exc)})
+        return
+    await _set_cached_bundle(redis_client, patient_id, bundle)
+
+
+async def warm_briefing_for_patient(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+    langfuse: Any | None = None,
+) -> None:
+    """Fire-and-forget briefing warmer. Skips if the key already exists.
+
+    Reuses the same path as the dispatcher tool so we never duplicate the
+    Anthropic / FHIR call surface.
+    """
+    if redis_client is None:
+        return
+    if await _redis_exists(redis_client, _briefing_cache_key(patient_id)):
+        return
+    try:
+        await get_patient_briefing(
+            {"patient_id": patient_id},
+            {"redis_client": redis_client, "langfuse": langfuse},
+        )
+    except Exception as exc:
+        logger.warning("Briefing warm fetch failed", extra={"patient_id": patient_id, "error": str(exc)})
+
+
 # ── Tool implementations ──────────────────────────────────────────────────────
 
 async def get_census_summary(
@@ -99,9 +253,8 @@ async def get_census_summary(
 
     redis_client: aioredis.Redis | None = session_context.get("redis_client")
     langfuse = session_context.get("langfuse")
-    session_id: str | None = session_context.get("session_id")
 
-    cache_key = f"copilot:census:{session_id}" if session_id else None
+    cache_key = census_cache_key(provider_id, patient_ids)
 
     entries = await build_census(
         patient_ids,
@@ -113,24 +266,11 @@ async def get_census_summary(
 
     bundles: dict[str, dict] = {}
     for entry in entries:
-        bundle_key = f"copilot:bundle:{entry.patient_id}"
-        bundle: dict | None = None
-        if redis_client:
-            try:
-                cached_bundle = await redis_client.get(bundle_key)
-                if cached_bundle:
-                    bundle = json.loads(cached_bundle)
-            except Exception as exc:
-                logger.warning("Bundle cache read failed", extra={"patient_id": entry.patient_id, "error": str(exc)})
-
+        bundle = await _get_cached_bundle(redis_client, entry.patient_id)
         if bundle is None:
             try:
                 bundle = await fhir_client.get_bundle_for_patient(entry.patient_id)
-                if redis_client:
-                    try:
-                        await redis_client.setex(bundle_key, _CACHE_TTL, json.dumps(bundle))
-                    except Exception as exc:
-                        logger.warning("Bundle cache write failed", extra={"patient_id": entry.patient_id, "error": str(exc)})
+                await _set_cached_bundle(redis_client, entry.patient_id, bundle)
             except Exception:
                 bundle = {"resources": {}}
 
@@ -154,6 +294,13 @@ async def get_census_summary(
     ]
 
     duration_ms = int((time.monotonic() - t0) * 1000)
+    log_tool_outcome(
+        tool_name="get_census_summary",
+        duration_ms=duration_ms,
+        cache="n/a",
+        session_id=session_context.get("session_id"),
+        extra={"census_size": len(verified)},
+    )
     return {
         "result": {"census": verified, "total": len(verified)},
         "citations": citations,
@@ -168,6 +315,24 @@ async def get_patient_briefing(
     t0 = time.monotonic()
     patient_id: str = input["patient_id"]
     langfuse = session_context.get("langfuse")
+    redis_client: aioredis.Redis | None = session_context.get("redis_client")
+
+    # Briefings are deterministic given the bundle and are expensive (1-2 LLM calls
+    # plus 8 FHIR searches). Serve from Redis when available; first call after a
+    # bundle change naturally regenerates because the bundle cache turns over too.
+    cached = await _get_cached_briefing(redis_client, patient_id)
+    if cached is not None:
+        cached.setdefault("metadata", {})["cache"] = "hit"
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        cached["metadata"]["duration_ms"] = duration_ms
+        log_tool_outcome(
+            tool_name="get_patient_briefing",
+            duration_ms=duration_ms,
+            cache="hit",
+            session_id=session_context.get("session_id"),
+            patient_id=patient_id,
+        )
+        return cached
 
     patient = await fhir_client.get_patient(patient_id)
     bundle = await fhir_client.get_bundle_for_patient(patient_id)
@@ -178,7 +343,7 @@ async def get_patient_briefing(
 
     citations = _citation_from_briefing(verified, patient_id)
     duration_ms = int((time.monotonic() - t0) * 1000)
-    return {
+    payload = {
         "result": verified.model_dump(),
         "citations": citations,
         "metadata": _empty_metadata(
@@ -188,6 +353,18 @@ async def get_patient_briefing(
             ["Patient", "Observation", "Condition", "MedicationRequest", "AllergyIntolerance"],
         ),
     }
+    payload["metadata"]["cache"] = "miss"
+
+    await _set_cached_briefing(redis_client, patient_id, payload)
+
+    log_tool_outcome(
+        tool_name="get_patient_briefing",
+        duration_ms=duration_ms,
+        cache="miss",
+        session_id=session_context.get("session_id"),
+        patient_id=patient_id,
+    )
+    return payload
 
 
 async def query_patient_records(
@@ -222,6 +399,13 @@ async def query_patient_records(
     answer_dict = await handler.answer(effective_session, patient_id, query)
 
     duration_ms = int((time.monotonic() - t0) * 1000)
+    log_tool_outcome(
+        tool_name="query_patient_records",
+        duration_ms=duration_ms,
+        cache="n/a",
+        session_id=session_id,
+        patient_id=patient_id,
+    )
     return {
         "result": answer_dict,
         "citations": [],
@@ -267,6 +451,14 @@ async def get_medication_safety(
     ]
 
     duration_ms = int((time.monotonic() - t0) * 1000)
+    log_tool_outcome(
+        tool_name="get_medication_safety",
+        duration_ms=duration_ms,
+        cache="n/a",
+        session_id=session_context.get("session_id"),
+        patient_id=patient_id,
+        extra={"flag_count": len(flags_out)},
+    )
     return {
         "result": {
             "patient_id": patient_id,
@@ -315,6 +507,13 @@ async def generate_handoff(
     ]
 
     duration_ms = int((time.monotonic() - t0) * 1000)
+    log_tool_outcome(
+        tool_name="generate_handoff",
+        duration_ms=duration_ms,
+        cache="n/a",
+        session_id=session_context.get("session_id"),
+        extra={"patient_count": len(patients_out)},
+    )
     return {
         "result": {"patients": patients_out, "total": len(patients_out)},
         "citations": [],
@@ -392,4 +591,6 @@ __all__ = [
     "get_medication_safety",
     "generate_handoff",
     "get_triage_rationale",
+    "warm_bundle_for_patient",
+    "warm_briefing_for_patient",
 ]
