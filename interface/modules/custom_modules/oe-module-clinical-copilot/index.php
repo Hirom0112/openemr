@@ -77,7 +77,11 @@ if ($providerId > 0) {
         }
     }
 }
-$sessionId    = session_id() ?: uniqid('copilot-', true);
+// Deterministic session id keyed to (provider, calendar day) so the same
+// physician's conversation persists across iframe reloads but starts fresh
+// each morning. uniqid() would mint a new id on every load and orphan
+// every prior turn in the agent-api checkpointer.
+$sessionId    = 'copilot-' . hash('sha256', $providerId . '|' . date('Y-m-d'));
 $patientIds   = $oemrSession['copilot_patient_ids'] ?? $_SESSION['copilot_patient_ids'] ?? [];
 if (empty($patientIds) && !empty($_GET['pids'])) {
     $patientIds = array_filter(array_map('intval', explode(',', $_GET['pids'])));
