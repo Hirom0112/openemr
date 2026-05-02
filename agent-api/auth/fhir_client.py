@@ -19,10 +19,20 @@ import time
 from typing import Any
 
 import httpx
+from prometheus_client import Counter
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+agent_fhir_token_cache_hits_total = Counter(
+    "agent_fhir_token_cache_hits_total",
+    "In-memory FHIR access-token cache hits",
+)
+agent_fhir_token_cache_misses_total = Counter(
+    "agent_fhir_token_cache_misses_total",
+    "In-memory FHIR access-token cache misses (forced a refresh)",
+)
 
 _token_cache: dict[str, Any] = {}
 _token_lock = asyncio.Lock()
@@ -108,6 +118,7 @@ async def get_access_token(force_refresh: bool = False) -> str:
             or time.monotonic() >= expiry
         )
         if needs_refresh:
+            agent_fhir_token_cache_misses_total.inc()
             logger.info(
                 "Fetching new FHIR access token force_refresh=%s key_changed=%s expired=%s",
                 force_refresh,
@@ -118,6 +129,9 @@ async def get_access_token(force_refresh: bool = False) -> str:
             _token_cache["token"] = token
             _token_cache["expiry"] = new_expiry
             _token_cache["key"] = cache_key
+        else:
+            agent_fhir_token_cache_hits_total.inc()
+            logger.debug("FHIR token cache hit", extra={"expires_in_s": int(expiry - time.monotonic())})
         return _token_cache["token"]
 
 
@@ -233,9 +247,13 @@ class FHIRClient:
         this falls back to all patients when the participant search returns nothing.
         """
         if provider_id:
+            # Synthetic encounters land as status=in-progress (admitted but
+            # not yet discharged) so a status=finished filter zeroes the
+            # result. Drop the filter entirely and rely on participant +
+            # _sort=_id for stable, deterministic ordering across reloads.
             result = await self.search("Encounter", {
                 "participant.individual": f"Practitioner/{provider_id}",
-                "status": "finished",
+                "_sort": "_id",
                 "_count": str(count),
             })
             seen: set[str] = set()
@@ -247,14 +265,14 @@ class FHIRClient:
                     seen.add(pid)
                     patient_ids.append(pid)
             if patient_ids:
-                return patient_ids
+                return sorted(patient_ids)
             logger.info(
                 "Participant-based encounter search returned 0 results; "
                 "falling back to all patients provider_id=%s",
                 provider_id,
             )
-        result = await self.search("Patient", {"_count": str(count)})
-        return [e["resource"]["id"] for e in result.get("entry", [])]
+        result = await self.search("Patient", {"_count": str(count), "_sort": "_id"})
+        return sorted(e["resource"]["id"] for e in result.get("entry", []))
 
     async def get_patient(self, patient_id: str) -> dict[str, Any]:
         fhir_id = await self._resolve_patient_id(patient_id)

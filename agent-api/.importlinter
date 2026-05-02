@@ -1,0 +1,141 @@
+[importlinter]
+root_packages =
+    agent
+    briefing
+    triage
+    query
+    verification
+    medication
+    handoff
+    auth
+    checkpointer
+    observability
+
+# observability is a leaf: cross-cutting helpers (json logging, request_id,
+# tool log helper) must not depend on any business sibling.
+[importlinter:contract:observability-is-leaf]
+name = observability must not import any sibling module
+type = forbidden
+source_modules =
+    observability
+forbidden_modules =
+    agent
+    briefing
+    triage
+    query
+    verification
+    medication
+    handoff
+    auth
+    checkpointer
+
+# auth is a leaf: it must not depend on any sibling module.
+[importlinter:contract:auth-is-leaf]
+name = auth must not import any sibling module
+type = forbidden
+source_modules =
+    auth
+forbidden_modules =
+    agent
+    briefing
+    triage
+    query
+    verification
+    medication
+    handoff
+    checkpointer
+
+# checkpointer is a leaf: it must not depend on any sibling module.
+[importlinter:contract:checkpointer-is-leaf]
+name = checkpointer must not import any sibling module
+type = forbidden
+source_modules =
+    checkpointer
+forbidden_modules =
+    agent
+    briefing
+    triage
+    query
+    verification
+    medication
+    handoff
+    auth
+
+# triage must not reach into query. They are siblings owned by different
+# concerns; routing/search lives in query, clinical ranking in triage.
+[importlinter:contract:triage-not-query]
+name = triage must not import query
+type = forbidden
+source_modules =
+    triage
+forbidden_modules =
+    query
+
+# Symmetry: query must not depend on triage either.
+[importlinter:contract:query-not-triage]
+name = query must not import triage
+type = forbidden
+source_modules =
+    query
+forbidden_modules =
+    triage
+
+# agent.tools is the dispatcher tool surface. Sibling packages must never
+# import from it (would invert the dependency direction and create cycles).
+[importlinter:contract:no-upward-into-agent-tools]
+name = sibling packages must not import from agent.tools
+type = forbidden
+source_modules =
+    briefing
+    triage
+    query
+    verification
+    medication
+    handoff
+    auth
+    checkpointer
+forbidden_modules =
+    agent.tools
+
+# medication is a leaf among siblings (only depends on agent + verification,
+# both of which are not in this list). It must stay decoupled from other
+# clinical workflows.
+[importlinter:contract:medication-isolated]
+name = medication must not depend on other clinical sibling packages
+type = forbidden
+source_modules =
+    medication
+forbidden_modules =
+    briefing
+    triage
+    query
+    handoff
+
+# Nothing other than the agent dispatcher tool surface (agent.tools) and the
+# HTTP entrypoint should import handoff. Enforce that other clinical packages
+# do not depend on handoff.
+[importlinter:contract:handoff-not-imported-by-clinical]
+name = clinical sibling packages must not import handoff
+type = forbidden
+source_modules =
+    briefing
+    triage
+    query
+    verification
+    medication
+forbidden_modules =
+    handoff
+
+# query is a top-level workflow consumed only by the dispatcher / HTTP layer.
+# No other sibling clinical package should depend on it.
+[importlinter:contract:query-not-imported-by-clinical]
+name = clinical sibling packages must not import query
+type = forbidden
+source_modules =
+    briefing
+    triage
+    verification
+    medication
+    handoff
+forbidden_modules =
+    query

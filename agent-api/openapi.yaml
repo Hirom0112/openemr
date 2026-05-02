@@ -1,0 +1,649 @@
+openapi: 3.1.0
+info:
+  title: Clinical Co-Pilot API
+  version: 0.1.0
+paths:
+  /metrics:
+    get:
+      summary: Metrics
+      description: Endpoint that serves Prometheus metrics.
+      operationId: metrics_metrics_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /health:
+    get:
+      summary: Health
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Health Health Get
+  /fhir/patient/{patient_id}:
+    get:
+      summary: Get Patient
+      operationId: get_patient_fhir_patient__patient_id__get
+      parameters:
+      - name: patient_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Patient Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Patient Fhir Patient  Patient Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /diag/fhir:
+    get:
+      summary: Diag Fhir
+      description: 'One-shot FHIR connectivity probe. Gated by COPILOT_DIAG env flag.
+
+
+        Forces a fresh token, performs GET /Patient?identifier=1, and returns
+
+        the resolved URL, status, body snippet, and token metadata. Never logs
+
+        or returns the bearer token itself.'
+      operationId: diag_fhir_diag_fhir_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Diag Fhir Diag Fhir Get
+  /triage/census:
+    post:
+      summary: Triage Census
+      operationId: triage_census_triage_census_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CensusRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Triage Census Triage Census Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /briefing/{patient_id}:
+    post:
+      summary: Briefing
+      operationId: briefing_briefing__patient_id__post
+      parameters:
+      - name: patient_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Patient Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BriefingResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /session/{session_id}/query:
+    post:
+      summary: Targeted Query
+      operationId: targeted_query_session__session_id__query_post
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Targeted Query Session  Session Id  Query Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /medication/safety/{patient_id}:
+    get:
+      summary: Medication Safety
+      operationId: medication_safety_medication_safety__patient_id__get
+      parameters:
+      - name: patient_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Patient Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Medication Safety Medication Safety  Patient Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /handoff/generate:
+    post:
+      summary: Handoff Generate
+      operationId: handoff_generate_handoff_generate_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandoffRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Handoff Generate Handoff Generate Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /agent/triage_rationale/{patient_id}:
+    post:
+      summary: Triage Rationale
+      description: "Click-to-expand triage rationale \u2014 direct call, not dispatched."
+      operationId: triage_rationale_agent_triage_rationale__patient_id__post
+      parameters:
+      - name: patient_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Patient Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TriageRationaleRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Triage Rationale Agent Triage Rationale  Patient Id  Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /agent/query:
+    post:
+      summary: Agent Query
+      description: "Dispatcher \u2014 routes all physician queries through the tool_use\
+        \ loop."
+      operationId: agent_query_agent_query_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentQueryRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Agent Query Agent Query Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /agent/prefetch:
+    post:
+      summary: Agent Prefetch
+      description: "Signal that the React panel has mounted and FHIR pre-fetch should\
+        \ begin.\n\nV1: acknowledges immediately; the actual cache warming is handled\
+        \ by the\nexisting FHIR client on the first get_census_summary tool call.\
+        \  This\nendpoint exists so the UI can fire a non-blocking fetch on mount\
+        \ without\nwaiting for it \u2014 keeping the session-open flow in UX_SPEC\
+        \ \xA73 intact."
+      operationId: agent_prefetch_agent_prefetch_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrefetchRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Agent Prefetch Agent Prefetch Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /agent/client-timing:
+    post:
+      summary: Client Timing
+      description: Receive a browser-reported timing sample. Logs + emits a histogram
+        observation.
+      operationId: client_timing_agent_client_timing_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientTimingRequest'
+        required: true
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /session/{session_id}/message:
+    post:
+      summary: Post Message
+      operationId: post_message_session__session_id__message_post
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Post Message Session  Session Id  Message Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /session/{session_id}/history:
+    get:
+      summary: Get History
+      operationId: get_history_session__session_id__history_get
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get History Session  Session Id  History Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    AgentQueryRequest:
+      properties:
+        message:
+          type: string
+          title: Message
+        session_id:
+          type: string
+          title: Session Id
+        provider_id:
+          type: string
+          title: Provider Id
+        patient_ids:
+          items:
+            type: string
+          type: array
+          title: Patient Ids
+          default: []
+        provider_name:
+          type: string
+          title: Provider Name
+          default: Provider
+        census_context:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Census Context
+      type: object
+      required:
+      - message
+      - session_id
+      - provider_id
+      title: AgentQueryRequest
+    BriefingResponse:
+      properties:
+        patient_id:
+          type: string
+          title: Patient Id
+        name:
+          type: string
+          title: Name
+        sections:
+          items:
+            $ref: '#/components/schemas/BriefingSection'
+          type: array
+          title: Sections
+        alerts:
+          items:
+            type: string
+          type: array
+          title: Alerts
+          description: 'Hard alerts that must always be shown: critical labs, blank
+            code status, stale values.'
+        generated_at:
+          type: string
+          title: Generated At
+          description: ISO-8601 UTC timestamp of generation.
+      type: object
+      required:
+      - patient_id
+      - name
+      - generated_at
+      title: BriefingResponse
+    BriefingSection:
+      properties:
+        section:
+          type: string
+          title: Section
+          description: 'Section name: diagnosis | medications | vitals | labs | allergies
+            | alerts'
+        summary:
+          type: string
+          title: Summary
+          description: 1-2 sentence plain-English summary of the section.
+        claims:
+          items:
+            $ref: '#/components/schemas/ClinicalClaim'
+          type: array
+          title: Claims
+          description: Individual clinical claims with source attribution.
+      type: object
+      required:
+      - section
+      - summary
+      - claims
+      title: BriefingSection
+    CensusRequest:
+      properties:
+        patient_ids:
+          items:
+            type: string
+          type: array
+          title: Patient Ids
+        session_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Id
+      type: object
+      required:
+      - patient_ids
+      title: CensusRequest
+    ClientTimingRequest:
+      properties:
+        action:
+          type: string
+          title: Action
+        duration_ms:
+          type: integer
+          title: Duration Ms
+        request_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Request Id
+        session_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Id
+        t_navigation_start_ms:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: T Navigation Start Ms
+        extra:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Extra
+      type: object
+      required:
+      - action
+      - duration_ms
+      title: ClientTimingRequest
+    ClinicalClaim:
+      properties:
+        text:
+          type: string
+          title: Text
+          description: The clinical statement in plain English.
+        source_resource:
+          type: string
+          title: Source Resource
+          description: FHIR resource type (Observation, Condition, etc.)
+        source_code:
+          type: string
+          title: Source Code
+          description: LOINC or SNOMED code of the source record.
+        source_value:
+          type: string
+          title: Source Value
+          description: Exact value from the source record.
+        source_dt:
+          type: string
+          title: Source Dt
+          description: ISO-8601 effective date/time of the source record.
+      type: object
+      required:
+      - text
+      - source_resource
+      - source_code
+      - source_value
+      - source_dt
+      title: ClinicalClaim
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    HandoffRequest:
+      properties:
+        patient_ids:
+          items:
+            type: string
+          type: array
+          title: Patient Ids
+      type: object
+      required:
+      - patient_ids
+      title: HandoffRequest
+    MessageRequest:
+      properties:
+        role:
+          type: string
+          title: Role
+          default: user
+        content:
+          type: string
+          title: Content
+      type: object
+      required:
+      - content
+      title: MessageRequest
+    PrefetchRequest:
+      properties:
+        session_id:
+          type: string
+          title: Session Id
+        provider_id:
+          type: string
+          title: Provider Id
+        patient_ids:
+          items:
+            type: string
+          type: array
+          title: Patient Ids
+          default: []
+      type: object
+      required:
+      - session_id
+      - provider_id
+      title: PrefetchRequest
+    QueryRequest:
+      properties:
+        patient_id:
+          type: string
+          title: Patient Id
+        query:
+          type: string
+          title: Query
+      type: object
+      required:
+      - patient_id
+      - query
+      title: QueryRequest
+    TriageRationaleRequest:
+      properties:
+        patient_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Patient Id
+        session_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Id
+        provider_id:
+          type: string
+          title: Provider Id
+          default: system
+      type: object
+      title: TriageRationaleRequest
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
