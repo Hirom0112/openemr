@@ -340,20 +340,22 @@ class TestPainFreshness:
         assert criteria.pain_score_high is True
 
     def test_stale_severe_pain_does_not_fire(self):
-        # 4-day-old pain=9 must not fire — previously did.
+        # Pain reading older than the freshness window must not fire.
         from datetime import datetime, timedelta, timezone
+        from triage.criteria import PAIN_FRESHNESS_WINDOW
         now = datetime.now(timezone.utc)
-        stale = (now - timedelta(days=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        stale = (now - PAIN_FRESHNESS_WINDOW - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         pain = _obs("72514-3", {"valueQuantity": {"value": 9}},
                     category="vital-signs", effective=stale)
         criteria = extract(_bundle(pain))
         assert criteria.pain_score_high is False
 
-    def test_pain_just_outside_4h_window_does_not_fire(self):
-        # Boundary: 5h old should not fire on the 4h pain window.
+    def test_pain_just_outside_window_does_not_fire(self):
+        # Boundary: just outside the configured pain freshness window does not fire.
         from datetime import datetime, timedelta, timezone
+        from triage.criteria import PAIN_FRESHNESS_WINDOW
         now = datetime.now(timezone.utc)
-        ts = (now - timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ts = (now - PAIN_FRESHNESS_WINDOW - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         pain = _obs("72514-3", {"valueQuantity": {"value": 9}},
                     category="vital-signs", effective=ts)
         criteria = extract(_bundle(pain))
@@ -456,3 +458,120 @@ class TestIsolationExtraction:
         criteria = extract(bundle)
         assert criteria.isolation_precaution == "Unknown"
         assert criteria.blank_isolation is True
+
+
+# ── BP component shape (OpenEMR 85354-9 with components) ─────────────────────
+
+@pytest.mark.hard_failure
+@pytest.mark.clinical_accuracy
+class TestBloodPressureComponentShape:
+    """OpenEMR emits a single BP Observation with code 85354-9 and SBP/DBP
+    nested under component[].  Both the flat shape (separate top-level
+    SBP/DBP Observations, used by the synthetic bundle JSONs) and the
+    component shape must extract correctly."""
+
+    def test_bp_component_shape_extracts_sbp(self):
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        ts = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        bp = {
+            "resourceType": "Observation",
+            "code": {"coding": [{"system": "http://loinc.org", "code": "85354-9"}]},
+            "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "vital-signs"}]}],
+            "effectiveDateTime": ts,
+            "component": [
+                {"code": {"coding": [{"system": "http://loinc.org", "code": "8480-6"}]},
+                 "valueQuantity": {"value": 88, "unit": "mmHg"}},
+                {"code": {"coding": [{"system": "http://loinc.org", "code": "8462-4"}]},
+                 "valueQuantity": {"value": 54, "unit": "mmHg"}},
+            ],
+        }
+        criteria = extract(_bundle(bp))
+        assert criteria.latest_vitals.get("8480-6") == 88.0
+        assert criteria.latest_vitals.get("8462-4") == 54.0
+        # SBP=88 ≤ 100 → qSOFA +1 and circulatory critical vital
+        assert criteria.qsofa_score >= 1
+        assert criteria.critical_vital_circulatory is True
+
+    def test_flat_bp_shape_still_extracts_sbp(self):
+        # Synthetic-bundle shape: SBP as a top-level Observation.
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        ts = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        sbp = _obs(LOINC_SBP, {"valueQuantity": {"value": 88, "unit": "mmHg"}},
+                   category="vital-signs", effective=ts)
+        criteria = extract(_bundle(sbp))
+        assert criteria.latest_vitals.get(LOINC_SBP) == 88.0
+        assert criteria.qsofa_score >= 1
+
+
+# ── Chronic-condition matching (ICD-10 variants + text fallback) ─────────────
+
+def _bundle_with_condition(condition: dict) -> dict:
+    return {"resources": {"Observation": [], "Condition": [{"resource": condition}]}}
+
+
+@pytest.mark.hard_failure
+@pytest.mark.clinical_accuracy
+class TestChronicConditionMatching:
+    def _active_clinical_status(self) -> dict:
+        return {
+            "coding": [{
+                "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+                "code": "active",
+            }],
+        }
+
+    def test_icd10_variant_system_uri_matches(self):
+        # YAML stores http://hl7.org/fhir/sid/icd-10; OpenEMR may emit -cm.
+        cond = {
+            "resourceType": "Condition",
+            "clinicalStatus": self._active_clinical_status(),
+            "code": {"coding": [{
+                "system": "http://hl7.org/fhir/sid/icd-10-cm",
+                "code": "I10",
+            }]},
+        }
+        criteria = extract(_bundle_with_condition(cond))
+        assert criteria.active_condition is True
+
+    def test_canonical_icd10_system_still_matches(self):
+        cond = {
+            "resourceType": "Condition",
+            "clinicalStatus": self._active_clinical_status(),
+            "code": {"coding": [{
+                "system": "http://hl7.org/fhir/sid/icd-10",
+                "code": "I10",
+            }]},
+        }
+        criteria = extract(_bundle_with_condition(cond))
+        assert criteria.active_condition is True
+
+    def test_text_only_chronic_label_matches(self):
+        # OpenEMR emits Conditions with only code.text and no coding[]; we
+        # match against curated label substrings (case-insensitive).
+        cond = {
+            "resourceType": "Condition",
+            "clinicalStatus": self._active_clinical_status(),
+            "code": {"text": "Essential hypertension — chronic management"},
+        }
+        criteria = extract(_bundle_with_condition(cond))
+        assert criteria.active_condition is True
+
+    def test_text_only_acute_does_not_match(self):
+        cond = {
+            "resourceType": "Condition",
+            "clinicalStatus": self._active_clinical_status(),
+            "code": {"text": "Acute pneumonia"},
+        }
+        criteria = extract(_bundle_with_condition(cond))
+        assert criteria.active_condition is False
+
+    def test_inactive_chronic_does_not_match(self):
+        cond = {
+            "resourceType": "Condition",
+            "clinicalStatus": {"coding": [{"code": "resolved"}]},
+            "code": {"text": "Essential hypertension"},
+        }
+        criteria = extract(_bundle_with_condition(cond))
+        assert criteria.active_condition is False
