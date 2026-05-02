@@ -47,9 +47,63 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   ]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const [hoveredHeaderId, setHoveredHeaderId] = useState<string | null>(null);
+  const lastAssistantIdRef = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const censusDispatched = useRef(false);
   const censusContext = useRef<string | undefined>(undefined);
+
+  // When a NEW finalized assistant message arrives, collapse all prior assistant messages.
+  // Census responses are exempt — they stay open as the persistent reference frame.
+  useEffect(() => {
+    const assistantMsgs = messages.filter((m) => m.role === 'assistant' && m.response);
+    if (assistantMsgs.length === 0) return;
+    const latest = assistantMsgs[assistantMsgs.length - 1];
+    if (latest.id === lastAssistantIdRef.current) return;
+    lastAssistantIdRef.current = latest.id;
+    if (assistantMsgs.length <= 1) return;
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      for (let i = 0; i < assistantMsgs.length - 1; i++) {
+        const m = assistantMsgs[i];
+        if (m.response?.type === 'census') continue;
+        next.add(m.id);
+      }
+      next.delete(latest.id);
+      return next;
+    });
+  }, [messages]);
+
+  const toggleCollapsed = useCallback((id: string) => {
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const formatHeaderTime = (id: string): string => {
+    const m = id.match(/-(\d+)$/);
+    const ts = m ? Number(m[1]) : NaN;
+    const d = Number.isFinite(ts) ? new Date(ts) : new Date();
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+
+  const labelForResponse = (response: AgentResponse | undefined): string => {
+    if (!response) return 'Response';
+    switch (response.type) {
+      case 'census': return 'Census';
+      case 'briefing': return 'Briefing';
+      case 'query_answer': return 'Answer';
+      case 'medication_safety': return 'Medications';
+      case 'handoff': return 'Handoff';
+      case 'error': return 'Error';
+      case 'text':
+      default: return 'Response';
+    }
+  };
 
   useEffect(() => {
     if (censusDispatched.current) return;
@@ -275,33 +329,93 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
             }
 
             // assistant
+            // Census is the persistent reference frame — never collapsible.
+            const isCensus = msg.response?.type === 'census';
+            const collapsed = !isCensus && collapsedIds.has(msg.id);
+            const label = labelForResponse(msg.response);
+            const time = formatHeaderTime(msg.id);
+            const isHovered = !isCensus && hoveredHeaderId === msg.id;
+            const headerStyle: React.CSSProperties = {
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontSize: 11,
+              color: '#6b7280',
+              fontWeight: 500,
+              padding: '4px 8px',
+              marginBottom: collapsed ? 8 : 4,
+              marginLeft: 34,
+              marginRight: '4%',
+              background: isHovered ? '#f3f4f6' : 'transparent',
+              border: 'none',
+              borderRadius: 6,
+              cursor: isCensus ? 'default' : 'pointer',
+              width: 'calc(96% - 34px)',
+              textAlign: 'left',
+              fontFamily: 'inherit',
+              transition: 'background 0.12s',
+            };
+            const headerInner = (
+              <>
+                <span style={{ color: '#3b5bdb' }}>◆</span>
+                <span>{label}</span>
+                <span style={{ color: '#9ca3af' }}>·</span>
+                <span>{time}</span>
+                {!isCensus && (
+                  <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }} aria-hidden="true">
+                    {collapsed ? '▸' : '▾'}
+                  </span>
+                )}
+              </>
+            );
             return (
-              <div key={msg.id} style={styles.assistantRow}>
-                <div style={styles.assistantAvatar} aria-hidden="true">AI</div>
-                <div style={styles.assistantBubble}>
-                  {msg.response ? (
-                    <ResponseRenderer
-                      response={msg.response}
-                      onBrief={(name, patientId) => {
-                        if (patientId) {
-                          void dispatchBriefDirect(name, patientId);
-                        } else {
-                          void dispatchMessage(`Brief ${name}`);
-                        }
-                      }}
-                      onMeds={(name, patientId) => {
-                        if (patientId) {
-                          void dispatchMedsDirect(name, patientId);
-                        } else {
-                          void dispatchMessage(`show meds for ${name}`);
-                        }
-                      }}
-                      providerName={displayName}
-                    />
-                  ) : (
-                    <span style={{ color: '#9ca3af' }}>…</span>
-                  )}
-                </div>
+              <div key={msg.id}>
+                {isCensus ? (
+                  <div style={headerStyle}>{headerInner}</div>
+                ) : (
+                  <button
+                    type="button"
+                    aria-expanded={!collapsed}
+                    aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${label} message`}
+                    onClick={() => toggleCollapsed(msg.id)}
+                    onMouseEnter={() => setHoveredHeaderId(msg.id)}
+                    onMouseLeave={() => setHoveredHeaderId((cur) => (cur === msg.id ? null : cur))}
+                    onFocus={() => setHoveredHeaderId(msg.id)}
+                    onBlur={() => setHoveredHeaderId((cur) => (cur === msg.id ? null : cur))}
+                    style={headerStyle}
+                  >
+                    {headerInner}
+                  </button>
+                )}
+                {!collapsed && (
+                  <div style={styles.assistantRow}>
+                    <div style={styles.assistantAvatar} aria-hidden="true">AI</div>
+                    <div style={styles.assistantBubble}>
+                      {msg.response ? (
+                        <ResponseRenderer
+                          response={msg.response}
+                          onBrief={(name, patientId) => {
+                            if (patientId) {
+                              void dispatchBriefDirect(name, patientId);
+                            } else {
+                              void dispatchMessage(`Brief ${name}`);
+                            }
+                          }}
+                          onMeds={(name, patientId) => {
+                            if (patientId) {
+                              void dispatchMedsDirect(name, patientId);
+                            } else {
+                              void dispatchMessage(`show meds for ${name}`);
+                            }
+                          }}
+                          providerName={displayName}
+                        />
+                      ) : (
+                        <span style={{ color: '#9ca3af' }}>…</span>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
