@@ -163,3 +163,10 @@ repos:
     language: system
     stages:
     - commit-msg
+
+  - id: lint-imports
+    name: lint-imports (agent-api architecture contracts)
+    entry: bash -c 'cd agent-api && lint-imports'
+    language: system
+    pass_filenames: false
+    files: ^agent-api/.*\.py$
