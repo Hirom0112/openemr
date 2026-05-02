@@ -339,12 +339,28 @@ def load_patient(base_url: str, token: str, conn,
         # "other" patients get provider_id=0 (excluded from Chen's panel).
         # Chen patients get her real user_id so they show on her 15-patient panel.
         target_provider_id = 0 if p_def.get("provider") == "other" else chen_user_id
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE form_encounter SET provider_id = %s WHERE encounter = %s",
-                (target_provider_id, eid),
-            )
-        conn.commit()
+        # OpenEMR's REST insert and our pymysql connection use separate sessions;
+        # MariaDB occasionally raises 1020 ("Record has changed since last read")
+        # on the very first UPDATE because the row's generation hasn't propagated
+        # to our connection yet. Retry once after a short reconnect.
+        for attempt in range(3):
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE form_encounter SET provider_id = %s WHERE encounter = %s",
+                        (target_provider_id, eid),
+                    )
+                conn.commit()
+                break
+            except pymysql.MySQLError as exc:
+                if exc.args and exc.args[0] in (1020, 1213) and attempt < 2:
+                    try:
+                        conn.rollback()
+                    except pymysql.MySQLError:
+                        pass
+                    time.sleep(0.3)
+                    continue
+                raise
 
         # Allergies
         for alg in p_def.get("allergies", []):
@@ -391,420 +407,482 @@ def load_patient(base_url: str, token: str, conn,
 
 
 # ---------------------------------------------------------------------------
-# Patient definitions (18 patients, seed 42)
+# Patient definitions — 25 patients aligned with synthetic_data/bundles/pt-NNN.json.
+# Names, DOBs, sex, providers, conditions, meds, vitals and labs mirror the
+# canonical bundle for each pt-NNN so that data planted by load.py classifies
+# the same way as the bundle JSON used by the rules-engine tests.
 # ---------------------------------------------------------------------------
 
 PATIENTS: list[dict[str, Any]] = [
 
-    # ── S1: Marcus Webb — qSOFA=3 (URGENT P1) ─────────────────────────────
+    # ── pt-001: Marcus Webb — sepsis/pneumonia, qSOFA + critical lactate (P1) ─
     {
         "fname": "Marcus", "lname": "Webb", "dob": "1968-03-14", "sex": "Male",
-        "admit_date": "2026-04-27", "admit_reason": "Pneumonia/Sepsis — bed 501",
-        "conditions": [{"title": "Community-acquired pneumonia", "icd": "J18.9"},
-                       {"title": "Sepsis", "icd": "A41.9"}],
-        "allergies": [{"title": "Sulfa drugs", "reaction": "Rash", "type": "allergy"}],
-        "medications": [{"title": "Piperacillin-Tazobactam 3.375g IV q6h"},
+        "admit_date": "2026-05-01", "admit_reason": "Sepsis due to pneumonia",
+        "conditions": [{"title": "Sepsis", "icd": "A41.9"},
+                       {"title": "Pneumonia", "icd": "J18.9"}],
+        "allergies": [],
+        "medications": [{"title": "Vancomycin 1g IV"},
+                        {"title": "Piperacillin-tazobactam 3.375g IV"},
                         {"title": "Norepinephrine 0.1 mcg/kg/min IV"}],
         "vitals": [
-            # qSOFA: SBP<=100 (1pt), RR>=22 (1pt), AMS (GCS<15 approximated by note)
-            {"dt": "2026-04-29 05:15:00", "bps": 88, "bpd": 55,
+            {"dt": "2026-04-29 05:15:00", "bps": 88, "bpd": 54,
              "pulse": 118, "respiration": 26, "temperature": 38.9,
-             "oxygen_saturation": 91, "weight": 82, "height": 175},
-            {"dt": "2026-04-29 03:00:00", "bps": 94, "bpd": 60,
-             "pulse": 110, "respiration": 24, "temperature": 38.7,
-             "oxygen_saturation": 93},
+             "oxygen_saturation": 88, "weight": 82, "height": 175},
         ],
         "labs": [
             {"loinc": "2518-9", "name": "Lactate", "collected_dt": "2026-04-29 04:30:00",
-             "value": "4.2", "units": "mmol/L", "range": "0.5-2.2", "abnormal": "high",
+             "value": "4.2", "units": "mmol/L", "range": "0.5-2.2", "abnormal": "critical",
              "status": "final"},
             {"loinc": "6690-2", "name": "WBC", "collected_dt": "2026-04-29 03:45:00",
-             "value": "18.3", "units": "K/uL", "range": "4.5-11.0", "abnormal": "high",
+             "value": "18.4", "units": "10*3/uL", "range": "4.5-11.0", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "9269-2", "name": "Glasgow coma score total", "collected_dt": "2026-04-29 05:15:00",
+             "value": "12", "units": "{score}", "range": "13-15", "abnormal": "low",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 05:15:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── S2: Delia Fontaine — Critical K+ 6.4 unacknowledged (URGENT P2) ──
+    # ── pt-002: Delia Fontaine — AKI on CKD, critical K+ 6.4 (P3) ────────
     {
-        "fname": "Delia", "lname": "Fontaine", "dob": "1952-07-22", "sex": "Female",
-        "admit_date": "2026-04-28", "admit_reason": "AKI on CKD Stage 4",
+        "fname": "Delia", "lname": "Fontaine", "dob": "1952-11-07", "sex": "Female",
+        "admit_date": "2026-04-30", "admit_reason": "Acute kidney injury on CKD stage 4",
         "conditions": [{"title": "Acute kidney injury", "icd": "N17.9"},
                        {"title": "Chronic kidney disease stage 4", "icd": "N18.4"}],
-        "allergies": [{"title": "Ibuprofen", "reaction": "AKI", "type": "allergy"}],
-        "medications": [{"title": "Furosemide 40mg IV"},
-                        {"title": "Sodium bicarbonate 150mEq/L IV"}],
+        "allergies": [],
+        "medications": [{"title": "Sodium bicarbonate 8.4% IV"},
+                        {"title": "Aspirin 81mg PO daily"}],
         "vitals": [
-            {"dt": "2026-04-29 05:30:00", "bps": 152, "bpd": 94,
-             "pulse": 72, "respiration": 18, "temperature": 36.8,
-             "oxygen_saturation": 96},
+            {"dt": "2026-04-29 05:30:00", "bps": 148, "bpd": 88,
+             "pulse": 74, "respiration": 16, "temperature": 37.1,
+             "oxygen_saturation": 97},
         ],
         "labs": [
-            # Critical K+ at 03:12 — no physician acknowledgment
             {"loinc": "6298-4", "name": "Potassium", "collected_dt": "2026-04-29 03:12:00",
-             "value": "6.4", "units": "mEq/L", "range": "3.5-5.1", "abnormal": "critical",
+             "value": "6.4", "units": "mmol/L", "range": "3.5-5.1", "abnormal": "critical",
              "status": "final"},
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 03:12:00",
-             "value": "5.8", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "critical",
+             "value": "4.8", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "3094-0", "name": "Urea nitrogen", "collected_dt": "2026-04-29 03:12:00",
+             "value": "62", "units": "mg/dL", "range": "7-20", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 05:30:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── S3: Raymond Okafor — Blank code status (WATCH P7) ─────────────────
+    # ── pt-003: Raymond Okafor — COPD exacerbation, SpO2 91% (P4) ────────
     {
-        "fname": "Raymond", "lname": "Okafor", "dob": "1944-11-05", "sex": "Male",
-        "admit_date": "2026-04-28", "admit_reason": "COPD exacerbation",
+        "fname": "Raymond", "lname": "Okafor", "dob": "1945-06-22", "sex": "Male",
+        "admit_date": "2026-05-01", "admit_reason": "COPD exacerbation",
         "conditions": [{"title": "COPD exacerbation", "icd": "J44.1"}],
-        "allergies": [],  # no known allergies — clean
-        "medications": [{"title": "Ipratropium-Albuterol nebulizer q4h"},
-                        {"title": "Methylprednisolone 125mg IV q8h"}],
+        "allergies": [],
+        "medications": [{"title": "Ipratropium bromide inhaler"},
+                        {"title": "Methylprednisolone 125mg IV"}],
         "vitals": [
-            {"dt": "2026-04-29 05:00:00", "bps": 138, "bpd": 82,
-             "pulse": 88, "respiration": 20, "temperature": 37.2,
-             "oxygen_saturation": 90},
+            {"dt": "2026-04-29 05:00:00", "bps": 132, "bpd": 78,
+             "pulse": 88, "respiration": 20, "temperature": 37.4,
+             "oxygen_saturation": 91},
         ],
         "labs": [
-            {"loinc": "2745-0", "name": "pH arterial", "collected_dt": "2026-04-29 04:00:00",
-             "value": "7.32", "units": "", "range": "7.35-7.45", "abnormal": "low",
+            {"loinc": "6690-2", "name": "WBC", "collected_dt": "2026-04-29 04:00:00",
+             "value": "11.2", "units": "10*3/uL", "range": "4.5-11.0", "abnormal": "high",
              "status": "final"},
         ],
-        # No code_status entry — satisfies S3
+        # No code-status observation — bundle pt-003 omits 81638-3.
     },
 
-    # ── S4: Gloria Tran — Incomplete allergy section (WATCH) ──────────────
+    # ── pt-004: Gloria Tran — acute decompensated heart failure (P8) ─────
     {
         "provider": "other",
-        "fname": "Gloria", "lname": "Tran", "dob": "1958-04-30", "sex": "Female",
-        "admit_date": "2026-04-27", "admit_reason": "CHF exacerbation",
-        "conditions": [{"title": "Congestive heart failure", "icd": "I50.9"}],
-        # Allergy with no reaction or type — satisfies S4
-        "allergies": [{"title": "Unknown substance", "reaction": "", "type": ""}],
-        "medications": [{"title": "Furosemide 80mg IV bid"},
-                        {"title": "Lisinopril 10mg daily"}],
+        "fname": "Gloria", "lname": "Tran", "dob": "1958-09-03", "sex": "Female",
+        "admit_date": "2026-04-30", "admit_reason": "Acute decompensated heart failure",
+        "conditions": [{"title": "Heart failure", "icd": "I50.9"}],
+        "allergies": [{"title": "Sulfonamide", "reaction": "", "type": "allergy"}],
+        "medications": [{"title": "Furosemide 80mg IV"},
+                        {"title": "Lisinopril 10mg PO"}],
         "vitals": [
-            {"dt": "2026-04-29 05:45:00", "bps": 168, "bpd": 98,
-             "pulse": 92, "respiration": 22, "temperature": 36.9,
-             "oxygen_saturation": 92, "weight": 94, "height": 162},
+            {"dt": "2026-04-29 05:45:00", "bps": 156, "bpd": 94,
+             "pulse": 96, "respiration": 18, "temperature": 37.0,
+             "oxygen_saturation": 94},
         ],
         "labs": [
+            {"loinc": "42637-9", "name": "BNP", "collected_dt": "2026-04-29 03:30:00",
+             "value": "1840", "units": "pg/mL", "range": "0-100", "abnormal": "high",
+             "status": "final"},
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 03:30:00",
-             "value": "1.6", "units": "mg/dL", "range": "0.5-1.1", "abnormal": "high",
+             "value": "1.4", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "high",
              "status": "final"},
-            {"loinc": "6298-4", "name": "Potassium", "collected_dt": "2026-04-29 03:30:00",
-             "value": "3.2", "units": "mEq/L", "range": "3.5-5.1", "abnormal": "low",
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 05:45:00",
+             "value": "DNR/DNI", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── S5: Bernard Kowalski — Penicillin allergy + Amoxicillin (WATCH P5) ─
+    # ── pt-005: Bernard Kowalski — community-acquired pneumonia (P8) ─────
     {
         "provider": "other",
-        "fname": "Bernard", "lname": "Kowalski", "dob": "1962-09-18", "sex": "Male",
-        "admit_date": "2026-04-28", "admit_reason": "Community-acquired pneumonia",
-        "conditions": [{"title": "Community-acquired pneumonia", "icd": "J18.1"}],
+        "fname": "Bernard", "lname": "Kowalski", "dob": "1973-02-18", "sex": "Male",
+        "admit_date": "2026-05-01", "admit_reason": "Community-acquired pneumonia",
+        "conditions": [{"title": "Pneumonia", "icd": "J18.9"}],
         "allergies": [{"title": "Penicillin", "reaction": "Anaphylaxis", "type": "allergy"}],
-        # Amoxicillin added overnight — conflicts with Penicillin allergy
-        "medications": [{"title": "Amoxicillin 500mg PO tid"},
-                        {"title": "Azithromycin 500mg IV daily"}],
+        "medications": [{"title": "Amoxicillin 875mg PO q12h"},
+                        {"title": "Azithromycin 500mg PO daily"}],
         "vitals": [
-            {"dt": "2026-04-29 05:00:00", "bps": 124, "bpd": 76,
-             "pulse": 84, "respiration": 18, "temperature": 37.8,
+            {"dt": "2026-04-29 05:00:00", "bps": 122, "bpd": 76,
+             "pulse": 90, "respiration": 18, "temperature": 38.2,
              "oxygen_saturation": 95},
         ],
         "labs": [
             {"loinc": "6690-2", "name": "WBC", "collected_dt": "2026-04-29 02:30:00",
-             "value": "14.2", "units": "K/uL", "range": "4.5-11.0", "abnormal": "high",
+             "value": "14.6", "units": "10*3/uL", "range": "4.5-11.0", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 05:00:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── S6: Ingrid Nakamura — Discharge plan + pending CT (WATCH P6) ──────
+    # ── pt-006: Ingrid Nakamura — suspected pulmonary embolism (P8) ──────
     {
         "provider": "other",
-        "fname": "Ingrid", "lname": "Nakamura", "dob": "1971-02-14", "sex": "Female",
-        "admit_date": "2026-04-26", "admit_reason": "PE workup — dyspnea",
-        "conditions": [{"title": "Pulmonary embolism workup", "icd": "Z03.89"},
-                       {"title": "Dyspnea", "icd": "R06.09"}],
-        "allergies": [{"title": "Contrast dye", "reaction": "Hives", "type": "allergy"}],
-        "medications": [{"title": "Heparin 5000 units SC q8h"},
+        "fname": "Ingrid", "lname": "Nakamura", "dob": "1965-07-29", "sex": "Female",
+        "admit_date": "2026-04-29", "admit_reason": "Suspected pulmonary embolism",
+        "conditions": [{"title": "Pulmonary embolism", "icd": "I26.99"}],
+        "allergies": [],
+        "medications": [{"title": "Heparin 5000 units IV bolus"},
                         {"title": "Enoxaparin 1mg/kg SC q12h"}],
         "vitals": [
             {"dt": "2026-04-29 06:00:00", "bps": 118, "bpd": 72,
-             "pulse": 78, "respiration": 16, "temperature": 36.7,
-             "oxygen_saturation": 97},
+             "pulse": 102, "respiration": 19, "temperature": 37.2,
+             "oxygen_saturation": 93},
         ],
         "labs": [
-            {"loinc": "3255-7", "name": "D-dimer", "collected_dt": "2026-04-29 01:00:00",
-             "value": "3.8", "units": "ug/mL", "range": "0.0-0.5", "abnormal": "high",
+            {"loinc": "48066-5", "name": "D-dimer", "collected_dt": "2026-04-29 01:00:00",
+             "value": "3.2", "units": "mg/L FEU", "range": "0.0-0.5", "abnormal": "high",
              "status": "final"},
-            # CT chest ordered but pending (status=registered)
-            {"loinc": "24627-2", "name": "CT Chest", "collected_dt": "2026-04-29 06:00:00",
-             "value": "PENDING", "units": "", "range": "", "abnormal": "unknown",
-             "status": "registered"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 06:00:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
+             "status": "final"},
         ],
     },
 
-    # ── S7: Darnell Simmons — Nephrology consult unanswered >6h (WATCH P8) ─
+    # ── pt-007: Darnell Simmons — hypertensive urgency with AKI (P8) ─────
     {
-        "fname": "Darnell", "lname": "Simmons", "dob": "1955-06-30", "sex": "Male",
-        "admit_date": "2026-04-28", "admit_reason": "Hypertensive urgency / AKI",
-        "conditions": [{"title": "Hypertensive urgency", "icd": "I16.0"},
+        "provider": "other",
+        "fname": "Darnell", "lname": "Simmons", "dob": "1980-04-11", "sex": "Male",
+        "admit_date": "2026-04-30", "admit_reason": "Hypertensive urgency with AKI",
+        "conditions": [{"title": "Hypertensive disorder", "icd": "I10"},
                        {"title": "Acute kidney injury", "icd": "N17.9"}],
-        "allergies": [{"title": "Lisinopril", "reaction": "Cough", "type": "allergy"}],
-        "medications": [{"title": "Labetalol 200mg PO bid"},
-                        {"title": "Amlodipine 10mg daily"}],
+        "allergies": [],
+        "medications": [{"title": "Labetalol 200mg PO q8h"},
+                        {"title": "Lisinopril 5mg PO daily"}],
         "vitals": [
-            {"dt": "2026-04-29 05:30:00", "bps": 188, "bpd": 112,
-             "pulse": 80, "respiration": 16, "temperature": 36.6,
+            {"dt": "2026-04-29 05:30:00", "bps": 192, "bpd": 114,
+             "pulse": 82, "respiration": 15, "temperature": 37.0,
              "oxygen_saturation": 98},
         ],
         "labs": [
-            # Nephrology consult ordered 9h ago (22:00 prior evening), unanswered
-            {"loinc": "57778-7", "name": "Nephrology Consult", "collected_dt": "2026-04-28 22:00:00",
-             "value": "PENDING", "units": "", "range": "", "abnormal": "unknown",
-             "status": "registered"},
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 02:00:00",
-             "value": "3.1", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "high",
+             "value": "2.9", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "6298-4", "name": "Potassium", "collected_dt": "2026-04-29 02:00:00",
+             "value": "5.2", "units": "mmol/L", "range": "3.5-5.1", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 05:30:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── S8: Yvonne Castillo — Conflicting creatinine values ───────────────
+    # ── pt-008: Yvonne Castillo — diabetic nephropathy monitoring (P8) ───
     {
-        "fname": "Yvonne", "lname": "Castillo", "dob": "1967-12-03", "sex": "Female",
-        "admit_date": "2026-04-28", "admit_reason": "Sepsis — urinary source",
-        "conditions": [{"title": "Urosepsis", "icd": "A41.51"}],
-        "allergies": [{"title": "Cephalosporins", "reaction": "Rash", "type": "allergy"}],
-        "medications": [{"title": "Gentamicin 5mg/kg IV q24h"},
-                        {"title": "Vancomycin 25mg/kg IV q12h"}],
+        "fname": "Yvonne", "lname": "Castillo", "dob": "1960-12-30", "sex": "Female",
+        "admit_date": "2026-04-30", "admit_reason": "Diabetic nephropathy — monitoring",
+        "conditions": [{"title": "Diabetic nephropathy", "icd": "E11.21"}],
+        "allergies": [],
+        "medications": [{"title": "Metformin 500mg PO BID"},
+                        {"title": "Lisinopril 10mg PO daily"}],
         "vitals": [
-            {"dt": "2026-04-29 04:45:00", "bps": 102, "bpd": 62,
-             "pulse": 106, "respiration": 20, "temperature": 38.4,
+            {"dt": "2026-04-29 04:45:00", "bps": 138, "bpd": 82,
+             "pulse": 76, "respiration": 14, "temperature": 37.0,
+             "oxygen_saturation": 98},
+        ],
+        "labs": [
+            {"loinc": "2160-0", "name": "Creatinine (POC)", "collected_dt": "2026-04-29 03:00:00",
+             "value": "1.2", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "2160-0", "name": "Creatinine (Lab)", "collected_dt": "2026-04-29 03:00:00",
+             "value": "2.1", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "2345-7", "name": "Glucose", "collected_dt": "2026-04-29 03:00:00",
+             "value": "182", "units": "mg/dL", "range": "70-100", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 04:45:00",
+             "value": "DNR/DNI", "units": "", "range": "", "abnormal": "normal",
+             "status": "final"},
+        ],
+    },
+
+    # ── pt-009: Elena Morales — uncomplicated UTI (P8) ───────────────────
+    {
+        "provider": "other",
+        "fname": "Elena", "lname": "Morales", "dob": "1955-08-17", "sex": "Female",
+        "admit_date": "2026-05-01", "admit_reason": "Urinary tract infection",
+        "conditions": [{"title": "Urinary tract infection", "icd": "N39.0"}],
+        "allergies": [],
+        "medications": [{"title": "Trimethoprim-sulfamethoxazole 160/800mg PO BID"},
+                        {"title": "Aspirin 81mg PO daily"}],
+        "vitals": [
+            {"dt": "2026-04-29 06:00:00", "bps": 132, "bpd": 63,
+             "pulse": 70, "respiration": 13, "temperature": 37.5,
+             "oxygen_saturation": 98},
+        ],
+        "labs": [
+            {"loinc": "6690-2", "name": "WBC", "collected_dt": "2026-04-29 04:00:00",
+             "value": "13.2", "units": "10*3/uL", "range": "4.5-11.0", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 06:00:00",
+             "value": "DNR/DNI", "units": "", "range": "", "abnormal": "normal",
+             "status": "final"},
+        ],
+    },
+
+    # ── pt-010: Rajiv Patel — cellulitis left lower extremity (P8) ───────
+    {
+        "provider": "other",
+        "fname": "Rajiv", "lname": "Patel", "dob": "1948-03-24", "sex": "Male",
+        "admit_date": "2026-04-30", "admit_reason": "Cellulitis left lower extremity",
+        "conditions": [{"title": "Cellulitis left lower extremity", "icd": "L03.116"}],
+        "allergies": [],
+        "medications": [{"title": "Cephalexin 500mg PO QID"},
+                        {"title": "Lisinopril 5mg PO daily"}],
+        "vitals": [
+            {"dt": "2026-04-29 06:00:00", "bps": 111, "bpd": 73,
+             "pulse": 61, "respiration": 13, "temperature": 37.2,
              "oxygen_saturation": 95},
         ],
         "labs": [
-            # Conflicting creatinine — nurse POC says 1.2, lab says 2.1 same day
-            {"loinc": "2160-0", "name": "Creatinine (POC-Nurse)", "collected_dt": "2026-04-29 03:00:00",
-             "value": "1.2", "units": "mg/dL", "range": "0.5-1.1", "abnormal": "high",
+            {"loinc": "6690-2", "name": "WBC", "collected_dt": "2026-04-29 04:00:00",
+             "value": "14.8", "units": "10*3/uL", "range": "4.5-11.0", "abnormal": "high",
              "status": "final"},
-            {"loinc": "2160-0", "name": "Creatinine (Lab)", "collected_dt": "2026-04-29 03:00:00",
-             "value": "2.1", "units": "mg/dL", "range": "0.5-1.1", "abnormal": "critical",
-             "status": "final"},
-        ],
-    },
-
-    # ── pt-009: Stable — UTI ───────────────────────────────────────────────
-    {
-        "provider": "other",
-        "fname": "Patricia", "lname": "Nguyen", "dob": "1975-08-19", "sex": "Female",
-        "admit_date": "2026-04-28", "admit_reason": "Uncomplicated UTI",
-        "conditions": [{"title": "Urinary tract infection", "icd": "N39.0"}],
-        "allergies": [{"title": "Trimethoprim", "reaction": "Rash", "type": "allergy"}],
-        "medications": [{"title": "Nitrofurantoin 100mg PO bid"}],
-        "vitals": [
-            {"dt": "2026-04-29 06:00:00", "bps": 118, "bpd": 74,
-             "pulse": 76, "respiration": 14, "temperature": 37.1,
-             "oxygen_saturation": 99},
-        ],
-        "labs": [
-            {"loinc": "5778-6", "name": "Urinalysis WBC", "collected_dt": "2026-04-28 18:00:00",
-             "value": ">50", "units": "/hpf", "range": "0-5", "abnormal": "high",
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 06:00:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── pt-010: Stable — Cellulitis ───────────────────────────────────────
+    # ── pt-011: Karl Bergstrom — upper GI bleed peptic ulcer (P8) ────────
     {
         "provider": "other",
-        "fname": "Gerald", "lname": "Hoffman", "dob": "1980-01-25", "sex": "Male",
-        "admit_date": "2026-04-28", "admit_reason": "Left leg cellulitis",
-        "conditions": [{"title": "Cellulitis, left lower leg", "icd": "L03.116"}],
+        "fname": "Karl", "lname": "Bergstrom", "dob": "1971-11-02", "sex": "Male",
+        "admit_date": "2026-04-30", "admit_reason": "Upper GI bleed — peptic ulcer disease",
+        "conditions": [{"title": "Upper GI bleed — peptic ulcer disease", "icd": "K92.2"}],
         "allergies": [],
-        "medications": [{"title": "Cefazolin 1g IV q8h"}],
+        "medications": [{"title": "Pantoprazole 40mg IV q12h"},
+                        {"title": "Ondansetron 4mg IV q8h PRN"}],
         "vitals": [
-            {"dt": "2026-04-29 06:00:00", "bps": 128, "bpd": 80,
-             "pulse": 82, "respiration": 15, "temperature": 37.6,
+            {"dt": "2026-04-29 05:30:00", "bps": 134, "bpd": 80,
+             "pulse": 76, "respiration": 15, "temperature": 36.9,
              "oxygen_saturation": 98},
-        ],
-        "labs": [
-            {"loinc": "6690-2", "name": "WBC", "collected_dt": "2026-04-28 19:00:00",
-             "value": "12.4", "units": "K/uL", "range": "4.5-11.0", "abnormal": "high",
-             "status": "final"},
-        ],
-    },
-
-    # ── pt-011: Stable — GI Bleed ─────────────────────────────────────────
-    {
-        "provider": "other",
-        "fname": "Rosemary", "lname": "Delgado", "dob": "1950-05-12", "sex": "Female",
-        "admit_date": "2026-04-27", "admit_reason": "Upper GI bleed",
-        "conditions": [{"title": "Acute upper GI hemorrhage", "icd": "K92.0"}],
-        "allergies": [{"title": "Aspirin", "reaction": "GI bleed", "type": "allergy"}],
-        "medications": [{"title": "Pantoprazole 40mg IV bid"},
-                        {"title": "Octreotide 50mcg/hr IV"}],
-        "vitals": [
-            {"dt": "2026-04-29 05:30:00", "bps": 112, "bpd": 68,
-             "pulse": 94, "respiration": 16, "temperature": 36.8,
-             "oxygen_saturation": 97},
         ],
         "labs": [
             {"loinc": "718-7", "name": "Hemoglobin", "collected_dt": "2026-04-29 02:00:00",
-             "value": "7.2", "units": "g/dL", "range": "12.0-16.0", "abnormal": "low",
+             "value": "8.4", "units": "g/dL", "range": "13.5-17.5", "abnormal": "low",
+             "status": "final"},
+            {"loinc": "2345-7", "name": "Glucose", "collected_dt": "2026-04-29 02:00:00",
+             "value": "98", "units": "mg/dL", "range": "70-100", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 05:30:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── pt-012: Stable — Stroke ───────────────────────────────────────────
+    # ── pt-012: Miriam Johnson — chronic essential hypertension (P9) ─────
     {
-        "fname": "Walter", "lname": "Osei", "dob": "1948-03-07", "sex": "Male",
-        "admit_date": "2026-04-27", "admit_reason": "Ischemic stroke — left MCA",
-        "conditions": [{"title": "Cerebral infarction, left MCA", "icd": "I63.512"}],
-        "allergies": [{"title": "Warfarin", "reaction": "Bleeding", "type": "allergy"}],
-        "medications": [{"title": "Aspirin 325mg daily"},
-                        {"title": "Atorvastatin 80mg daily"}],
+        "fname": "Miriam", "lname": "Johnson", "dob": "1939-05-15", "sex": "Female",
+        "admit_date": "2026-04-29", "admit_reason": "Essential hypertension — chronic management",
+        "conditions": [{"title": "Essential hypertension — chronic management", "icd": "I10"}],
+        "allergies": [],
+        "medications": [{"title": "Aspirin 325mg PO daily"},
+                        {"title": "Atorvastatin 40mg PO daily"},
+                        {"title": "Lisinopril 10mg PO daily"}],
         "vitals": [
-            {"dt": "2026-04-29 05:00:00", "bps": 148, "bpd": 88,
-             "pulse": 72, "respiration": 16, "temperature": 36.9,
-             "oxygen_saturation": 97},
+            {"dt": "2026-04-29 05:00:00", "bps": 134, "bpd": 71,
+             "pulse": 66, "respiration": 18, "temperature": 36.9,
+             "oxygen_saturation": 95},
         ],
         "labs": [
-            {"loinc": "2345-7", "name": "Glucose", "collected_dt": "2026-04-29 03:00:00",
-             "value": "142", "units": "mg/dL", "range": "70-100", "abnormal": "high",
+            {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 03:00:00",
+             "value": "1.0", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 05:00:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── pt-013: Stable — DKA ──────────────────────────────────────────────
+    # ── pt-013: Carlos Reyes — diabetic ketoacidosis (P8) ────────────────
     {
-        "fname": "Amelia", "lname": "Burke", "dob": "1992-10-28", "sex": "Female",
-        "admit_date": "2026-04-28", "admit_reason": "Diabetic ketoacidosis",
-        "conditions": [{"title": "Type 1 DKA", "icd": "E10.10"}],
+        "provider": "other",
+        "fname": "Carlos", "lname": "Reyes", "dob": "1977-09-09", "sex": "Male",
+        "admit_date": "2026-05-01", "admit_reason": "Diabetic ketoacidosis",
+        "conditions": [{"title": "Diabetic ketoacidosis", "icd": "E10.10"}],
         "allergies": [],
-        "medications": [{"title": "Regular insulin infusion 0.1 units/kg/hr"},
-                        {"title": "Normal saline 1L/hr IV"}],
+        "medications": [{"title": "Insulin glargine 20 units SC daily"},
+                        {"title": "Metformin 500mg PO BID"},
+                        {"title": "Sodium chloride 0.9% IV 125 mL/hr"}],
         "vitals": [
-            {"dt": "2026-04-29 06:00:00", "bps": 110, "bpd": 66,
-             "pulse": 96, "respiration": 22, "temperature": 36.5,
-             "oxygen_saturation": 98},
+            {"dt": "2026-04-29 06:00:00", "bps": 121, "bpd": 71,
+             "pulse": 70, "respiration": 12, "temperature": 37.1,
+             "oxygen_saturation": 95},
         ],
         "labs": [
             {"loinc": "2345-7", "name": "Glucose", "collected_dt": "2026-04-29 05:00:00",
-             "value": "210", "units": "mg/dL", "range": "70-100", "abnormal": "high",
+             "value": "420", "units": "mg/dL", "range": "70-100", "abnormal": "critical",
              "status": "final"},
             {"loinc": "6298-4", "name": "Potassium", "collected_dt": "2026-04-29 05:00:00",
-             "value": "4.1", "units": "mEq/L", "range": "3.5-5.1", "abnormal": "normal",
+             "value": "3.3", "units": "mmol/L", "range": "3.5-5.1", "abnormal": "low",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 06:00:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── pt-014: Stable — Pancreatitis ─────────────────────────────────────
+    # ── pt-014: Abena Osei — acute pancreatitis (P8) ─────────────────────
     {
         "provider": "other",
-        "fname": "Jerome", "lname": "Whitfield", "dob": "1969-07-16", "sex": "Male",
-        "admit_date": "2026-04-28", "admit_reason": "Acute pancreatitis",
-        "conditions": [{"title": "Acute pancreatitis", "icd": "K85.90"}],
-        "allergies": [{"title": "Codeine", "reaction": "Nausea", "type": "allergy"}],
-        "medications": [{"title": "Morphine 2mg IV q4h PRN"},
-                        {"title": "Ondansetron 4mg IV q6h PRN"}],
-        "vitals": [
-            {"dt": "2026-04-29 05:45:00", "bps": 122, "bpd": 76,
-             "pulse": 88, "respiration": 16, "temperature": 37.3,
-             "oxygen_saturation": 98},
-        ],
-        "labs": [
-            {"loinc": "1798-8", "name": "Lipase", "collected_dt": "2026-04-28 20:00:00",
-             "value": "1842", "units": "U/L", "range": "10-140", "abnormal": "high",
-             "status": "final"},
-        ],
-    },
-
-    # ── pt-015: Stable — CHF (compensated) ───────────────────────────────
-    {
-        "provider": "other",
-        "fname": "Lillian", "lname": "Archer", "dob": "1943-04-02", "sex": "Female",
-        "admit_date": "2026-04-27", "admit_reason": "CHF — volume overload",
-        "conditions": [{"title": "Congestive heart failure", "icd": "I50.32"}],
-        "allergies": [{"title": "Spironolactone", "reaction": "Hyperkalemia", "type": "allergy"}],
-        "medications": [{"title": "Furosemide 40mg IV bid"},
-                        {"title": "Carvedilol 12.5mg PO bid"}],
-        "vitals": [
-            {"dt": "2026-04-29 06:00:00", "bps": 132, "bpd": 80,
-             "pulse": 78, "respiration": 18, "temperature": 36.8,
-             "oxygen_saturation": 94, "weight": 88, "height": 158},
-        ],
-        "labs": [
-            {"loinc": "33762-6", "name": "BNP", "collected_dt": "2026-04-29 01:00:00",
-             "value": "820", "units": "pg/mL", "range": "0-100", "abnormal": "high",
-             "status": "final"},
-        ],
-    },
-
-    # ── pt-016: Stable — Post-op Hip ─────────────────────────────────────
-    {
-        "fname": "Douglas", "lname": "Pearce", "dob": "1941-11-19", "sex": "Male",
-        "admit_date": "2026-04-27", "admit_reason": "Post-op right hip arthroplasty",
-        "conditions": [{"title": "Post-op right total hip arthroplasty", "icd": "Z96.641"}],
-        "allergies": [{"title": "Latex", "reaction": "Urticaria", "type": "allergy"}],
-        "medications": [{"title": "Oxycodone 5mg PO q4h PRN"},
-                        {"title": "Enoxaparin 40mg SC daily"}],
-        "vitals": [
-            {"dt": "2026-04-29 06:00:00", "bps": 126, "bpd": 78,
-             "pulse": 74, "respiration": 14, "temperature": 36.7,
-             "oxygen_saturation": 98},
-        ],
-        "labs": [
-            {"loinc": "718-7", "name": "Hemoglobin", "collected_dt": "2026-04-29 04:00:00",
-             "value": "9.8", "units": "g/dL", "range": "13.5-17.5", "abnormal": "low",
-             "status": "final"},
-        ],
-    },
-
-    # ── pt-017: Stable — Atrial Fibrillation ─────────────────────────────
-    {
-        "provider": "other",
-        "fname": "Sandra", "lname": "Morrow", "dob": "1956-09-14", "sex": "Female",
-        "admit_date": "2026-04-28", "admit_reason": "New-onset atrial fibrillation",
-        "conditions": [{"title": "Atrial fibrillation, new onset", "icd": "I48.0"}],
+        "fname": "Abena", "lname": "Osei", "dob": "1962-01-28", "sex": "Female",
+        "admit_date": "2026-04-30", "admit_reason": "Acute pancreatitis — alcohol related",
+        "conditions": [{"title": "Acute pancreatitis — alcohol related", "icd": "K85.20"}],
         "allergies": [],
-        "medications": [{"title": "Diltiazem 30mg PO qid"},
-                        {"title": "Apixaban 5mg PO bid"}],
+        "medications": [{"title": "Pantoprazole 40mg IV daily"},
+                        {"title": "Ondansetron 4mg IV q6h PRN"},
+                        {"title": "Morphine 2mg IV q4h PRN"}],
         "vitals": [
-            {"dt": "2026-04-29 05:30:00", "bps": 138, "bpd": 86,
-             "pulse": 112, "respiration": 16, "temperature": 36.8,
+            {"dt": "2026-04-29 05:45:00", "bps": 111, "bpd": 70,
+             "pulse": 84, "respiration": 17, "temperature": 37.0,
+             "oxygen_saturation": 96},
+        ],
+        "labs": [
+            {"loinc": "1742-7", "name": "ALT", "collected_dt": "2026-04-29 03:00:00",
+             "value": "88", "units": "U/L", "range": "7-56", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 05:45:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
+             "status": "final"},
+        ],
+    },
+
+    # ── pt-015: Dorothy Williams — stable systolic heart failure (P8) ────
+    {
+        "provider": "other",
+        "fname": "Dorothy", "lname": "Williams", "dob": "1944-07-04", "sex": "Female",
+        "admit_date": "2026-04-29", "admit_reason": "Stable systolic heart failure — diuresis",
+        "conditions": [{"title": "Stable systolic heart failure — diuresis", "icd": "I50.20"}],
+        "allergies": [],
+        "medications": [{"title": "Furosemide 40mg PO daily"},
+                        {"title": "Lisinopril 5mg PO daily"},
+                        {"title": "Carvedilol 6.25mg PO BID"}],
+        "vitals": [
+            {"dt": "2026-04-29 06:00:00", "bps": 109, "bpd": 68,
+             "pulse": 71, "respiration": 12, "temperature": 36.8,
+             "oxygen_saturation": 95},
+        ],
+        "labs": [
+            {"loinc": "42637-9", "name": "BNP", "collected_dt": "2026-04-29 01:00:00",
+             "value": "560", "units": "pg/mL", "range": "0-100", "abnormal": "high",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 06:00:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
+             "status": "final"},
+        ],
+    },
+
+    # ── pt-016: Wei Huang — post-op laparoscopic cholecystectomy (P11) ───
+    {
+        "provider": "other",
+        "fname": "Wei", "lname": "Huang", "dob": "1983-10-20", "sex": "Male",
+        "admit_date": "2026-05-01", "admit_reason": "Post-operative day 1 — laparoscopic cholecystectomy",
+        "conditions": [{"title": "Post-operative day 1 — laparoscopic cholecystectomy", "icd": "Z48.815"}],
+        "allergies": [],
+        "medications": [{"title": "Ketorolac 15mg IV q6h"},
+                        {"title": "Ondansetron 4mg IV q8h PRN"}],
+        "vitals": [
+            {"dt": "2026-04-29 06:00:00", "bps": 125, "bpd": 84,
+             "pulse": 66, "respiration": 14, "temperature": 37.4,
+             "oxygen_saturation": 98},
+        ],
+        "labs": [
+            {"loinc": "6690-2", "name": "WBC", "collected_dt": "2026-04-29 04:00:00",
+             "value": "10.4", "units": "10*3/uL", "range": "4.5-11.0", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 06:00:00",
+             "value": "DNR/DNI", "units": "", "range": "", "abnormal": "normal",
+             "status": "final"},
+        ],
+    },
+
+    # ── pt-017: Sean Murphy — alcohol withdrawal CIWA protocol (P11) ─────
+    {
+        "provider": "other",
+        "fname": "Sean", "lname": "Murphy", "dob": "1957-03-13", "sex": "Male",
+        "admit_date": "2026-04-30", "admit_reason": "Alcohol withdrawal — CIWA protocol",
+        "conditions": [{"title": "Alcohol withdrawal — CIWA protocol", "icd": "F10.239"}],
+        "allergies": [],
+        "medications": [{"title": "Lorazepam 2mg IV q1h PRN CIWA>8"},
+                        {"title": "Thiamine 100mg IV daily"},
+                        {"title": "Folate 1mg PO daily"}],
+        "vitals": [
+            {"dt": "2026-04-29 05:30:00", "bps": 132, "bpd": 78,
+             "pulse": 67, "respiration": 16, "temperature": 36.7,
              "oxygen_saturation": 97},
         ],
         "labs": [
-            {"loinc": "6299-2", "name": "Thyroid TSH", "collected_dt": "2026-04-29 02:00:00",
-             "value": "0.08", "units": "mIU/L", "range": "0.4-4.0", "abnormal": "low",
+            {"loinc": "2345-7", "name": "Glucose", "collected_dt": "2026-04-29 02:00:00",
+             "value": "112", "units": "mg/dL", "range": "70-100", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 05:30:00",
+             "value": "DNR/DNI", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── S10 / pt-018: Thomas Greer — Out-of-census (prov-other) ──────────
+    # ── pt-018: Thomas Greer — atrial fibrillation with RVR (P5) ─────────
     {
-        "provider": "other",
-        "fname": "Thomas", "lname": "Greer", "dob": "1983-05-22", "sex": "Male",
-        "admit_date": "2026-04-29", "admit_reason": "Chest pain — rule out ACS",
-        "conditions": [{"title": "Chest pain, unspecified", "icd": "R07.9"}],
-        "allergies": [{"title": "Metoprolol", "reaction": "Bronchospasm", "type": "allergy"}],
-        "medications": [{"title": "Aspirin 325mg PO"},
-                        {"title": "Nitroglycerin 0.4mg SL PRN"}],
+        "fname": "Thomas", "lname": "Greer", "dob": "1950-06-01", "sex": "Male",
+        "admit_date": "2026-05-01", "admit_reason": "Atrial fibrillation with RVR",
+        "conditions": [{"title": "Atrial fibrillation", "icd": "I48.91"}],
+        "allergies": [],
+        "medications": [{"title": "Metoprolol succinate 25mg PO daily"},
+                        {"title": "Apixaban 5mg PO BID"}],
         "vitals": [
-            {"dt": "2026-04-29 06:30:00", "bps": 142, "bpd": 88,
-             "pulse": 96, "respiration": 16, "temperature": 36.6,
-             "oxygen_saturation": 98},
+            {"dt": "2026-04-29 06:30:00", "bps": 128, "bpd": 80,
+             "pulse": 136, "respiration": 16, "temperature": 37.1,
+             "oxygen_saturation": 96},
         ],
         "labs": [
-            {"loinc": "49563-0", "name": "Troponin I", "collected_dt": "2026-04-29 05:00:00",
-             "value": "0.04", "units": "ng/mL", "range": "0.0-0.04", "abnormal": "borderline",
+            {"loinc": "3016-3", "name": "TSH", "collected_dt": "2026-04-29 05:00:00",
+             "value": "0.8", "units": "mIU/L", "range": "0.4-4.0", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 06:30:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── pt-019: Linda Okonkwo — minor fall, code-status documented, no active dx (P10 Routine) ──────────────
+    # ── pt-019: Linda Okonkwo — minor fall, blank code status (P10) ──────
+    # Bundle pt-019 omits the 81638-3 Observation, so blank_code_status fires.
     {
         "fname": "Linda", "lname": "Okonkwo", "dob": "1966-08-30", "sex": "Female",
-        "admit_date": "2026-04-30", "admit_reason": "Observation after minor fall — no fracture, no active diagnosis",
-        # No active conditions — pure observation stay so the rules engine reaches level 10 (Routine).
+        "admit_date": "2026-05-01", "admit_reason": "Observation after minor fall — no fracture identified",
         "conditions": [],
         "allergies": [],
         "medications": [{"title": "Acetaminophen 650mg PO q6h PRN"}],
@@ -820,18 +898,14 @@ PATIENTS: list[dict[str, Any]] = [
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-28 20:00:00",
              "value": "0.9", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
              "status": "final"},
-            # Resuscitation status documented — clears the blank-code-status flag so this patient can land at P10.
-            {"loinc": "81638-3", "name": "Resuscitation status", "collected_dt": "2026-04-29 06:00:00",
-             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
-             "status": "final"},
         ],
     },
 
-    # ── pt-020: Robert Finch — Pre-procedure obs, no active dx, code status undocumented (P9) ────
+    # ── pt-020: Robert Finch — pre-procedure observation, code status documented (P11) ────
     {
+        "provider": "other",
         "fname": "Robert", "lname": "Finch", "dob": "1959-03-17", "sex": "Male",
-        "admit_date": "2026-04-29", "admit_reason": "Pre-procedure observation — elective colonoscopy prep",
-        # No active conditions and no code-status observation — rules engine drops to level 9 (Blank Code Status).
+        "admit_date": "2026-05-02", "admit_reason": "Pre-procedure observation — elective colonoscopy prep",
         "conditions": [],
         "allergies": [],
         "medications": [{"title": "Polyethylene glycol 3350 solution PO"}],
@@ -847,17 +921,20 @@ PATIENTS: list[dict[str, Any]] = [
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 04:00:00",
              "value": "0.8", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
              "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 06:00:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
+             "status": "final"},
         ],
     },
 
-    # ── pt-021: Priya Anand — Suspected sepsis (airborne precautions) ─────
+    # ── pt-021: Priya Anand — suspected sepsis, qSOFA=2 no critical lab (P2) ─
     {
         "fname": "Priya", "lname": "Anand", "dob": "1975-04-12", "sex": "Female",
-        "admit_date": "2026-04-29", "admit_reason": "Suspected sepsis — source under investigation",
-        "conditions": [{"title": "Septicemia, unspecified organism", "icd": "A41.9"}],
+        "admit_date": "2026-05-02", "admit_reason": "Suspected sepsis — source under investigation",
+        "conditions": [{"title": "Septicemia", "icd": "A41.9"}],
         "allergies": [],
-        "medications": [{"title": "Vancomycin 1g IV q12h"},
-                        {"title": "Piperacillin-tazobactam 3.375g IV q6h"}],
+        "medications": [{"title": "Vancomycin 1g IV"},
+                        {"title": "Piperacillin-tazobactam 3.375g IV"}],
         "vitals": [
             {"dt": "2026-04-29 06:00:00", "bps": 96, "bpd": 62,
              "pulse": 108, "respiration": 24, "temperature": 38.6,
@@ -870,16 +947,19 @@ PATIENTS: list[dict[str, Any]] = [
             {"loinc": "2518-9", "name": "Lactate", "collected_dt": "2026-04-29 04:00:00",
              "value": "1.8", "units": "mmol/L", "range": "0.5-2.0", "abnormal": "normal",
              "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 06:00:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
+             "status": "final"},
         ],
     },
 
-    # ── pt-022: James Whitfield — Acute delirium with documented GCS<15 (P5 Mental Status Alert) ──────────────
+    # ── pt-022: James Whitfield — acute delirium, GCS 14 (P6) ────────────
     {
         "fname": "James", "lname": "Whitfield", "dob": "1942-10-05", "sex": "Male",
-        "admit_date": "2026-04-28", "admit_reason": "Acute delirium — hyperactive type",
-        "conditions": [{"title": "Delirium due to known physiological condition", "icd": "F05"}],
+        "admit_date": "2026-05-01", "admit_reason": "Acute delirium — hyperactive type",
+        "conditions": [{"title": "Delirium", "icd": "F05"}],
         "allergies": [],
-        "medications": [{"title": "Haloperidol 0.5mg IV PRN agitation"}],
+        "medications": [{"title": "Haloperidol 0.5mg IV PRN"}],
         "vitals": [
             {"dt": "2026-04-29 06:00:00", "bps": 128, "bpd": 74,
              "pulse": 88, "respiration": 17, "temperature": 37.3,
@@ -887,24 +967,26 @@ PATIENTS: list[dict[str, Any]] = [
         ],
         "labs": [
             {"loinc": "2823-3", "name": "Potassium", "collected_dt": "2026-04-29 03:00:00",
-             "value": "4.0", "units": "mmol/L", "range": "3.5-5.0", "abnormal": "normal",
+             "value": "4.0", "units": "mmol/L", "range": "3.5-5.1", "abnormal": "normal",
              "status": "final"},
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 03:00:00",
              "value": "1.1", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
              "status": "final"},
-            # GCS Total 12 — emitted via the lab path so it lands as a FHIR Observation with LOINC 9269-2.
-            # The triage extractor reads any observation by LOINC, so this trips mental_status_alert and lands the patient at P5.
-            {"loinc": "9269-2", "name": "Glasgow Coma Scale Total", "collected_dt": "2026-04-29 06:00:00",
-             "value": "12", "units": "{score}", "range": "13-15", "abnormal": "normal",
+            {"loinc": "9269-2", "name": "Glasgow coma score total", "collected_dt": "2026-04-29 06:00:00",
+             "value": "14", "units": "{score}", "range": "13-15", "abnormal": "low",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 06:00:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── pt-023: Keisha Balogun — Sickle cell vaso-occlusive crisis with pain 9/10 (P6 Severe Pain) ────────
+    # ── pt-023: Keisha Balogun — sickle cell crisis, pain 9/10 (P7) ──────
     {
+        "provider": "other",
         "fname": "Keisha", "lname": "Balogun", "dob": "1988-07-19", "sex": "Female",
-        "admit_date": "2026-04-28", "admit_reason": "Sickle cell disease with acute vaso-occlusive crisis",
-        "conditions": [{"title": "Sickle-cell disease with crisis", "icd": "D57.00"}],
+        "admit_date": "2026-05-01", "admit_reason": "Sickle cell disease with acute vaso-occlusive crisis",
+        "conditions": [{"title": "Sickle cell crisis", "icd": "D57.00"}],
         "allergies": [],
         "medications": [{"title": "Morphine 4mg IV q3h PRN pain"},
                         {"title": "Ketorolac 15mg IV q6h"}],
@@ -920,24 +1002,26 @@ PATIENTS: list[dict[str, Any]] = [
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 02:00:00",
              "value": "0.8", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
              "status": "final"},
-            # Pain score 9/10 — emitted via the lab path. Triage extractor scans any observation by LOINC,
-            # so this trips pain_score_high and the patient lands at P6 (ahead of the P7 abnormal-lab tier).
             {"loinc": "72514-3", "name": "Pain severity 0-10", "collected_dt": "2026-04-29 06:00:00",
              "value": "9", "units": "{score}", "range": "0-3", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 06:00:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
 
-    # ── pt-024: Alejandro Cruz — Intra-abdominal sepsis, admitted overnight (P1) ──
+    # ── pt-024: Alejandro Cruz — intra-abdominal sepsis (P1) ─────────────
     {
+        "provider": "other",
         "fname": "Alejandro", "lname": "Cruz", "dob": "1971-05-20", "sex": "Male",
-        "admit_date": "2026-04-30", "admit_reason": "Intra-abdominal sepsis — secondary peritonitis, bed 528",
-        "conditions": [{"title": "Sepsis due to intra-abdominal infection", "icd": "A41.9"},
+        "admit_date": "2026-05-01", "admit_reason": "Intra-abdominal sepsis",
+        "conditions": [{"title": "Intra-abdominal sepsis", "icd": "A41.9"},
                        {"title": "Secondary peritonitis", "icd": "K65.1"}],
         "allergies": [],
         "medications": [{"title": "Meropenem 1g IV q8h"},
                         {"title": "Metronidazole 500mg IV q8h"},
-                        {"title": "Norepinephrine 0.05 mcg/kg/min IV"}],
+                        {"title": "Norepinephrine 0.05 mcg/kg/min"}],
         "vitals": [
             {"dt": "2026-04-30 04:15:00", "bps": 94, "bpd": 58,
              "pulse": 114, "respiration": 26, "temperature": 38.7,
@@ -945,37 +1029,48 @@ PATIENTS: list[dict[str, Any]] = [
         ],
         "labs": [
             {"loinc": "2518-9", "name": "Lactate", "collected_dt": "2026-04-30 03:00:00",
-             "value": "5.1", "units": "mmol/L", "range": "0.5-2.2", "abnormal": "high",
+             "value": "5.1", "units": "mmol/L", "range": "0.5-2.2", "abnormal": "critical",
              "status": "final"},
             {"loinc": "6690-2", "name": "WBC", "collected_dt": "2026-04-30 03:00:00",
-             "value": "24.6", "units": "K/uL", "range": "4.5-11.0", "abnormal": "high",
+             "value": "24.6", "units": "10*3/uL", "range": "4.5-11.0", "abnormal": "high",
              "status": "final"},
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-30 03:00:00",
              "value": "2.1", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "high",
              "status": "final"},
+            {"loinc": "9269-2", "name": "Glasgow coma score total", "collected_dt": "2026-04-30 04:15:00",
+             "value": "13", "units": "{score}", "range": "13-15", "abnormal": "low",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-30 04:15:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
+             "status": "final"},
         ],
     },
 
-    # ── pt-025: Marisol Vega — Stable hypertension follow-up (P8 Active Condition Stable) ──
-    # Existing P8 holders (Linda, Robert, James) moved to other tiers, so this patient
-    # carries the "active condition, vitals/labs unremarkable" tier on Chen's panel.
+    # ── pt-025: Maya Lindgren — back pain 8/10 with chronic HTN (P7) ─────
     {
-        "fname": "Marisol", "lname": "Vega", "dob": "1964-02-09", "sex": "Female",
-        "admit_date": "2026-04-29", "admit_reason": "Stable essential hypertension — observation",
+        "fname": "Maya", "lname": "Lindgren", "dob": "1972-02-09", "sex": "Female",
+        "admit_date": "2026-05-01", "admit_reason": "Acute musculoskeletal back pain with chronic hypertension",
         "conditions": [{"title": "Essential hypertension", "icd": "I10"}],
         "allergies": [],
-        "medications": [{"title": "Amlodipine 5mg PO daily"}],
+        "medications": [{"title": "Lisinopril 10mg PO daily"},
+                        {"title": "Ketorolac 15mg IV q6h PRN pain"}],
         "vitals": [
             {"dt": "2026-04-29 06:00:00", "bps": 134, "bpd": 82,
-             "pulse": 76, "respiration": 16, "temperature": 36.9,
+             "pulse": 92, "respiration": 18, "temperature": 37.0,
              "oxygen_saturation": 98},
         ],
         "labs": [
             {"loinc": "2345-7", "name": "Glucose", "collected_dt": "2026-04-29 04:00:00",
-             "value": "92", "units": "mg/dL", "range": "70-100", "abnormal": "normal",
+             "value": "96", "units": "mg/dL", "range": "70-100", "abnormal": "normal",
              "status": "final"},
             {"loinc": "2160-0", "name": "Creatinine", "collected_dt": "2026-04-29 04:00:00",
              "value": "0.9", "units": "mg/dL", "range": "0.6-1.2", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "72514-3", "name": "Pain severity 0-10", "collected_dt": "2026-04-29 06:00:00",
+             "value": "8", "units": "{score}", "range": "0-3", "abnormal": "normal",
+             "status": "final"},
+            {"loinc": "81638-3", "name": "Code status", "collected_dt": "2026-04-29 06:00:00",
+             "value": "Full Code", "units": "", "range": "", "abnormal": "normal",
              "status": "final"},
         ],
     },
