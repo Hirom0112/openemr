@@ -2,18 +2,77 @@ import type { AgentResponse, TriageRationaleData } from './types';
 
 const cfg = () => window.__COPILOT_CONFIG__;
 
-async function post<T>(path: string, body: unknown, timeoutMs = 30_000): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+interface ClientTimingPayload {
+  action: string;
+  duration_ms: number;
+  request_id?: string;
+  session_id?: string;
+  t_navigation_start_ms?: number;
+  extra?: Record<string, unknown>;
+}
+
+function generateRequestId(): string {
+  const c: Crypto | undefined = typeof crypto !== 'undefined' ? crypto : undefined;
+  if (c && typeof c.randomUUID === 'function') {
+    return c.randomUUID();
+  }
+  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function postClientTiming(payload: ClientTimingPayload): void {
   try {
-    const res = await fetch(`${cfg().agentApiUrl}${path}`, {
+    const url = `${cfg().agentApiUrl}/agent/client-timing`;
+    void fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    }).catch((err: unknown) => {
+      console.debug('[copilot] postClientTiming failed', err);
+    });
+  } catch (err: unknown) {
+    console.debug('[copilot] postClientTiming threw', err);
+  }
+}
+
+interface PostResult<T> {
+  data: T;
+  requestId: string;
+}
+
+async function post<T>(path: string, body: unknown, timeoutMs = 30_000): Promise<T> {
+  const result = await postWithMeta<T>(path, body, timeoutMs);
+  return result.data;
+}
+
+async function postWithMeta<T>(
+  path: string,
+  body: unknown,
+  timeoutMs = 30_000,
+  onFirstByte?: (requestId: string) => void,
+): Promise<PostResult<T>> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const isAgentPath = path.startsWith('/agent/');
+  const clientRequestId = isAgentPath ? generateRequestId() : '';
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (isAgentPath) {
+      headers['X-Request-ID'] = clientRequestId;
+    }
+    const res = await fetch(`${cfg().agentApiUrl}${path}`, {
+      method: 'POST',
+      headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     });
+    const serverRequestId = res.headers.get('X-Request-ID') ?? clientRequestId;
+    if (onFirstByte) {
+      try { onFirstByte(serverRequestId); } catch (err: unknown) { console.debug('[copilot] onFirstByte threw', err); }
+    }
     if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
-    return res.json();
+    const data = (await res.json()) as T;
+    return { data, requestId: serverRequestId };
   } finally {
     clearTimeout(timer);
   }
@@ -46,21 +105,46 @@ export async function prefetchPatientData(sessionId: string, patientIds: string[
   }
 }
 
+export interface SendAgentMessageResult {
+  response: AgentResponse;
+  requestId: string;
+  durationMs: number;
+}
+
 /** Main dispatcher — all conversational turns route through here. */
 export async function sendAgentMessage(
   message: string,
   sessionId: string,
   censusContext?: string,
 ): Promise<AgentResponse> {
+  const result = await sendAgentMessageWithMeta(message, sessionId, censusContext);
+  return result.response;
+}
+
+export async function sendAgentMessageWithMeta(
+  message: string,
+  sessionId: string,
+  censusContext?: string,
+  onFirstByte?: (requestId: string) => void,
+): Promise<SendAgentMessageResult> {
+  const t0 = performance.now();
   // 90s: handoffs over a full census fire N parallel LLM calls and can legitimately take >30s
-  return post<AgentResponse>('/agent/query', {
+  const result = await postWithMeta<AgentResponse>('/agent/query', {
     message,
     session_id: sessionId,
     provider_id: String(cfg().providerId),
     patient_ids: cfg().patientIds ?? [],
     provider_name: cfg().providerName ?? 'Provider',
     ...(censusContext ? { census_context: censusContext } : {}),
-  }, 90_000);
+  }, 90_000, onFirstByte);
+  const durationMs = performance.now() - t0;
+  postClientTiming({
+    action: 'agent_message',
+    duration_ms: Math.round(durationMs),
+    request_id: result.requestId,
+    session_id: sessionId,
+  });
+  return { response: result.data, requestId: result.requestId, durationMs };
 }
 
 /** Direct-call triage rationale — bypasses dispatcher for <2s budget. */

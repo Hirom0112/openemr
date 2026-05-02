@@ -1,16 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { sendAgentMessage, prefetchPatientData } from '../api';
+import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming } from '../api';
 import type { AgentResponse } from '../types';
 import ResponseRenderer from './ResponseRenderer';
 
 const CENSUS_INIT_MESSAGE = '__census_summary__';
-
-function timeGreeting(): string {
-  const h = new Date().getHours();
-  if (h < 12) return 'Good morning';
-  if (h < 17) return 'Good afternoon';
-  return 'Good evening';
-}
 
 function ThinkingDots() {
   return (
@@ -47,7 +40,7 @@ interface ChatSurfaceProps {
 
 export default function ChatSurface({ sessionId, patientIds, providerName }: ChatSurfaceProps) {
   const displayName = (providerName && providerName.trim()) || 'Doctor';
-  const greeting = `${timeGreeting()}, ${displayName}. Ready for morning rounds? I'll pull up your census now.`;
+  const greeting = `Good day, ${displayName} — ready for your census`;
 
   const [messages, setMessages] = useState<Message[]>([
     { id: 'greeting', role: 'system', content: greeting },
@@ -79,8 +72,33 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     }
 
     setLoading(true);
+    const submitT0 = !isAutoDispatch ? performance.now() : null;
     try {
-      const response = await sendAgentMessage(text, sessionId, censusContext.current);
+      let response: AgentResponse;
+      if (!isAutoDispatch && submitT0 !== null) {
+        const meta = await sendAgentMessageWithMeta(
+          text,
+          sessionId,
+          censusContext.current,
+          (requestId) => {
+            postClientTiming({
+              action: 'chat_submit_to_first_byte',
+              duration_ms: Math.round(performance.now() - submitT0),
+              request_id: requestId,
+              session_id: sessionId,
+            });
+          },
+        );
+        response = meta.response;
+        postClientTiming({
+          action: 'chat_submit_to_done',
+          duration_ms: Math.round(performance.now() - submitT0),
+          request_id: meta.requestId,
+          session_id: sessionId,
+        });
+      } else {
+        response = await sendAgentMessage(text, sessionId, censusContext.current);
+      }
 
       // After the census loads, cache a name→ID map so the LLM doesn't need
       // to re-fetch it on every subsequent query.
