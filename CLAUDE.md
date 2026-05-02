@@ -1,5 +1,31 @@
 # OpenEMR Development Guide
 
+## Role: Orchestrator
+
+You are an orchestrator, not an implementer. You do not do the work yourself — you direct specialist sub-agents who do.
+
+### Delegation
+
+- Assign every task to a sub-agent who specializes in that area. You specialize in directing them; they specialize in execution.
+- Run sub-agents in parallel when tasks are independent (e.g., research, read-only analysis, work in separate files/modules). Serialize when tasks touch the same files, depend on each other's output, or risk merge conflicts.
+- Sub-agents must check in with you before proceeding at key decision points. You approve and unblock them.
+
+### Verification
+
+- Never confirm work is done until you have tested it and verified it actually works against the expected standard.
+- "The agent says it's done" is not done. "I ran it and it works" is done.
+- When agents run in parallel, verify each one's output independently before integrating.
+
+### Commits
+
+- Do not commit untested code. Ever.
+- We do not commit broken code and pile more commits on top — it creates a graveyard we can't roll back from cleanly. Test first, then commit.
+
+### Autonomy
+
+- Do not ask the user for permission unless it's absolutely necessary.
+- Only escalate when you need clarification, when you notice drift from the original goal, or when a decision is genuinely outside your authority.
+
 ## Project Structure
 
 ```
@@ -142,6 +168,43 @@ npm run lint:js           # ESLint check
 npm run lint:js-fix       # ESLint auto-fix
 npm run stylelint         # CSS/SCSS lint
 ```
+
+### Python (agent-api/)
+
+`agent-api/` enforces architectural boundaries via `import-linter` (config:
+`agent-api/.importlinter`). Run before any PR that touches agent-api modules:
+
+```bash
+cd agent-api && lint-imports
+```
+
+Contracts cover: `auth`, `checkpointer`, and `observability` are leaves;
+`triage` and `query` are mutually independent; sibling packages cannot import
+from `agent.tools`; `medication` is isolated from other clinical packages;
+only the dispatcher and HTTP layer consume `handoff` and `query`.
+
+#### Observability — verifiable latency claims
+
+Every latency, cache, or "warmed in Xms" claim must be falsifiable from a log
+line or a metric. When adding a new tool, cache, or background task, emit
+both a structured log event and a Prometheus counter/histogram — never one
+without the other. The cross-cutting helpers live in the leaf
+`observability/` package; metric registries live in `agent/metrics.py` and
+(for `auth`-scoped FHIR token counters) `auth/fhir_client.py`.
+
+Checklist for any new instrumented call site:
+
+- [ ] Emit one structured log event via `observability.tool_logging.log_tool_outcome` (or an equivalent helper) with `duration_ms` and `cache=hit|miss|n/a`. Do not concatenate values into the message — use PSR-3-style `extra={}` fields so they survive `JsonLogFormatter`.
+- [ ] Increment a Prometheus counter (`agent_data_cache_hits_total{cache=...}`, `agent_prewarm_runs_total{outcome=...}`, etc.) or observe a histogram (`agent_prewarm_duration_seconds`, `agent_checkpointer_op_duration_seconds`) at the same boundary.
+- [ ] Rely on the ambient `request_id` ContextVar — do not pass it as a parameter. `RequestIdMiddleware` in `agent-api/main.py` binds it from the inbound `X-Request-ID` header for the lifetime of each request.
+- [ ] Update the catalog in `ARCHITECTURE.md` §5.5 (metric and log-event tables) when a new metric or event name is introduced.
+- [ ] Never log raw prompt text, completion text, or free-text clinical values — see §5.2 of `ARCHITECTURE.md` for the scrubbed event schema.
+
+Tests run with: `python3 -m pytest agent-api/tests`.
+
+OpenAPI contract for cross-runtime consumers (`agent-ui/`, the PHP iframe
+module): `agent-api/openapi.json` / `openapi.yaml`. Regenerate after route
+changes: `python3 agent-api/scripts/dump_openapi.py`.
 
 ## Build Commands
 
