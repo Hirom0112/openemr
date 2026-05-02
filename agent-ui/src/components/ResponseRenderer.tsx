@@ -17,10 +17,11 @@ import { cardStyle, RED } from '../styles/tokens';
 interface ResponseRendererProps {
   response: AgentResponse;
   onBrief?: (patientName: string, patientId?: string) => void;
+  onMeds?: (patientName: string, patientId?: string) => void;
   providerName?: string;
 }
 
-export default function ResponseRenderer({ response, onBrief, providerName }: ResponseRendererProps) {
+export default function ResponseRenderer({ response, onBrief, onMeds, providerName }: ResponseRendererProps) {
   const { type, data, narrative, citations } = response;
 
   if (type === 'error') {
@@ -39,6 +40,7 @@ export default function ResponseRenderer({ response, onBrief, providerName }: Re
           narrative={narrative}
           citations={citations}
           onBrief={onBrief ?? (() => {})}
+          onMeds={onMeds ?? (() => {})}
           providerName={providerName}
         />
       );

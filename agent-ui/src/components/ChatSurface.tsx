@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming } from '../api';
+import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety } from '../api';
 import type { AgentResponse } from '../types';
 import ResponseRenderer from './ResponseRenderer';
 
@@ -133,6 +133,102 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     }
   }, [sessionId]);
 
+  const dispatchBriefDirect = useCallback(async (name: string, patientId: string) => {
+    setMessages((prev) => [
+      ...prev,
+      { id: `user-${Date.now()}`, role: 'user', content: `Brief ${name}` },
+    ]);
+
+    setLoading(true);
+    const submitT0 = performance.now();
+    try {
+      const meta = await getBriefing(patientId, sessionId, (requestId) => {
+        postClientTiming({
+          action: 'chat_submit_to_first_byte',
+          duration_ms: Math.round(performance.now() - submitT0),
+          request_id: requestId,
+          session_id: sessionId,
+          extra: { action: 'brief_direct_first_byte', patient_id: patientId },
+        });
+      });
+      postClientTiming({
+        action: 'chat_submit_to_done',
+        duration_ms: Math.round(performance.now() - submitT0),
+        request_id: meta.requestId,
+        session_id: sessionId,
+        extra: { action: 'brief_direct_done', patient_id: patientId },
+      });
+      setMessages((prev) => [
+        ...prev,
+        { id: `assistant-${Date.now()}`, role: 'assistant', response: meta.response },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `error-${Date.now()}`,
+          role: 'assistant',
+          response: {
+            type: 'error',
+            data: null,
+            narrative: 'Agent unavailable — view chart directly.',
+            citations: [],
+          },
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }, [sessionId]);
+
+  const dispatchMedsDirect = useCallback(async (name: string, patientId: string) => {
+    setMessages((prev) => [
+      ...prev,
+      { id: `user-${Date.now()}`, role: 'user', content: `Medications for ${name}` },
+    ]);
+
+    setLoading(true);
+    const submitT0 = performance.now();
+    try {
+      const meta = await getMedicationSafety(patientId, sessionId, (requestId) => {
+        postClientTiming({
+          action: 'chat_submit_to_first_byte',
+          duration_ms: Math.round(performance.now() - submitT0),
+          request_id: requestId,
+          session_id: sessionId,
+          extra: { action: 'meds_direct_first_byte', patient_id: patientId },
+        });
+      });
+      postClientTiming({
+        action: 'chat_submit_to_done',
+        duration_ms: Math.round(performance.now() - submitT0),
+        request_id: meta.requestId,
+        session_id: sessionId,
+        extra: { action: 'meds_direct_done', patient_id: patientId },
+      });
+      setMessages((prev) => [
+        ...prev,
+        { id: `assistant-${Date.now()}`, role: 'assistant', response: meta.response },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `error-${Date.now()}`,
+          role: 'assistant',
+          response: {
+            type: 'error',
+            data: null,
+            narrative: 'Agent unavailable — view chart directly.',
+            citations: [],
+          },
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }, [sessionId]);
+
   const handleSend = useCallback(() => {
     const text = inputText.trim();
     if (!text || loading) return;
@@ -186,9 +282,20 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                   {msg.response ? (
                     <ResponseRenderer
                       response={msg.response}
-                      onBrief={(name, patientId) => void dispatchMessage(
-                        patientId ? `Brief ${name} (patient_id: ${patientId})` : `Brief ${name}`
-                      )}
+                      onBrief={(name, patientId) => {
+                        if (patientId) {
+                          void dispatchBriefDirect(name, patientId);
+                        } else {
+                          void dispatchMessage(`Brief ${name}`);
+                        }
+                      }}
+                      onMeds={(name, patientId) => {
+                        if (patientId) {
+                          void dispatchMedsDirect(name, patientId);
+                        } else {
+                          void dispatchMessage(`show meds for ${name}`);
+                        }
+                      }}
                       providerName={displayName}
                     />
                   ) : (
