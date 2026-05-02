@@ -10,7 +10,7 @@ Output: TriageCriteria dataclass — one field per criteria key in the YAML
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
@@ -21,7 +21,25 @@ CRITICAL_HR_HIGH = 120      # bpm
 CRITICAL_RR_HIGH = 24       # breaths/min
 CRITICAL_MAP_LOW = 65.0     # mmHg
 CRITICAL_SBP_LOW = 100      # mmHg — symptomatic hypotension threshold (matches qSOFA cutoff)
+CRITICAL_TEMP_LOW = 36.0    # °C
+CRITICAL_TEMP_HIGH = 38.5   # °C
 PAIN_HIGH_THRESHOLD = 8     # /10
+
+# Vitals freshness — observations older than this do not fire rule booleans.
+# They still appear in latest_vitals for UI display.
+VITALS_FRESHNESS_WINDOW = timedelta(hours=24)
+
+# Pain has a tighter clinical guideline — "pain ≥ 8/10 documented in last 4 h"
+# from the triage YAML — so the rule fires on a recent reading rather than a
+# day-old one.
+PAIN_FRESHNESS_WINDOW = timedelta(hours=4)
+
+# Plausible Celsius range for human body temperature.  Anything outside this is
+# assumed to be Fahrenheit and converted.  Picked wide enough to cover severe
+# hypothermia (~25 C) and severe hyperthermia (~43 C) without overlapping the
+# normal Fahrenheit range (95–105 F).
+TEMP_C_PLAUSIBLE_LOW = 25.0
+TEMP_C_PLAUSIBLE_HIGH = 45.0
 
 # LOINC codes
 LOINC_RR = "9279-1"
@@ -32,6 +50,7 @@ LOINC_SBP = "8480-6"
 LOINC_GCS_TOTAL = "9269-2"
 LOINC_PAIN = "72514-3"
 LOINC_MAP = "8478-0"
+LOINC_TEMP = "8310-5"       # body temperature
 
 CRITICAL_LAB_LOINCS = {
     "2823-3",   # Potassium
@@ -190,6 +209,31 @@ def _is_critical_lab(obs: dict[str, Any]) -> bool:
     return False
 
 
+def _temp_unit(observation: dict[str, Any]) -> str:
+    """Return the unit string for a temperature observation, lowercased."""
+    qty = observation.get("valueQuantity") or {}
+    unit = qty.get("unit") or qty.get("code") or ""
+    return str(unit).strip().lower()
+
+
+def _normalize_temperature(value: float, unit: str) -> float:
+    """Return temperature in Celsius.
+
+    Strategy: trust an explicit Fahrenheit unit, otherwise rely on the value
+    range.  Values outside the plausible Celsius human body range are assumed
+    to be Fahrenheit and converted.  This handles vendor systems that send a
+    numeric value with a missing or generic unit.
+    """
+    u = unit.strip().lower()
+    if u in {"f", "[degf]", "degf", "°f", "fahrenheit"}:
+        return (value - 32.0) * 5.0 / 9.0
+    if u in {"c", "cel", "[degc]", "degc", "°c", "celsius"}:
+        return value
+    if TEMP_C_PLAUSIBLE_LOW <= value <= TEMP_C_PLAUSIBLE_HIGH:
+        return value
+    return (value - 32.0) * 5.0 / 9.0
+
+
 @dataclass
 class TriageCriteria:
     qsofa_score: int = 0
@@ -197,6 +241,8 @@ class TriageCriteria:
     rapid_response: bool = False
     abnormal_lab: bool = False
     critical_vital: bool = False
+    critical_vital_respiratory: bool = False
+    critical_vital_circulatory: bool = False
     mental_status_alert: bool = False
     pain_score_high: bool = False
     active_condition: bool = False
@@ -224,18 +270,22 @@ def extract(bundle: dict[str, Any]) -> TriageCriteria:
 
     for obs in observations:
         ts = _effective_datetime(obs)
+        obs_loinc = _loinc(obs)
 
         def _add(loinc_code: str, value: float) -> None:
+            # Temperature normalization: any observation under LOINC_TEMP is
+            # converted to Celsius using the unit + sanity-range strategy.
+            if loinc_code == LOINC_TEMP:
+                value = _normalize_temperature(value, _temp_unit(obs))
             existing_ts = vitals_timestamps.get(loinc_code, _epoch)
             if loinc_code not in vitals or (ts is not None and ts > existing_ts):
                 vitals[loinc_code] = value
                 if ts is not None:
                     vitals_timestamps[loinc_code] = ts
 
-        code = _loinc(obs)
         val = _numeric(obs)
-        if code and val is not None:
-            _add(code, val)
+        if obs_loinc and val is not None:
+            _add(obs_loinc, val)
 
         # OpenEMR stores BP as a compound observation (LOINC 85354-9) with
         # component[].  Extract each component's LOINC + value individually so
@@ -248,14 +298,29 @@ def extract(bundle: dict[str, Any]) -> TriageCriteria:
 
     criteria.latest_vitals = vitals
 
+    # ── Freshness gate: only vitals within VITALS_FRESHNESS_WINDOW are eligible
+    # for rule evaluation.  Vitals with no timestamp are accepted (lenient for
+    # legacy data).  Stale vitals stay in latest_vitals for UI display.
+    now = datetime.now(timezone.utc)
+
+    def _fresh(loinc_code: str, window: timedelta = VITALS_FRESHNESS_WINDOW) -> float | None:
+        if loinc_code not in vitals:
+            return None
+        ts_obs = vitals_timestamps.get(loinc_code)
+        if ts_obs is not None and (now - ts_obs) > window:
+            return None
+        return vitals[loinc_code]
+
     # ── qSOFA ─────────────────────────────────────────────────────────────────
     score = 0
-    if vitals.get(LOINC_RR, 0) >= QSOFA_RR_HIGH:
+    fresh_rr = _fresh(LOINC_RR)
+    fresh_sbp = _fresh(LOINC_SBP)
+    if fresh_rr is not None and fresh_rr >= QSOFA_RR_HIGH:
         score += 1
-    if vitals.get(LOINC_SBP, 999) <= QSOFA_SBP_LOW:
+    if fresh_sbp is not None and fresh_sbp <= QSOFA_SBP_LOW:
         score += 1
     # Mental-status change would add +1; approximated via GCS < 15
-    gcs = vitals.get(LOINC_GCS_TOTAL)
+    gcs = _fresh(LOINC_GCS_TOTAL)
     if gcs is not None and gcs < 15:
         score += 1
         criteria.mental_status_alert = True
@@ -265,22 +330,34 @@ def extract(bundle: dict[str, Any]) -> TriageCriteria:
     # Accept both arterial SpO2 (2708-6) and pulse oximetry (59408-5 — most
     # common in OpenEMR bedside charting).  Use whichever is present; prefer
     # the lower value if both exist (more conservative for safety).
-    spo2_abg = vitals.get(LOINC_SPO2)
-    spo2_pulse = vitals.get(LOINC_SPO2_PULSE)
+    spo2_abg = _fresh(LOINC_SPO2)
+    spo2_pulse = _fresh(LOINC_SPO2_PULSE)
     spo2_candidates = [v for v in (spo2_abg, spo2_pulse) if v is not None]
     spo2 = min(spo2_candidates) if spo2_candidates else None
-    hr = vitals.get(LOINC_HR)
-    rr = vitals.get(LOINC_RR)
-    map_val = vitals.get(LOINC_MAP)
-    sbp = vitals.get(LOINC_SBP)
+    hr = _fresh(LOINC_HR)
+    rr = _fresh(LOINC_RR)
+    map_val = _fresh(LOINC_MAP)
+    sbp = _fresh(LOINC_SBP)
+    temp = _fresh(LOINC_TEMP)
+
     if (
         (spo2 is not None and spo2 < CRITICAL_SPO2_LOW)
-        or (hr is not None and hr > CRITICAL_HR_HIGH)
         or (rr is not None and rr > CRITICAL_RR_HIGH)
+        or (temp is not None and (temp < CRITICAL_TEMP_LOW or temp > CRITICAL_TEMP_HIGH))
+    ):
+        criteria.critical_vital_respiratory = True
+
+    if (
+        (hr is not None and hr > CRITICAL_HR_HIGH)
         or (map_val is not None and map_val < CRITICAL_MAP_LOW)
         or (sbp is not None and sbp <= CRITICAL_SBP_LOW)
     ):
-        criteria.critical_vital = True
+        criteria.critical_vital_circulatory = True
+
+    # Backward-compatible derived field — fallback for explainer/dashboards.
+    criteria.critical_vital = (
+        criteria.critical_vital_respiratory or criteria.critical_vital_circulatory
+    )
 
     # ── Labs — restrict interpretation checks to laboratory-category observations
     for obs in observations:
@@ -292,11 +369,12 @@ def extract(bundle: dict[str, Any]) -> TriageCriteria:
             criteria.abnormal_lab = True
 
     # ── Pain ──────────────────────────────────────────────────────────────────
-    for obs in observations:
-        if _loinc(obs) == LOINC_PAIN:
-            val = _numeric(obs)
-            if val is not None and val >= PAIN_HIGH_THRESHOLD:
-                criteria.pain_score_high = True
+    # Routed through _fresh() so a stale severe-pain reading does not fire P7.
+    # Window is tighter than other vitals to match the YAML guideline ("≥ 8/10
+    # documented in last 4 h").
+    pain = _fresh(LOINC_PAIN, PAIN_FRESHNESS_WINDOW)
+    if pain is not None and pain >= PAIN_HIGH_THRESHOLD:
+        criteria.pain_score_high = True
 
     # ── Active conditions ─────────────────────────────────────────────────────
     conditions = [

@@ -102,16 +102,16 @@ class TestStableVitalsPath:
         c = TriageCriteria(critical_lab=False, abnormal_lab=False)
         assert c.critical_lab is False
 
-    def test_active_condition_alone_ranks_level_8(self):
-        # Active condition but no other elevated criteria → P8 "Active Condition — Stable"
+    def test_active_condition_alone_ranks_level_9(self):
+        # Active condition but no other elevated criteria → P9 "Active Condition — Stable"
         c = TriageCriteria(active_condition=True)
         result = rank(c)
-        assert result.level == 8
+        assert result.level == 9
 
-    def test_no_flags_ranks_level_10(self):
+    def test_no_flags_ranks_level_11(self):
         c = TriageCriteria()
         result = rank(c)
-        assert result.level == 10
+        assert result.level == 11
 
 
 # ── Rules engine unit tests ────────────────────────────────────────────────────
@@ -133,25 +133,36 @@ class TestRulesEngine:
         result = rank(c)
         assert result.level == 3
 
-    def test_level_4_critical_vital(self):
-        c = TriageCriteria(qsofa_score=0, critical_lab=False, critical_vital=True)
+    def test_level_4_respiratory_critical_vital(self):
+        c = TriageCriteria(qsofa_score=0, critical_lab=False, critical_vital_respiratory=True, critical_vital=True)
         result = rank(c)
         assert result.level == 4
 
-    def test_level_5_mental_status(self):
-        c = TriageCriteria(qsofa_score=0, critical_lab=False, critical_vital=False, mental_status_alert=True)
+    def test_level_5_circulatory_critical_vital(self):
+        c = TriageCriteria(
+            qsofa_score=0,
+            critical_lab=False,
+            critical_vital_respiratory=False,
+            critical_vital_circulatory=True,
+            critical_vital=True,
+        )
         result = rank(c)
         assert result.level == 5
 
-    def test_level_6_severe_pain(self):
-        c = TriageCriteria(pain_score_high=True)
+    def test_level_6_mental_status(self):
+        c = TriageCriteria(qsofa_score=0, critical_lab=False, critical_vital=False, mental_status_alert=True)
         result = rank(c)
         assert result.level == 6
 
-    def test_level_10_catch_all(self):
+    def test_level_7_severe_pain(self):
+        c = TriageCriteria(pain_score_high=True)
+        result = rank(c)
+        assert result.level == 7
+
+    def test_level_11_catch_all(self):
         c = TriageCriteria()
         result = rank(c)
-        assert result.level == 10
+        assert result.level == 11
 
     def test_result_is_frozen_dataclass(self):
         c = TriageCriteria(critical_lab=True)
@@ -164,7 +175,7 @@ class TestRulesEngine:
         result = rank(c)
         assert result.level == 1
 
-    def test_level_7_abnormal_lab_no_critical(self):
+    def test_level_8_abnormal_lab_no_critical(self):
         c = TriageCriteria(abnormal_lab=True, critical_lab=False, critical_vital=False)
         result = rank(c)
-        assert result.level == 7
+        assert result.level == 8
