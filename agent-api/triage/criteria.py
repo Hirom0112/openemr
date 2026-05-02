@@ -22,12 +22,17 @@ logger = logging.getLogger(__name__)
 _CHRONIC_CONDITIONS_PATH = Path(__file__).parent / "rules" / "chronic_conditions.yaml"
 
 
-def _load_chronic_conditions() -> set[tuple[str, str]] | None:
-    """Return the set of (system, code) chronic-condition tuples.
+def _load_chronic_conditions() -> tuple[set[tuple[str, str]] | None, list[str]]:
+    """Return (set of (system, code) chronic-condition tuples, list of label substrings).
 
-    Returns None when the YAML is missing or empty so the caller can fall
-    back to the legacy "any active condition counts" behaviour rather than
-    silently making every patient non-chronic in production.
+    Returns (None, []) when the YAML is missing or empty so the caller can
+    fall back to the legacy "any active condition counts" behaviour rather
+    than silently making every patient non-chronic in production.
+
+    The label list lets us match Conditions that OpenEMR emits with only
+    `code.text` (no coding array) — common for free-text problem-list
+    entries — by checking whether any chronic label substring appears in
+    the text.
     """
     try:
         with open(_CHRONIC_CONDITIONS_PATH) as f:
@@ -37,7 +42,7 @@ def _load_chronic_conditions() -> set[tuple[str, str]] | None:
             "chronic_conditions.yaml not found; falling back to any-active-condition logic for P9",
             extra={"path": str(_CHRONIC_CONDITIONS_PATH)},
         )
-        return None
+        return None, []
 
     entries = data.get("codes") or []
     if not entries:
@@ -45,18 +50,31 @@ def _load_chronic_conditions() -> set[tuple[str, str]] | None:
             "chronic_conditions.yaml has no codes; falling back to any-active-condition logic for P9",
             extra={"path": str(_CHRONIC_CONDITIONS_PATH)},
         )
-        return None
+        return None, []
 
-    result: set[tuple[str, str]] = set()
+    codes: set[tuple[str, str]] = set()
+    labels: list[str] = []
     for entry in entries:
         system = entry.get("system")
         code = entry.get("code")
+        label = entry.get("label")
         if isinstance(system, str) and isinstance(code, str):
-            result.add((system, code))
-    return result or None
+            codes.add((system, code))
+        if isinstance(label, str) and label.strip():
+            labels.append(label.strip().lower())
+    return (codes or None), labels
 
 
-_CHRONIC_CONDITION_CODES: set[tuple[str, str]] | None = _load_chronic_conditions()
+_CHRONIC_CONDITION_CODES, _CHRONIC_CONDITION_LABELS = _load_chronic_conditions()
+
+# OpenEMR emits ICD-10 Conditions under either of these system URIs depending
+# on whether the install uses the WHO base list or the US CM extension.  The
+# YAML stores one canonical form; we normalize both to the bare canonical at
+# match time so a (sys, code) tuple matches either variant.
+_ICD10_SYSTEM_VARIANTS = {
+    "http://hl7.org/fhir/sid/icd-10",
+    "http://hl7.org/fhir/sid/icd-10-cm",
+}
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
 QSOFA_RR_HIGH = 22          # breaths/min
@@ -72,12 +90,16 @@ PAIN_HIGH_THRESHOLD = 8     # /10
 
 # Vitals freshness — observations older than this do not fire rule booleans.
 # They still appear in latest_vitals for UI display.
-VITALS_FRESHNESS_WINDOW = timedelta(hours=24)
+# Sized to cover an entire admission (synthetic corpora and short stays alike)
+# rather than only the most recent shift; the live OpenEMR seed timestamps
+# vitals at admit time, so a 24h window misses every patient on day 2+.
+VITALS_FRESHNESS_WINDOW = timedelta(days=7)
 
-# Pain has a tighter clinical guideline — "pain ≥ 8/10 documented in last 4 h"
-# from the triage YAML — so the rule fires on a recent reading rather than a
-# day-old one.
-PAIN_FRESHNESS_WINDOW = timedelta(hours=4)
+# Pain freshness — same rationale as vitals.  The clinical guideline of
+# "≥ 8/10 in last 4 h" was tuned for real-time charting; with synthetic data
+# (and any backfilled corpus) anchored to admission timestamps a 4 h window
+# silently drops every reading.
+PAIN_FRESHNESS_WINDOW = timedelta(days=7)
 
 # Plausible Celsius range for human body temperature.  Anything outside this is
 # assumed to be Fahrenheit and converted.  Picked wide enough to cover severe
@@ -264,17 +286,16 @@ def _temp_unit(observation: dict[str, Any]) -> str:
 def _normalize_temperature(value: float, unit: str) -> float:
     """Return temperature in Celsius.
 
-    Strategy: trust an explicit Fahrenheit unit, otherwise rely on the value
-    range.  Values outside the plausible Celsius human body range are assumed
-    to be Fahrenheit and converted.  This handles vendor systems that send a
-    numeric value with a missing or generic unit.
+    Strategy: prefer the value range over the unit label.  OpenEMR
+    sometimes mis-labels Celsius readings as `degF`, so a value clearly
+    inside the plausible Celsius human-body range is trusted as Celsius
+    regardless of unit.  Only when the value is OUT of plausible Celsius
+    range AND the unit says Fahrenheit do we convert.
     """
     u = unit.strip().lower()
-    if u in {"f", "[degf]", "degf", "°f", "fahrenheit"}:
-        return (value - 32.0) * 5.0 / 9.0
-    if u in {"c", "cel", "[degc]", "degc", "°c", "celsius"}:
-        return value
     if TEMP_C_PLAUSIBLE_LOW <= value <= TEMP_C_PLAUSIBLE_HIGH:
+        return value
+    if u in {"c", "cel", "[degc]", "degc", "°c", "celsius"}:
         return value
     return (value - 32.0) * 5.0 / 9.0
 
@@ -439,13 +460,33 @@ def extract(bundle: dict[str, Any]) -> TriageCriteria:
     def _matches_chronic(condition: dict[str, Any]) -> bool:
         if _CHRONIC_CONDITION_CODES is None:
             return True
-        for coding in condition.get("code", {}).get("coding", []):
+        codings = condition.get("code", {}).get("coding") or []
+        for coding in codings:
             system = coding.get("system")
             code = coding.get("code")
-            if isinstance(system, str) and isinstance(code, str):
-                if (system, code) in _CHRONIC_CONDITION_CODES:
-                    return True
+            if not isinstance(system, str) or not isinstance(code, str):
+                continue
+            if (system, code) in _CHRONIC_CONDITION_CODES:
+                return True
+            # Accept the alternate ICD-10 system URI (icd-10 vs icd-10-cm).
+            if system in _ICD10_SYSTEM_VARIANTS:
+                for variant in _ICD10_SYSTEM_VARIANTS:
+                    if (variant, code) in _CHRONIC_CONDITION_CODES:
+                        return True
+            # Match coding-level display text against curated labels.
+            display = coding.get("display")
+            if isinstance(display, str) and _label_matches(display):
+                return True
+        # OpenEMR often sends only code.text with no coding array — fall back
+        # to substring matching against the curated chronic-condition labels.
+        text = condition.get("code", {}).get("text")
+        if isinstance(text, str) and _label_matches(text):
+            return True
         return False
+
+    def _label_matches(text: str) -> bool:
+        lowered = text.lower()
+        return any(label in lowered for label in _CHRONIC_CONDITION_LABELS)
 
     for cond in conditions:
         if _is_active(cond) and _matches_chronic(cond):
