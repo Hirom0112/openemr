@@ -59,8 +59,24 @@ if (is_string($envAgentApiUrl) && $envAgentApiUrl !== '') {
     $agentApiMisconfigured = true;
     error_log('[clinical-copilot] COPILOT_AGENT_API_URL is not set; agent panel will not load');
 }
-$providerId   = (int) ($oemrSession['authUserID'] ?? $_SESSION['authUserID'] ?? 0);
-$providerName = (string) ($oemrSession['authUser'] ?? $_SESSION['authUser'] ?? '');
+$providerId    = (int) ($oemrSession['authUserID'] ?? $_SESSION['authUserID'] ?? 0);
+$providerLogin = (string) ($oemrSession['authUser'] ?? $_SESSION['authUser'] ?? '');
+$providerName  = $providerLogin;
+if ($providerId > 0) {
+    $userRow = sqlQuery(
+        "SELECT title, fname, lname FROM users WHERE id = ?",
+        [$providerId]
+    );
+    if (is_array($userRow)) {
+        $title = trim((string) ($userRow['title'] ?? ''));
+        $fname = trim((string) ($userRow['fname'] ?? ''));
+        $lname = trim((string) ($userRow['lname'] ?? ''));
+        $parts = array_values(array_filter([$title, $fname, $lname], static fn(string $p): bool => $p !== ''));
+        if ($parts !== []) {
+            $providerName = implode(' ', $parts);
+        }
+    }
+}
 $sessionId    = session_id() ?: uniqid('copilot-', true);
 $patientIds   = $oemrSession['copilot_patient_ids'] ?? $_SESSION['copilot_patient_ids'] ?? [];
 if (empty($patientIds) && !empty($_GET['pids'])) {
