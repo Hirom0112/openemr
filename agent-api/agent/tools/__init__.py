@@ -256,12 +256,14 @@ async def get_census_summary(
 
     cache_key = census_cache_key(provider_id, patient_ids)
 
-    entries = await build_census(
+    census_result = await build_census(
         patient_ids,
         redis_client=redis_client,
         cache_key=cache_key,
         provider_id=provider_id,
     )
+    entries = census_result.verified
+    dropped_ids = census_result.dropped_ids
     annotated = await explain_census(entries, langfuse=langfuse, redis_client=redis_client)
 
     bundles: dict[str, dict] = {}
@@ -302,7 +304,13 @@ async def get_census_summary(
         extra={"census_size": len(verified)},
     )
     return {
-        "result": {"census": verified, "total": len(verified)},
+        "result": {
+            "census": verified,
+            "total": len(verified),
+            "requested": len(patient_ids),
+            "dropped": len(dropped_ids),
+            "dropped_ids": dropped_ids,
+        },
         "citations": citations,
         "metadata": _empty_metadata("get_census_summary", None, duration_ms, ["Patient", "Observation", "Condition"]),
     }

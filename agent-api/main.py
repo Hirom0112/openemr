@@ -452,12 +452,13 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
             extra={"session_id": request.session_id, "patient_count": len(request.patient_ids)},
         )
         try:
-            entries = await build_census(
+            census_result = await build_census(
                 request.patient_ids,
                 redis_client=_redis,
                 cache_key=census_cache_key(request.provider_id, request.patient_ids),
                 provider_id=request.provider_id,
             )
+            entries = census_result.verified
         except Exception as exc:
             duration_ms = int((time.monotonic() - t_start) * 1000)
             agent_prewarm_duration_seconds.labels(outcome="failed").observe(time.monotonic() - t_start)

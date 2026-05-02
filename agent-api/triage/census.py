@@ -13,10 +13,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import random
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable, TypeVar
 
+import httpx
 import redis.asyncio as aioredis
 
 from agent.metrics import (
@@ -24,12 +26,22 @@ from agent.metrics import (
     agent_data_cache_hits_total,
     agent_data_cache_misses_total,
 )
-from auth.fhir_client import fhir_client
+from auth.fhir_client import fhir_client, get_access_token, invalidate_token_cache
 from config import settings
 from triage.criteria import TriageCriteria, extract
 from triage.rules_engine import TriageResult, rank
 
 logger = logging.getLogger(__name__)
+
+# Cap concurrent _build_entry tasks. Matches the prefetch warmer's semaphore
+# so a single Sara-Chen-sized panel cannot stampede the FHIR token endpoint.
+_CENSUS_FANOUT_CONCURRENCY = 4
+
+# Transient HTTP status codes we will retry once on. 401 also forces a
+# token-cache invalidation before the retry.
+_RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({401, 408, 429, 500, 502, 503, 504})
+
+_T = TypeVar("_T")
 
 
 def census_cache_key(provider_id: str | None, patient_ids: list[str]) -> str:
@@ -115,10 +127,64 @@ def _patient_pid(patient_resource: dict) -> str:
     return ""
 
 
+@dataclass(frozen=True)
+class CensusBuildResult:
+    """Tuple returned by :func:`build_census`.
+
+    ``verified`` is the surviving census ranked by triage level.
+    ``dropped_ids`` lists every patient ID whose FHIR fetch failed even
+    after retry — surfaced in the tool response so the frontend can show
+    a stable count instead of silently shrinking.
+    """
+
+    verified: list[CensusEntry]
+    dropped_ids: list[str]
+
+
+async def _retry_fhir_call(
+    op: Callable[[], Awaitable[_T]],
+    patient_id: str,
+) -> _T:
+    """Run ``op`` with one retry on transient FHIR failures.
+
+    Retries on 401/408/429/5xx, network errors, and asyncio timeouts.
+    On 401 the FHIR token cache is invalidated before the second attempt
+    so the retry forces a fresh token. Non-retryable errors propagate.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(2):
+        try:
+            return await op()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status not in _RETRYABLE_STATUS_CODES or attempt == 1:
+                raise
+            if status == 401:
+                invalidate_token_cache()
+            logger.warning(
+                "FHIR call failed; retrying",
+                extra={"patient_id": patient_id, "attempt": attempt + 1, "status_code": status},
+            )
+            last_exc = exc
+        except (httpx.RequestError, asyncio.TimeoutError) as exc:
+            if attempt == 1:
+                raise
+            logger.warning(
+                "FHIR call failed; retrying",
+                extra={"patient_id": patient_id, "attempt": attempt + 1, "error": str(exc)},
+            )
+            last_exc = exc
+
+        await asyncio.sleep(0.15 * (2 ** attempt) + random.uniform(0, 0.05))
+
+    assert last_exc is not None
+    raise last_exc
+
+
 async def _build_entry(patient_id: str) -> CensusEntry | None:
     try:
-        patient = await fhir_client.get_patient(patient_id)
-        bundle = await fhir_client.get_bundle_for_patient(patient_id)
+        patient = await _retry_fhir_call(lambda: fhir_client.get_patient(patient_id), patient_id)
+        bundle = await _retry_fhir_call(lambda: fhir_client.get_bundle_for_patient(patient_id), patient_id)
     except Exception as exc:
         # Caller handles None → drop + log + metric. Keep the message
         # consistent so the upstream WARNING already includes the reason.
@@ -198,7 +264,7 @@ async def build_census(
     redis_client: aioredis.Redis | None = None,
     cache_key: str | None = None,
     provider_id: str | None = None,
-) -> list[CensusEntry]:
+) -> CensusBuildResult:
     """Return a census ranked by triage level (1 = most urgent).
 
     If patient_ids is empty, all patients in the system are fetched from FHIR
@@ -218,7 +284,10 @@ async def build_census(
             logger.debug("Census served from cache", extra={"cache_key": cache_key})
             agent_data_cache_hits_total.labels(cache="census").inc()
             raw = json.loads(cached)
-            return [CensusEntry(**row) for row in raw]
+            return CensusBuildResult(
+                verified=[CensusEntry(**row) for row in raw],
+                dropped_ids=[],
+            )
         agent_data_cache_misses_total.labels(cache="census").inc()
 
     if not patient_ids:
@@ -232,13 +301,29 @@ async def build_census(
     # stable input order makes _build_entry concurrency reproducible too.
     patient_ids = sorted(patient_ids)
 
-    tasks = [_build_entry(pid) for pid in patient_ids]
-    results = await asyncio.gather(*tasks)
+    # Refresh the FHIR token once before the fan-out. Without this, every
+    # concurrent task races to read the cached token; if it's expired they
+    # all see the stale value, hit FHIR with it, and 401 — silently dropping
+    # patients. One pre-call populates the cache so all tasks share it.
+    try:
+        await get_access_token()
+    except Exception as exc:
+        logger.warning("Pre-fanout FHIR token refresh failed", extra={"error": str(exc)})
+
+    semaphore = asyncio.Semaphore(_CENSUS_FANOUT_CONCURRENCY)
+
+    async def _bounded(pid: str) -> CensusEntry | None:
+        async with semaphore:
+            return await _build_entry(pid)
+
+    results = await asyncio.gather(*[_bounded(pid) for pid in patient_ids])
 
     entries: list[CensusEntry] = []
+    dropped_ids: list[str] = []
     for pid, entry in zip(patient_ids, results):
         if entry is None:
             agent_census_dropped_patients_total.inc()
+            dropped_ids.append(pid)
             logger.warning(
                 "Patient dropped from census after _build_entry failed",
                 extra={"patient_id": pid},
@@ -257,4 +342,4 @@ async def build_census(
         except Exception as exc:
             logger.warning("Census cache write failed", extra={"cache_key": cache_key, "error": str(exc)})
 
-    return entries
+    return CensusBuildResult(verified=entries, dropped_ids=dropped_ids)
