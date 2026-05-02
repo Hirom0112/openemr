@@ -165,6 +165,25 @@ export default function CensusRenderer({ data, citations, onBrief, providerName 
         <LivePill />
       </div>
 
+      {data?.dropped !== undefined && data.dropped > 0 && typeof data.requested === 'number' ? (
+        <div
+          role="status"
+          title={data.dropped_ids && data.dropped_ids.length > 0 ? `Failed: ${data.dropped_ids.join(', ')}` : undefined}
+          style={{
+            margin: '0 0 10px 0',
+            padding: '6px 10px',
+            fontSize: 12,
+            color: AMB.text,
+            background: AMB.bg,
+            border: `1px solid ${AMB.border}`,
+            borderLeft: `3px solid ${AMB.border}`,
+            borderRadius: 4,
+          }}
+        >
+          Showing {data.total} of {data.requested} patients — {data.dropped} failed to load. Refresh to retry.
+        </div>
+      ) : null}
+
       {/* Summary strip — 4 tier metric cards */}
       <MetricStrip
         ariaLabel="Census tier summary"

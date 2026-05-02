@@ -73,6 +73,9 @@ export interface PatientSummary {
 export interface CensusData {
   census: CensusPatient[];
   total: number;
+  requested?: number;
+  dropped?: number;
+  dropped_ids?: string[];
 }
 
 export interface ClinicalClaim {
