@@ -6,9 +6,9 @@
 
 The Clinical Co-Pilot is an AI assistant whose source code ships inside the OpenEMR repository but whose runtime is isolated from OpenEMR's process space. That distinction — co-located at build time, isolated at execution time — matters more than almost anything else in this document. If the agent crashes, OpenEMR keeps working. If the hospital network is slow, the agent falls back gracefully. The agent is never in the critical path of clinical care. It's additive or it's nothing.
 
-Here's what the system looks like in practice. Dr. Chen logs into OpenEMR as she normally would. A sidebar panel loads in the interface. She confirms her patient list for the day, and at that moment the agent fetches data for all of her patients from OpenEMR's API simultaneously, stores it in memory, and within 15 seconds delivers a ranked list of every patient sorted by clinical urgency. Every query she makes for the rest of her shift — patient briefings, lab questions, medication checks, handoff generation — is served from that cached data. That's why the responses are fast enough to use in a hallway between rooms.
+Here's what the system looks like in practice. Dr. Chen logs into OpenEMR as she normally would. She clicks the "Co-Pilot" tab in the OpenEMR nav bar, and a chat panel opens inside an iframe — same surface metaphor as ChatGPT or Claude Desktop, scoped to her clinical session. She confirms her patient list for the day, and at that moment the agent fetches data for all of her patients from OpenEMR's API simultaneously, stores it in memory, and within 15 seconds delivers a ranked triage list back into the chat thread, sorted by clinical urgency. Every query she makes for the rest of her shift — patient briefings, lab questions, medication checks, handoff generation — is served from that cached data. That's why the responses are fast enough to use in a hallway between rooms.
 
-The agent is built as a collection of Docker containers declared in the OpenEMR repository's existing compose stack. There's the agent API (a Python service that handles all the logic), a thin OpenEMR custom module that serves the React sidebar (a PHP shell only — it does no request handling), Redis (which holds the cached patient data and conversation state), and a monitoring stack (Langfuse, Grafana, Prometheus — all self-hosted, none sending data outside the network). The agent never writes to OpenEMR. It reads from OpenEMR exclusively through its FHIR API — not directly from the database, not through screen-scraping, but through the same API that any external system would use. This matters for compliance: every data access the agent makes is automatically logged in OpenEMR's audit trail.
+The agent is built as a collection of Docker containers declared in the OpenEMR repository's existing compose stack. There's the agent API (a Python service that handles all the logic), a thin OpenEMR custom module that serves the React chat panel inside an iframe mounted from the Co-Pilot nav tab (a PHP shell only — it does no request handling), Redis (which holds the cached patient data and conversation state), and a monitoring stack (Langfuse, Grafana, Prometheus — all self-hosted, none sending data outside the network). The agent never writes to OpenEMR. It reads from OpenEMR exclusively through its FHIR API — not directly from the database, not through screen-scraping, but through the same API that any external system would use. This matters for compliance: every data access the agent makes is automatically logged in OpenEMR's audit trail.
 
 The triage ranking — the heart of use case one — is done by a rules engine, not by AI. The 10 priority levels are evaluated deterministically: qSOFA criteria for sepsis, unacknowledged critical labs, rapid response events, abnormal but non-critical labs, stable overnight. The AI is called only after the ranking is complete, to write the one-line explanation for each patient. Clinical priority ordering must be traceable and reproducible. AI inference can't provide that guarantee; a rules engine can.
 
@@ -370,6 +370,51 @@ The observability stack must be able to answer the following questions at any ti
 - What is the cache hit rate for the current and recent sessions?
 - How many verification layer interventions occurred, and at what rate?
 
+### 5.5 Structured Logging, Metric Catalog, and Request-ID Contract
+
+The observability primitives that satisfy §5.4 live in a dedicated leaf package, `agent-api/observability/`. The package contains the JSON log formatter, the `request_id` ContextVar and filter, and the shared `log_tool_outcome` helper. It must not import from any business sibling — this is enforced by the `observability-is-leaf` contract in `agent-api/.importlinter` alongside the existing `auth-is-leaf` and `checkpointer-is-leaf` rules. This guarantees that observability remains a cross-cutting concern that any layer can call into without creating a cycle.
+
+**`X-Request-ID` propagation contract (agent-ui ↔ agent-api).**
+
+- `agent-ui` generates a request ID per outbound request and sends it as the `X-Request-ID` header.
+- `RequestIdMiddleware` in `agent-api/main.py` honors any inbound `X-Request-ID`. If absent, it generates one. The value is bound to a `request_id` ContextVar for the request's async lifetime and echoed back on the response.
+- Every structured log line emitted from any layer during that request — middleware, dispatcher, tools, FHIR client, checkpointer — automatically carries the same `request_id` field via `RequestIdFilter`. A single ID is sufficient to grep the entire request lifecycle across processes.
+- The header name is fixed (`X-Request-ID`). Either side may originate the value; neither side may rewrite it mid-request.
+- The frontend logs the request ID alongside its own `agent_client_timing_seconds` submissions to `POST /agent/client-timing`, so client-perceived timings can be joined back to server-side spans.
+
+**Metric catalog.** All metrics are exported from the `agent-api` Prometheus endpoint. New metrics added in this pass:
+
+| Metric | Type | Labels | Emitted from |
+|---|---|---|---|
+| `agent_prewarm_duration_seconds` | Histogram | `outcome` | `main.py:_warm` (session-open prefetch) |
+| `agent_prewarm_runs_total` | Counter | `outcome` | `main.py:_warm` |
+| `agent_data_cache_hits_total` | Counter | `cache` (`bundle`/`briefing`/`census`/`explanation`) | `agent/tools/__init__.py`, `triage/census.py` |
+| `agent_data_cache_misses_total` | Counter | `cache` | as above |
+| `agent_prompt_cache_hits_total` | Counter | — | dispatcher / Anthropic call sites |
+| `agent_prompt_cache_misses_total` | Counter | — | dispatcher / Anthropic call sites |
+| `agent_fhir_token_cache_hits_total` | Counter | — | `auth/fhir_client.py` |
+| `agent_fhir_token_cache_misses_total` | Counter | — | `auth/fhir_client.py` |
+| `agent_checkpointer_ops_total` | Counter | `op` (`load`/`save`), `backend`, `outcome` | `agent/dispatcher.py` |
+| `agent_checkpointer_op_duration_seconds` | Histogram | `op`, `backend` | `agent/dispatcher.py` |
+| `agent_client_timing_seconds` | Histogram | `action` | `POST /agent/client-timing` (frontend-submitted) |
+| `agent_census_dropped_patients_total` | Counter | — | `triage/census.py:_build_entry` |
+
+**Structured log event catalog.** All events are JSON-formatted via `JsonLogFormatter` and carry the per-request `request_id` field automatically. Listed fields are in addition to the standard log envelope (`timestamp`, `level`, `logger`, `message`, `request_id`).
+
+| Event name | Level | Source | Fields |
+|---|---|---|---|
+| `prewarm_start` | INFO | `main.py:_warm` | `provider_id`, `census_size` |
+| `prewarm_complete` | INFO | `main.py:_warm` | `duration_ms`, `bundle_outcomes`, `briefing_outcomes`, `census_outcome` |
+| `prewarm_failed` | ERROR | `main.py:_warm` | `duration_ms`, `error` |
+| `tool_call_start` | INFO | `agent/dispatcher.py` | `tool_name`, `session_id`, `patient_id` |
+| `tool_call_end` | INFO | `agent/dispatcher.py` | `tool_name`, `duration_ms`, `outcome` |
+| `tool_outcome` | INFO | `observability/tool_logging.py:log_tool_outcome` | `tool_name`, `duration_ms`, `cache` (`hit`/`miss`/`n/a`), `session_id`, `patient_id` |
+| `checkpointer_op` | INFO | `agent/dispatcher.py` | `op` (`load`/`save`), `backend`, `outcome`, `duration_ms` |
+| `fhir_token_cache` | DEBUG | `auth/fhir_client.py` | `outcome` (`hit`/`miss`), `expires_in_s` |
+| `client_timing` | INFO | `POST /agent/client-timing` | `action`, `duration_ms` |
+
+When adding a new tool, cache, or background task, follow the same pattern: emit one `tool_outcome` (or equivalent) structured log line via `log_tool_outcome` and at least one Prometheus counter or histogram. This is the rule that keeps every latency or cache-hit claim verifiable from logs and metrics without re-reading the code.
+
 ---
 
 ## 6. Evaluation Framework
@@ -658,7 +703,13 @@ Every OpenEMR upstream release is a merge that this fork owns in perpetuity. Ope
 
 This is not a one-time cost. It is a recurring operational commitment that requires a named owner and a budgeted maintenance window per release cycle. It should be factored into the project timeline before committing to repo co-location as the permanent model.
 
-### 10.3 OpenEMR Module Conventions — Engineering Constraints
+### 10.3 Decision: Nav-Tab Iframe Integration Over Persistent Sidebar
+
+The original UI plan was a persistent sidebar mounted into the OpenEMR shell so the agent panel sat alongside the chart at all times. In practice every implementation attempt broke OpenEMR's existing UI: CSS specificity collisions with Bootstrap 4.6 and the legacy theme bundles, layout reflow that pushed unrelated panes off-screen, and intermittent breakage of unrelated nav elements that depend on the shell's exact DOM shape. The pivot is to integrate the same way OpenEMR's own custom modules do — a "Co-Pilot" nav tab registered through the standard module loader at `interface/modules/custom_modules/oe-module-clinical-copilot/` that mounts the React bundle inside an iframe and presents a chat surface (chat input plus a scrolling message thread with per-response renderers for briefing, census, handoff, medication, and query). The tradeoff is real: less visual integration with the chart and an extra click to reach the agent.
+
+The reasons the chatbox-via-iframe approach won out over the sidebar are concrete and additive: (1) the sidebar approach kept breaking OpenEMR's existing UI through CSS specificity collisions with Bootstrap 4.6 and the legacy theme bundles, layout reflow, and intermittent breakage of unrelated nav, and no amount of scoping selectors fully contained it; (2) a chat surface inside an iframe gives total CSS and JS isolation, so there is zero contamination risk for the rest of OpenEMR — the iframe boundary enforces this structurally, which is the same first-class constraint from §1.1 that the agent is never in the critical path of clinical care; (3) the chat metaphor matches how clinicians already think about asking the agent questions ("ask in a chat") and is the dominant LLM-product mental model, so there is no new UI pattern to learn on top of an already-loaded clinical workflow; (4) it mirrors how OpenEMR's own custom modules are integrated (nav tab → module page), so the integration follows the platform's existing extension contract instead of fighting it, which also limits the upstream-merge surface area discussed in §10.2; (5) it is materially faster to ship and iterate — changes to `agent-ui/` deploy independently of OpenEMR with no PHP, Twig, or Smarty work required to ship a UI change, which keeps the eval-gated release cadence in §6.1 cheap.
+
+### 10.4 OpenEMR Module Conventions — Engineering Constraints
 
 OpenEMR custom modules under `interface/modules/custom_modules/` are expected to follow specific registration conventions. The thin PHP module must conform to these to load correctly:
 
