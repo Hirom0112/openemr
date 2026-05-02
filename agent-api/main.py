@@ -451,6 +451,8 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
             "Pre-fetch warm started",
             extra={"session_id": request.session_id, "patient_count": len(request.patient_ids)},
         )
+        bulk_query_failed: bool = False
+        entries: list[Any] = []
         try:
             census_result = await build_census(
                 request.patient_ids,
@@ -458,20 +460,43 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
                 cache_key=census_cache_key(request.provider_id, request.patient_ids),
                 provider_id=request.provider_id,
             )
-            entries = census_result.verified
+            entries = list(census_result.verified)
         except Exception as exc:
+            # Census build can fail when the FHIR bulk Patient query
+            # (Patient?_count=200&_sort=_id) returns 500 — common on hosts
+            # where OpenEMR's FHIR search is partially broken. We still
+            # have the patient_ids the client passed in, so fall back to
+            # per-patient bundle/briefing warming rather than bailing
+            # entirely (which would leave every briefing cache cold).
             duration_ms = int((time.monotonic() - t_start) * 1000)
-            agent_prewarm_duration_seconds.labels(outcome="failed").observe(time.monotonic() - t_start)
-            agent_prewarm_runs_total.labels(outcome="failed").inc()
+            if not request.patient_ids:
+                # Nothing to fall back to — preserve the original failure path.
+                agent_prewarm_duration_seconds.labels(outcome="failed").observe(time.monotonic() - t_start)
+                agent_prewarm_runs_total.labels(outcome="failed").inc()
+                logger.warning(
+                    "Pre-fetch cache warming failed",
+                    extra={"session_id": request.session_id, "error": str(exc), "duration_ms": duration_ms},
+                )
+                return
+            bulk_query_failed = True
             logger.warning(
                 "Pre-fetch cache warming failed",
                 extra={"session_id": request.session_id, "error": str(exc), "duration_ms": duration_ms},
             )
-            return
+            logger.info(
+                "prefetch_bulk_query_failed_falling_back",
+                extra={
+                    "session_id": request.session_id,
+                    "error": str(exc),
+                    "patient_count": len(request.patient_ids),
+                    "request_id": request_id_var.get(),
+                },
+            )
 
-        # After census builds, fan out bundle + briefing warmers, bounded
-        # by a small semaphore so we don't hammer FHIR / Anthropic. Each
-        # warmer EXISTS-checks before writing so re-mounts are cheap.
+        # After census builds (or the bulk-Patient query falls back), fan
+        # out bundle + briefing warmers, bounded by a small semaphore so we
+        # don't hammer FHIR / Anthropic. Each warmer EXISTS-checks before
+        # writing so re-mounts are cheap.
         sem = asyncio.Semaphore(4)
 
         async def _warm_one(pid: str) -> None:
@@ -479,16 +504,30 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
                 await warm_bundle_for_patient(_redis, pid)
                 await warm_briefing_for_patient(_redis, pid, langfuse=_langfuse)
 
+        # When census-build failed, fall back to the patient_ids the client
+        # passed in. They are usable directly by the per-patient warmers
+        # (warm_bundle_for_patient / warm_briefing_for_patient resolve their
+        # own FHIR IDs via Patient?identifier=X — no bulk query required).
+        if bulk_query_failed:
+            fanout_ids = list(request.patient_ids)
+        else:
+            fanout_ids = [entry.patient_id for entry in entries]
+
         warm_tasks = [
-            asyncio.create_task(_warm_one(entry.patient_id))
-            for entry in entries
+            asyncio.create_task(_warm_one(pid))
+            for pid in fanout_ids
         ]
         results: list[Any] = []
         if warm_tasks:
             results = await asyncio.gather(*warm_tasks, return_exceptions=True)
 
         failures = sum(1 for r in results if isinstance(r, Exception))
-        outcome = "success" if failures == 0 else ("partial" if failures < len(results) else "failed")
+        if bulk_query_failed:
+            # Distinguish the fallback path so dashboards can detect bulk-query
+            # outages even when the per-patient warmers all succeeded.
+            outcome = "bulk_query_failed_fallback"
+        else:
+            outcome = "success" if failures == 0 else ("partial" if failures < len(results) else "failed")
         duration_s = time.monotonic() - t_start
         duration_ms = int(duration_s * 1000)
         agent_prewarm_duration_seconds.labels(outcome=outcome).observe(duration_s)

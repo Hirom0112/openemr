@@ -162,6 +162,19 @@ def _patch_client(side_effects: list[MagicMock]) -> Any:
 
 
 @pytest.mark.hard_failure
+def test_uses_haiku_4_5_model():
+    """Model passed to messages.create must be the Haiku 4.5 alias for fast cold briefings."""
+    ctx = _ctx_with_data()
+    responses = [_llm_response(_populated_tool_input())]
+
+    with _patch_client(responses) as mock_ctor:
+        _run(generate_briefing(ctx))
+
+    mock_client = mock_ctor.return_value
+    assert mock_client.messages.create.await_args.kwargs["model"] == "claude-haiku-4-5"
+
+
+@pytest.mark.hard_failure
 def test_returns_populated_sections_on_first_pass():
     """Schema-valid first response with populated sections — no retry occurs."""
     ctx = _ctx_with_data()

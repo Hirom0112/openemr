@@ -29,7 +29,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-sonnet-4-6"
+_MODEL = "claude-haiku-4-5"
 
 _SYSTEM = """You are a clinical documentation assistant generating a pre-encounter briefing for a rounding hospitalist.
 
@@ -92,12 +92,21 @@ async def generate_briefing(
     trace = langfuse.trace(name="briefing-generate", user_id=ctx.patient_id) if langfuse else None
     generation = trace.generation(name="briefing-llm", model=_MODEL, input=prompt) if trace else None
 
+    # WHY: mark the static system prompt as ephemeral so repeat Brief calls hit Anthropic's prompt cache.
+    system_blocks: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": _SYSTEM,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
     try:
         async def _call(messages: list[dict[str, Any]]) -> Any:
             return await client.messages.create(
                 model=_MODEL,
                 max_tokens=4096,
-                system=_SYSTEM,
+                system=system_blocks,
                 messages=messages,
                 tools=[PRODUCE_BRIEFING],
                 tool_choice={"type": "any"},

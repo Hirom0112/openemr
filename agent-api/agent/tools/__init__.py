@@ -35,8 +35,9 @@ from agent.citation import Citation, CitationList, ClaimClass, citations_for_fhi
 from agent.metrics import (
     agent_data_cache_hits_total,
     agent_data_cache_misses_total,
+    agent_prewarm_runs_total,
 )
-from observability.tool_logging import log_tool_outcome
+from observability.tool_logging import CacheState, log_tool_outcome
 from auth.fhir_client import fhir_client
 from briefing.context_builder import build as build_briefing_context
 from briefing.generator import generate_briefing
@@ -303,6 +304,19 @@ async def get_census_summary(
         session_id=session_context.get("session_id"),
         extra={"census_size": len(verified)},
     )
+
+    # Fan out briefing warmers in the background — bounded by a small
+    # semaphore so we don't hammer FHIR / Anthropic. Fire-and-forget: the
+    # census itself returns immediately so the UI render is not blocked.
+    # By the time the clinician clicks "Brief X", the briefing is in Redis.
+    _schedule_census_briefing_warm(
+        redis_client=redis_client,
+        patient_ids=[e["patient_id"] for e in verified],
+        session_id=session_context.get("session_id"),
+        request_id=session_context.get("request_id"),
+        langfuse=langfuse,
+    )
+
     return {
         "result": {
             "census": verified,
@@ -314,6 +328,61 @@ async def get_census_summary(
         "citations": citations,
         "metadata": _empty_metadata("get_census_summary", None, duration_ms, ["Patient", "Observation", "Condition"]),
     }
+
+
+def _schedule_census_briefing_warm(
+    *,
+    redis_client: aioredis.Redis | None,
+    patient_ids: list[str],
+    session_id: str | None,
+    request_id: str | None,
+    langfuse: Any | None,
+) -> None:
+    """Schedule background briefing warmers for every census patient.
+
+    Uses ``asyncio.create_task`` so the caller (``get_census_summary``)
+    returns immediately. Each per-patient warmer is wrapped in try/except so
+    a single failure cannot escape and crash the event loop.
+    """
+    if redis_client is None:
+        logger.debug(
+            "census_briefing_warm_skipped_no_redis",
+            extra={"session_id": session_id, "request_id": request_id, "patient_count": len(patient_ids)},
+        )
+        return
+
+    if not patient_ids:
+        return
+
+    sem = asyncio.Semaphore(4)
+
+    async def _warm_one(pid: str) -> None:
+        try:
+            async with sem:
+                await warm_briefing_for_patient(redis_client, pid, langfuse=langfuse)
+        except Exception as exc:
+            logger.warning(
+                "census_briefing_warm_failed",
+                extra={
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "patient_id": pid,
+                    "error": str(exc),
+                },
+            )
+
+    for pid in patient_ids:
+        asyncio.create_task(_warm_one(pid))
+
+    agent_prewarm_runs_total.labels(outcome="scheduled").inc()
+    logger.info(
+        "census_briefing_warm_scheduled",
+        extra={
+            "session_id": session_id,
+            "request_id": request_id,
+            "patient_count": len(patient_ids),
+        },
+    )
 
 
 async def get_patient_briefing(
@@ -343,7 +412,12 @@ async def get_patient_briefing(
         return cached
 
     patient = await fhir_client.get_patient(patient_id)
-    bundle = await fhir_client.get_bundle_for_patient(patient_id)
+
+    bundle: dict[str, Any] | None = await _get_cached_bundle(redis_client, patient_id)
+    bundle_cache_state: CacheState = "hit" if bundle is not None else "miss"
+    if bundle is None:
+        bundle = await fhir_client.get_bundle_for_patient(patient_id)
+        await _set_cached_bundle(redis_client, patient_id, bundle)
 
     ctx = build_briefing_context(patient, bundle)
     raw_briefing = await generate_briefing(ctx, langfuse=langfuse)
@@ -371,6 +445,7 @@ async def get_patient_briefing(
         cache="miss",
         session_id=session_context.get("session_id"),
         patient_id=patient_id,
+        extra={"bundle_cache": bundle_cache_state},
     )
     return payload
 
