@@ -9,9 +9,54 @@ Output: TriageCriteria dataclass — one field per criteria key in the YAML
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
+
+import yaml
+
+logger = logging.getLogger(__name__)
+
+_CHRONIC_CONDITIONS_PATH = Path(__file__).parent / "rules" / "chronic_conditions.yaml"
+
+
+def _load_chronic_conditions() -> set[tuple[str, str]] | None:
+    """Return the set of (system, code) chronic-condition tuples.
+
+    Returns None when the YAML is missing or empty so the caller can fall
+    back to the legacy "any active condition counts" behaviour rather than
+    silently making every patient non-chronic in production.
+    """
+    try:
+        with open(_CHRONIC_CONDITIONS_PATH) as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        logger.warning(
+            "chronic_conditions.yaml not found; falling back to any-active-condition logic for P9",
+            extra={"path": str(_CHRONIC_CONDITIONS_PATH)},
+        )
+        return None
+
+    entries = data.get("codes") or []
+    if not entries:
+        logger.warning(
+            "chronic_conditions.yaml has no codes; falling back to any-active-condition logic for P9",
+            extra={"path": str(_CHRONIC_CONDITIONS_PATH)},
+        )
+        return None
+
+    result: set[tuple[str, str]] = set()
+    for entry in entries:
+        system = entry.get("system")
+        code = entry.get("code")
+        if isinstance(system, str) and isinstance(code, str):
+            result.add((system, code))
+    return result or None
+
+
+_CHRONIC_CONDITION_CODES: set[tuple[str, str]] | None = _load_chronic_conditions()
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
 QSOFA_RR_HIGH = 22          # breaths/min
@@ -377,12 +422,35 @@ def extract(bundle: dict[str, Any]) -> TriageCriteria:
         criteria.pain_score_high = True
 
     # ── Active conditions ─────────────────────────────────────────────────────
+    # P9 fires only on chronic, actively-managed disease — not on any Condition
+    # resource. Match clinicalStatus.coding[*].code == "active" AND at least
+    # one code.coding[*] (system, code) tuple in the curated chronic list.
     conditions = [
         entry.get("resource", {})
         for entry in resources.get("Condition", [])
     ]
-    if conditions:
-        criteria.active_condition = True
+
+    def _is_active(condition: dict[str, Any]) -> bool:
+        for coding in condition.get("clinicalStatus", {}).get("coding", []):
+            if coding.get("code") == "active":
+                return True
+        return False
+
+    def _matches_chronic(condition: dict[str, Any]) -> bool:
+        if _CHRONIC_CONDITION_CODES is None:
+            return True
+        for coding in condition.get("code", {}).get("coding", []):
+            system = coding.get("system")
+            code = coding.get("code")
+            if isinstance(system, str) and isinstance(code, str):
+                if (system, code) in _CHRONIC_CONDITION_CODES:
+                    return True
+        return False
+
+    for cond in conditions:
+        if _is_active(cond) and _matches_chronic(cond):
+            criteria.active_condition = True
+            break
 
     # ── Blank code status ─────────────────────────────────────────────────────
     # Look for an Observation with LOINC 81638-3.  Absence = blank code status.
