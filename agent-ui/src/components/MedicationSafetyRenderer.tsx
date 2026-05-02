@@ -1,7 +1,6 @@
 import type { Citation, MedicationSafetyData } from '../types';
-import DisclaimerIcon from './DisclaimerIcon';
-import { RED, AMB, NEU, cardStyle } from '../styles/tokens';
-import { Header, SectionHeading, ClaimRow, DisclaimerFooter } from './primitives';
+import { RED, AMB, NEU } from '../styles/tokens';
+import { Header, SectionHeading, ClaimRow, Markdown, CitationFooter } from './primitives';
 
 interface MedicationSafetyRendererProps {
   data: MedicationSafetyData;
@@ -9,10 +8,24 @@ interface MedicationSafetyRendererProps {
   citations: Citation[];
 }
 
+function CitationsList({ citations }: { citations: Citation[] }) {
+  return (
+    <ol style={{ margin: 0, paddingLeft: 18 }}>
+      {citations.map((c, i) => (
+        <li key={i} id={`copilot-citation-${i + 1}`} style={{ marginBottom: 2 }}>
+          {c.value_summary}
+          {c.effective_datetime ? ` — ${c.effective_datetime.slice(0, 10)}` : ''}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export default function MedicationSafetyRenderer({ data, narrative, citations }: MedicationSafetyRendererProps) {
   const hasAllergies = data.allergies && data.allergies.length > 0;
   const hasInteractions = data.interactions && data.interactions.length > 0;
   const hasMeds = data.current_medications && data.current_medications.length > 0;
+  const count = citations?.length ?? 0;
 
   return (
     <div style={{ fontSize: 13, color: NEU.text, fontFamily: 'inherit' }}>
@@ -46,14 +59,14 @@ export default function MedicationSafetyRenderer({ data, narrative, citations }:
       )}
 
       {narrative && (
-        <div style={{ ...cardStyle(NEU), marginTop: 8 }}>
-          <p style={{ margin: 0, fontSize: 13, color: NEU.text, lineHeight: 1.6 }}>{narrative}</p>
+        <div style={{ marginTop: 8 }}>
+          <Markdown narrative={narrative} citations={citations} />
         </div>
       )}
 
-      <DisclaimerFooter>
-        <DisclaimerIcon citations={citations} />
-      </DisclaimerFooter>
+      <CitationFooter count={count}>
+        <CitationsList citations={citations} />
+      </CitationFooter>
     </div>
   );
 }

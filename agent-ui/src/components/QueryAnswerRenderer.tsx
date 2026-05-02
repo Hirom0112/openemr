@@ -1,7 +1,6 @@
 import type { Citation, QueryAnswerData } from '../types';
-import DisclaimerIcon from './DisclaimerIcon';
-import { NEU, cardStyle } from '../styles/tokens';
-import { Header, Pill, SectionHeading, DisclaimerFooter } from './primitives';
+import { NEU } from '../styles/tokens';
+import { Header, Pill, SectionHeading, Markdown, CitationFooter } from './primitives';
 
 interface QueryAnswerRendererProps {
   data: QueryAnswerData;
@@ -9,8 +8,22 @@ interface QueryAnswerRendererProps {
   citations: Citation[];
 }
 
+function CitationsList({ citations }: { citations: Citation[] }) {
+  return (
+    <ol style={{ margin: 0, paddingLeft: 18 }}>
+      {citations.map((c, i) => (
+        <li key={i} id={`copilot-citation-${i + 1}`} style={{ marginBottom: 2 }}>
+          {c.value_summary}
+          {c.effective_datetime ? ` — ${c.effective_datetime.slice(0, 10)}` : ''}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export default function QueryAnswerRenderer({ data, narrative, citations }: QueryAnswerRendererProps) {
   const text = narrative || data.answer || '';
+  const count = citations?.length ?? 0;
 
   const windowPill = data.window_months != null
     ? <Pill color={NEU} label={`${data.window_months}mo`} />
@@ -18,28 +31,24 @@ export default function QueryAnswerRenderer({ data, narrative, citations }: Quer
 
   if (data.found === false) {
     return (
-      <div>
+      <>
         <Header title="Query answer" subtitle={data.searched} pill={windowPill} />
         <SectionHeading color={NEU}>No results found</SectionHeading>
-        <div style={cardStyle(NEU)}>
-          <p style={{ margin: 0, fontSize: 13, color: NEU.text, lineHeight: 1.6 }}>{text}</p>
-        </div>
-        <DisclaimerFooter>
-          <DisclaimerIcon citations={citations} />
-        </DisclaimerFooter>
-      </div>
+        <Markdown narrative={text} citations={citations} />
+        <CitationFooter count={count}>
+          <CitationsList citations={citations} />
+        </CitationFooter>
+      </>
     );
   }
 
   return (
-    <div>
+    <>
       <Header title="Query answer" subtitle={data.searched} pill={windowPill} />
-      <div style={cardStyle(NEU)}>
-        <p style={{ margin: 0, fontSize: 13, color: NEU.text, lineHeight: 1.6 }}>{text}</p>
-      </div>
-      <DisclaimerFooter>
-        <DisclaimerIcon citations={citations} />
-      </DisclaimerFooter>
-    </div>
+      <Markdown narrative={text} citations={citations} />
+      <CitationFooter count={count}>
+        <CitationsList citations={citations} />
+      </CitationFooter>
+    </>
   );
 }

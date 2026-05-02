@@ -1,8 +1,7 @@
 import type { BriefingSection, BriefingResponseSection, Citation } from '../types';
-import DisclaimerIcon from './DisclaimerIcon';
 import { RED, AMB, NEU, MUTED, cardStyle } from '../styles/tokens';
 import type { ColorToken } from '../styles/tokens';
-import { SectionHeading, ClaimRow, Pill, DisclaimerFooter } from './primitives';
+import { SectionHeading, ClaimRow, Pill, Markdown, CitationFooter } from './primitives';
 
 const SECTION_META: Record<string, { label: string; color: ColorToken }> = {
   diagnosis:   { label: 'Active problems',    color: NEU },
@@ -17,6 +16,19 @@ interface BriefingRendererProps {
   data: BriefingSection;
   narrative: string;
   citations: Citation[];
+}
+
+function CitationsList({ citations }: { citations: Citation[] }) {
+  return (
+    <ol style={{ margin: 0, paddingLeft: 18 }}>
+      {citations.map((c, i) => (
+        <li key={i} id={`copilot-citation-${i + 1}`} style={{ marginBottom: 2 }}>
+          {c.value_summary}
+          {c.effective_datetime ? ` — ${c.effective_datetime.slice(0, 10)}` : ''}
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 function renderSection(sec: BriefingResponseSection) {
@@ -47,8 +59,17 @@ function renderSection(sec: BriefingResponseSection) {
 }
 
 export default function BriefingRenderer({ data, narrative, citations }: BriefingRendererProps) {
+  const count = citations?.length ?? 0;
+
   if (!data?.sections) {
-    return <p style={{ margin: 0, fontSize: 13, color: NEU.text, lineHeight: 1.6 }}>{narrative}</p>;
+    return (
+      <>
+        <Markdown narrative={narrative} citations={citations} />
+        <CitationFooter count={count}>
+          <CitationsList citations={citations} />
+        </CitationFooter>
+      </>
+    );
   }
 
   return (
@@ -91,9 +112,16 @@ export default function BriefingRenderer({ data, narrative, citations }: Briefin
       {/* Sections in order returned by backend */}
       {data.sections.map((sec) => renderSection(sec))}
 
-      <DisclaimerFooter>
-        <DisclaimerIcon citations={citations} date={data.generated_at} />
-      </DisclaimerFooter>
+      {/* Optional summary narrative alongside sections */}
+      {narrative && (
+        <div style={{ marginTop: 10 }}>
+          <Markdown narrative={narrative} citations={citations} />
+        </div>
+      )}
+
+      <CitationFooter count={count}>
+        <CitationsList citations={citations} />
+      </CitationFooter>
     </div>
   );
 }

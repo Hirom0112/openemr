@@ -12,7 +12,6 @@ import QueryAnswerRenderer from './QueryAnswerRenderer';
 import MedicationSafetyRenderer from './MedicationSafetyRenderer';
 import HandoffRenderer from './HandoffRenderer';
 import TextRenderer from './TextRenderer';
-import CitationsPanel from './CitationsPanel';
 import { cardStyle, RED } from '../styles/tokens';
 
 interface ResponseRendererProps {
@@ -32,10 +31,9 @@ export default function ResponseRenderer({ response, onBrief, providerName }: Re
     );
   }
 
-  let body: React.ReactNode;
   switch (type) {
     case 'census':
-      body = (
+      return (
         <CensusRenderer
           data={data as CensusData}
           narrative={narrative}
@@ -44,58 +42,39 @@ export default function ResponseRenderer({ response, onBrief, providerName }: Re
           providerName={providerName}
         />
       );
-      break;
     case 'briefing':
-      body = (
+      return (
         <BriefingRenderer
           data={data as BriefingSection}
           narrative={narrative}
           citations={citations}
         />
       );
-      break;
     case 'query_answer':
-      body = (
+      return (
         <QueryAnswerRenderer
           data={data as QueryAnswerData}
           narrative={narrative}
           citations={citations}
         />
       );
-      break;
     case 'medication_safety':
-      body = (
+      return (
         <MedicationSafetyRenderer
           data={data as MedicationSafetyData}
           narrative={narrative}
           citations={citations}
         />
       );
-      break;
     case 'handoff':
-      body = (
+      return (
         <HandoffRenderer
           data={data as HandoffData}
           narrative={narrative}
           citations={citations}
         />
       );
-      break;
     default:
-      body = <TextRenderer narrative={narrative} citations={citations} />;
+      return <TextRenderer narrative={narrative} citations={citations} />;
   }
-
-  if (type === 'census') {
-    // census renders its own inline source attribution — skip CitationsPanel to avoid double render
-    return <>{body}</>;
-  }
-
-  const patientOrder = undefined;
-
-  return (
-    <>
-      {body}
-      <CitationsPanel citations={citations} patientOrder={patientOrder} />
-    </>
-  );
 }
