@@ -16,6 +16,7 @@ import json
 import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
+from typing import Any
 
 import anthropic
 from langfuse import Langfuse
@@ -50,10 +51,34 @@ Sections requirement (do not skip):
 
 def _render_prompt(ctx: BriefingContext) -> str:
     ctx_dict = asdict(ctx)
+
+    # Tell the model exactly which sections it MUST produce based on the data
+    # available, so it cannot collapse the response down to alerts only.
+    required_sections: list[str] = []
+    if ctx_dict.get("active_conditions"):
+        required_sections.append('"diagnosis" — one ClinicalClaim per active_condition entry')
+    if ctx_dict.get("active_medications"):
+        required_sections.append('"medications" — one ClinicalClaim per active_medication entry')
+    if ctx_dict.get("recent_vitals"):
+        required_sections.append('"vitals" — one ClinicalClaim per recent_vital entry')
+    if ctx_dict.get("recent_labs"):
+        required_sections.append('"labs" — one ClinicalClaim per recent_lab entry')
+    if ctx_dict.get("allergies"):
+        required_sections.append('"allergies" — one ClinicalClaim per allergy entry')
+
+    section_directive = (
+        "The sections array MUST contain the following sections (do not omit any):\n  - "
+        + "\n  - ".join(required_sections)
+        if required_sections
+        else "No clinical sections are derivable from the input. Return sections=[] and surface findings in alerts."
+    )
+
     return (
         f"Generate a pre-encounter briefing for the following patient.\n\n"
         f"<patient_data>\n{json.dumps(ctx_dict, indent=2)}\n</patient_data>\n\n"
-        f"Call the produce_briefing tool with a complete structured briefing."
+        f"{section_directive}\n\n"
+        f"Call the produce_briefing tool with the complete structured briefing — "
+        f"sections AND alerts. Returning only alerts is a hard error."
     )
 
 
@@ -68,24 +93,57 @@ async def generate_briefing(
     generation = trace.generation(name="briefing-llm", model=_MODEL, input=prompt) if trace else None
 
     try:
-        response = await client.messages.create(
-            model=_MODEL,
-            max_tokens=2048,
-            system=_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
-            tools=[PRODUCE_BRIEFING],
-            tool_choice={"type": "any"},
-        )
+        async def _call(messages: list[dict[str, Any]]) -> Any:
+            return await client.messages.create(
+                model=_MODEL,
+                max_tokens=4096,
+                system=_SYSTEM,
+                messages=messages,
+                tools=[PRODUCE_BRIEFING],
+                tool_choice={"type": "any"},
+            )
+
+        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+        response = await _call(messages)
 
         tool_block = next((b for b in response.content if b.type == "tool_use"), None)
         if tool_block is None:
             logger.error("No tool_use block in briefing response", extra={"patient_id": ctx.patient_id})
             return _fallback_briefing(ctx)
 
+        # The model occasionally drops the `sections` key entirely when it has alerts to emit.
+        # Detect that and retry once with an explicit instruction. Cheaper than a full fallback.
+        ctx_dict_for_check = asdict(ctx)
+        has_input_data = any(
+            ctx_dict_for_check.get(k) for k in
+            ("active_conditions", "active_medications", "recent_vitals", "recent_labs", "allergies")
+        )
+        sections_in_output = isinstance(tool_block.input.get("sections"), list) and tool_block.input.get("sections")
+        if has_input_data and not sections_in_output:
+            logger.warning(
+                "Briefing missing sections — retrying patient_id=%s raw_keys=%s",
+                ctx.patient_id, sorted(tool_block.input.keys()),
+            )
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": (
+                "Your last response omitted the sections array. Call produce_briefing again. "
+                "The sections array must contain a section for every populated input category "
+                "(diagnosis, medications, vitals, labs, allergies). Each section must include "
+                "ClinicalClaim entries with source_resource, source_code, source_value, and source_dt. "
+                "Keep the alerts array as before. Returning sections as an empty array is not acceptable."
+            )})
+            response = await _call(messages)
+            tool_block = next((b for b in response.content if b.type == "tool_use"), tool_block)
+
         if generation:
             generation.end(output=tool_block.input)
 
         briefing = BriefingResponse.model_validate(tool_block.input)
+        logger.info(
+            "Briefing model output patient_id=%s sections=%d alerts=%d raw_keys=%s",
+            ctx.patient_id, len(briefing.sections), len(briefing.alerts),
+            sorted(tool_block.input.keys()),
+        )
         return briefing
 
     except ValidationError as exc:
