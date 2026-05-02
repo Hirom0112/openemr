@@ -25,7 +25,18 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://redis:6379/0"
-    redis_ttl_seconds: int = 7200  # 2 hours — covers a full rounding shift
+    redis_ttl_seconds: int = 7200  # 2 hours — used by checkpointer turn storage
+
+    # Per-data-cache TTLs (env-overridable). Split so a stale briefing window
+    # does not have to match the bundle window. Bundle is the most expensive
+    # to refetch (8 FHIR searches), so it gets the longest TTL; census is
+    # short because triage criteria can change as new vitals/labs land;
+    # explanation is long because it is keyed on a hash of the input criteria
+    # and is therefore self-invalidating.
+    bundle_cache_ttl_seconds: int = 7200       # 2 hours
+    briefing_cache_ttl_seconds: int = 1800     # 30 minutes
+    census_cache_ttl_seconds: int = 900        # 15 minutes
+    explanation_cache_ttl_seconds: int = 86400  # 24 hours
 
     # SQLite fallback checkpointer
     sqlite_db_path: str = "/data/checkpoints.db"
