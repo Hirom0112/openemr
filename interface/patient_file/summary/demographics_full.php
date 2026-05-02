@@ -29,33 +29,15 @@ use OpenEMR\Common\Acl\AclMain;
 use OpenEMR\Common\Csrf\CsrfUtils;
 use OpenEMR\Common\Forms\FormActionBarSettings;
 use OpenEMR\Common\Session\SessionWrapperFactory;
-use OpenEMR\Common\Uuid\UuidRegistry;
 use OpenEMR\Core\Header;
 use OpenEMR\Core\OEGlobalsBag;
 use OpenEMR\Events\PatientDemographics\UpdateEvent;
-use OpenEMR\Services\PatientService;
 
 $session = SessionWrapperFactory::getInstance()->getActiveSession();
 
 // Session pid must be right or bad things can happen when demographics are saved!
 //
 $set_pid = $_GET["set_pid"] ?? ($_GET["pid"] ?? null);
-
-// Defense-in-depth: external callers (e.g., the clinical-copilot agent panel)
-// occasionally pass a FHIR Patient UUID instead of the integer
-// patient_data.pid column.  Detect and resolve the UUID via PatientService so
-// the page does not silently render with empty patient data.
-if (is_string($set_pid) && preg_match('/^[0-9a-f-]{36}$/i', $set_pid) === 1) {
-    try {
-        $resolvedPid = (new PatientService())->getPidByUuid(UuidRegistry::uuidToBytes($set_pid));
-        if (!empty($resolvedPid)) {
-            $set_pid = (string) $resolvedPid;
-        }
-    } catch (\Throwable $e) {
-        // Leave $set_pid unchanged — existing not-found handling will run.
-        error_log('demographics_full: UUID->pid resolution failed');
-    }
-}
 if ($set_pid && $set_pid != $session->get("pid")) {
     setpid($set_pid);
 }
