@@ -33,17 +33,20 @@ function openPatientChart(patientId: string, openemrPid?: string): void {
 }
 
 // Tier groupings based on rules_engine_config.yaml
-const IMMEDIATE_LEVELS = new Set([1, 2]);      // Sepsis / Rapid Response, Sepsis Concern
-const CRITICAL_VITAL_LEVELS = new Set([3, 4, 5, 6]); // Critical Lab, Critical Vital, AMS, Pain
-const CODE_STATUS_LEVEL = 9;                   // Blank Code Status
-const ABNORMAL_LAB_LEVELS = new Set([7]);      // Abnormal Lab — Monitoring Required
+const IMMEDIATE_LEVELS = new Set([1, 2]);
+const CRITICAL_LAB_LEVEL = 3;
+const CRITICAL_VITAL_LEVELS = new Set([4, 5, 6]);
+const SEVERE_PAIN_LEVEL = 7;
+const ABNORMAL_LAB_LEVELS = new Set([8]);
+const STABLE_CHRONIC_LEVEL = 9;
+const CODE_STATUS_LEVEL = 10;
 const LAB_PREVIEW_COUNT = 4;
 
 interface CensusRendererProps {
   data: CensusData;
   narrative: string;
   citations: Citation[];
-  onBrief: (patientName: string) => void;
+  onBrief: (patientName: string, patientId?: string) => void;
   providerName?: string;
 }
 
@@ -74,7 +77,7 @@ function CensusSectionHeading({ label, color, aside }: { label: string; color: C
   );
 }
 
-function CensusPatientRow({ patient, color, onBrief }: { patient: CensusPatient; color: ColorToken; onBrief: (name: string) => void }) {
+function CensusPatientRow({ patient, color, onBrief }: { patient: CensusPatient; color: ColorToken; onBrief: (name: string, patientId?: string) => void }) {
   const trigger = extractTrigger(patient.explanation);
   const briefBtnStyle: React.CSSProperties = {
     flexShrink: 0, fontSize: 12, fontWeight: 500, padding: '4px 10px',
@@ -104,7 +107,7 @@ function CensusPatientRow({ patient, color, onBrief }: { patient: CensusPatient;
         <>
           <button
             aria-label={`Brief ${patient.name}`}
-            onClick={() => onBrief(patient.name)}
+            onClick={() => onBrief(patient.name, patient.patient_id)}
             style={briefBtnStyle}
           >
             Brief ↗
@@ -123,7 +126,7 @@ function CensusPatientRow({ patient, color, onBrief }: { patient: CensusPatient;
 }
 
 function LabSeverityBadge({ level }: { level: number }) {
-  const isCritical = level === 3;
+  const isCritical = level === CRITICAL_LAB_LEVEL;
   const col = isCritical ? RED : AMB;
   const label = isCritical ? 'Critical' : 'Borderline';
   return (
@@ -143,9 +146,11 @@ export default function CensusRenderer({ data, citations, onBrief, providerName 
   const now = new Date();
 
   const immediate = census.filter(p => IMMEDIATE_LEVELS.has(p.triage_level));
+  const criticalLab = census.filter(p => p.triage_level === CRITICAL_LAB_LEVEL);
   const criticalVital = census.filter(p => CRITICAL_VITAL_LEVELS.has(p.triage_level));
-  const codeStatus = census.filter(p => p.triage_level === CODE_STATUS_LEVEL);
+  const severePain = census.filter(p => p.triage_level === SEVERE_PAIN_LEVEL);
   const abnormalLab = census.filter(p => ABNORMAL_LAB_LEVELS.has(p.triage_level));
+  const codeStatus = census.filter(p => p.triage_level === CODE_STATUS_LEVEL);
 
   const labVisible = labExpanded ? abnormalLab : abnormalLab.slice(0, LAB_PREVIEW_COUNT);
   const labHiddenCount = abnormalLab.length - LAB_PREVIEW_COUNT;
@@ -189,6 +194,7 @@ export default function CensusRenderer({ data, citations, onBrief, providerName 
         ariaLabel="Census tier summary"
         items={[
           { label: 'Immediate', count: immediate.length, color: RED },
+          { label: 'Critical lab', count: criticalLab.length, color: RED },
           { label: 'Critical vital', count: criticalVital.length, color: AMB },
           { label: 'Code unverified', count: codeStatus.length, color: RED },
           { label: 'Abnormal lab', count: abnormalLab.length, color: AMB },
@@ -203,11 +209,27 @@ export default function CensusRenderer({ data, citations, onBrief, providerName 
         </section>
       )}
 
+      {/* Critical lab — unacknowledged */}
+      {criticalLab.length > 0 && (
+        <section aria-labelledby="tier-critical-lab">
+          <CensusSectionHeading label="Critical lab — unacknowledged" color={RED} />
+          {criticalLab.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} />)}
+        </section>
+      )}
+
       {/* Critical vital sign */}
       {criticalVital.length > 0 && (
         <section aria-labelledby="tier-critical">
           <CensusSectionHeading label="Critical vital sign" color={AMB} />
           {criticalVital.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={AMB} onBrief={onBrief} />)}
+        </section>
+      )}
+
+      {/* Severe pain */}
+      {severePain.length > 0 && (
+        <section aria-labelledby="tier-pain">
+          <CensusSectionHeading label="Severe pain" color={AMB} />
+          {severePain.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={AMB} onBrief={onBrief} />)}
         </section>
       )}
 
@@ -251,7 +273,7 @@ export default function CensusRenderer({ data, citations, onBrief, providerName 
                       <LabSeverityBadge level={p.triage_level} />
                       <button
                         aria-label={`Brief ${p.name}`}
-                        onClick={() => onBrief(p.name)}
+                        onClick={() => onBrief(p.name, p.patient_id)}
                         style={{
                           flexShrink: 0, fontSize: 12, fontWeight: 500, padding: '4px 10px',
                           ...primaryButtonStyle(AMB),
