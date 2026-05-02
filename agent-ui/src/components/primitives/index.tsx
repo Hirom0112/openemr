@@ -1,4 +1,6 @@
+import { useState, useEffect, type ReactNode } from 'react';
 import type React from 'react';
+import ReactMarkdown from 'react-markdown';
 import {
   sectionHeadingStyle,
   claimRowStyle,
@@ -7,10 +9,12 @@ import {
   patientRowStyle,
   livePillStyle,
   admitBadgeStyle,
+  severityColor,
   NEU,
   MUTED,
 } from '../../styles/tokens';
-import type { ColorToken } from '../../styles/tokens';
+import type { ColorToken, Severity } from '../../styles/tokens';
+import type { Citation } from '../../types';
 
 export function SectionHeading({ color, children }: { color: ColorToken; children: React.ReactNode }) {
   return <div style={{ ...sectionHeadingStyle(color), marginBottom: 6, marginTop: 14 }}>{children}</div>;
@@ -41,10 +45,12 @@ export function Header({
   title,
   subtitle,
   pill,
+  meta,
 }: {
   title: string;
   subtitle?: string;
   pill?: React.ReactNode;
+  meta?: ReactNode;
 }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
@@ -52,7 +58,12 @@ export function Header({
         <div style={{ fontSize: 15, fontWeight: 500, color: '#111' }}>{title}</div>
         {subtitle && <div style={{ fontSize: 12, color: NEU.secondary, marginTop: 1 }}>{subtitle}</div>}
       </div>
-      {pill}
+      {(pill || meta) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {meta}
+          {pill}
+        </div>
+      )}
     </div>
   );
 }
@@ -194,3 +205,250 @@ export function DisclaimerFooter({ children }: { children: React.ReactNode }) {
 
 // Re-export MUTED to avoid double-import dance in renderers.
 export { MUTED };
+
+// ── Severity dot ─────────────────────────────────────────────────────────────
+export function SeverityDot({ level }: { level: Severity }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        width: 8,
+        height: 8,
+        borderRadius: '50%',
+        background: severityColor(level).dot,
+        display: 'inline-block',
+        verticalAlign: 'middle',
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
+// ── Metadata line (◆ Label · HH:MM · N sources) ─────────────────────────────
+export function MetadataLine({
+  icon,
+  label,
+  timestamp,
+  sources,
+}: {
+  icon?: ReactNode;
+  label: string;
+  timestamp?: string;
+  sources?: number;
+}) {
+  const parts: ReactNode[] = [];
+  parts.push(<span key="label">{label}</span>);
+  if (timestamp) parts.push(<span key="t">{timestamp}</span>);
+  if (typeof sources === 'number' && sources > 0) {
+    parts.push(<span key="s">{`${sources} source${sources === 1 ? '' : 's'}`}</span>);
+  }
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 11,
+        color: MUTED,
+        marginBottom: 4,
+      }}
+    >
+      {icon && <span aria-hidden="true">{icon}</span>}
+      {parts.map((p, i) => (
+        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {i > 0 && <span aria-hidden="true">·</span>}
+          {p}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ── Citation footer (▾/▸ N sources) ─────────────────────────────────────────
+export function CitationFooter({
+  count,
+  onToggle,
+  expanded,
+  children,
+}: {
+  count: number;
+  onToggle?: () => void;
+  expanded?: boolean;
+  children?: ReactNode;
+}) {
+  // Self-managed expand state when no controlled props provided.
+  const [internalOpen, setInternalOpen] = useState(false);
+  if (count <= 0) return null;
+  const isControlled = typeof expanded === 'boolean';
+  const open = isControlled ? !!expanded : internalOpen;
+  const toggle = () => {
+    if (onToggle) onToggle();
+    if (!isControlled) setInternalOpen((v) => !v);
+  };
+  return (
+    <div
+      style={{
+        marginTop: 12,
+        paddingTop: 8,
+        borderTop: `1px solid ${NEU.border}`,
+      }}
+    >
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        style={{
+          background: 'none',
+          border: 'none',
+          padding: 0,
+          margin: 0,
+          fontSize: 11,
+          color: MUTED,
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          fontFamily: 'inherit',
+        }}
+      >
+        <span aria-hidden="true">{open ? '▾' : '▸'}</span>
+        {`${count} source${count === 1 ? '' : 's'}`}
+      </button>
+      {open && children && (
+        <div style={{ marginTop: 6, fontSize: 12, color: NEU.text }}>{children}</div>
+      )}
+    </div>
+  );
+}
+
+// ── Skeleton row (animated shimmer) ─────────────────────────────────────────
+let __skeletonInjected = false;
+function injectSkeletonKeyframes() {
+  if (__skeletonInjected || typeof document === 'undefined') return;
+  __skeletonInjected = true;
+  const style = document.createElement('style');
+  style.textContent = `@keyframes copilot-shimmer {
+    0% { background-position: -200px 0; }
+    100% { background-position: calc(200px + 100%) 0; }
+  }`;
+  document.head.appendChild(style);
+}
+
+export function SkeletonRow({ width, height }: { width?: number | string; height?: number | string }) {
+  useEffect(() => {
+    injectSkeletonKeyframes();
+  }, []);
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        width: width ?? '100%',
+        height: height ?? 12,
+        borderRadius: 4,
+        background: `linear-gradient(90deg, ${NEU.bg} 0px, #eef0f2 40px, ${NEU.bg} 80px)`,
+        backgroundSize: '200px 100%',
+        animation: 'copilot-shimmer 1.4s ease-in-out infinite',
+        marginBottom: 6,
+      }}
+    />
+  );
+}
+
+// ── Markdown narrative renderer ─────────────────────────────────────────────
+// Renders narrative text (model output that may include `##`, `**`, lists,
+// inline code) safely. Default escaping is on — no `rehype-raw`. Long URLs
+// and code blocks wrap so the iframe never gets a horizontal scrollbar.
+//
+// `citations` is accepted for forward-compat (chip-anchor wiring), but
+// not required for the safe-render fix.
+export function Markdown({
+  narrative,
+  citations: _citations,
+}: {
+  narrative: string;
+  citations?: Citation[];
+}) {
+  void _citations;
+  if (!narrative) return null;
+  return (
+    <div
+      style={{
+        fontSize: 13,
+        color: NEU.text,
+        lineHeight: 1.6,
+        wordBreak: 'break-word',
+        overflowWrap: 'anywhere',
+      }}
+      className="copilot-markdown"
+    >
+      <ReactMarkdown
+        components={{
+          p: ({ children }) => <p style={{ margin: '0 0 8px' }}>{children}</p>,
+          ul: ({ children }) => (
+            <ul style={{ margin: '0 0 8px', paddingLeft: 18 }}>{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol style={{ margin: '0 0 8px', paddingLeft: 18 }}>{children}</ol>
+          ),
+          li: ({ children }) => <li style={{ marginBottom: 2 }}>{children}</li>,
+          h1: ({ children }) => (
+            <div style={{ fontSize: 14, fontWeight: 600, margin: '8px 0 6px' }}>{children}</div>
+          ),
+          h2: ({ children }) => (
+            <div style={{ fontSize: 13, fontWeight: 600, margin: '8px 0 6px' }}>{children}</div>
+          ),
+          h3: ({ children }) => (
+            <div style={{ fontSize: 13, fontWeight: 600, margin: '6px 0 4px' }}>{children}</div>
+          ),
+          code: ({ children }) => (
+            <code
+              style={{
+                background: NEU.bg,
+                border: `1px solid ${NEU.border}`,
+                borderRadius: 3,
+                padding: '0 4px',
+                fontSize: 12,
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                wordBreak: 'break-word',
+              }}
+            >
+              {children}
+            </code>
+          ),
+          pre: ({ children }) => (
+            <pre
+              style={{
+                background: NEU.bg,
+                border: `1px solid ${NEU.border}`,
+                borderRadius: 4,
+                padding: 8,
+                fontSize: 12,
+                overflowX: 'auto',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                margin: '0 0 8px',
+              }}
+            >
+              {children}
+            </pre>
+          ),
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#2c3e9e', wordBreak: 'break-all' }}
+            >
+              {children}
+            </a>
+          ),
+          strong: ({ children }) => (
+            <strong style={{ fontWeight: 600 }}>{children}</strong>
+          ),
+        }}
+      >
+        {narrative}
+      </ReactMarkdown>
+    </div>
+  );
+}

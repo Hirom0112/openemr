@@ -101,6 +101,25 @@ export function admitBadgeStyle(badge: { bg: string; fg: string; border: string 
   };
 }
 
+// Severity scale used for inline severity dots and row treatments.
+export type Severity = 'critical' | 'high' | 'moderate' | 'normal' | 'info';
+
+export function severityColor(level: Severity): { dot: string; text: string; accent: string } {
+  switch (level) {
+    case 'critical':
+      return { dot: RED.border, text: RED.text, accent: RED.bg };
+    case 'high':
+      return { dot: AMB.border, text: AMB.text, accent: AMB.bg };
+    case 'moderate':
+      return { dot: '#F4C77B', text: AMB.secondary, accent: AMB.bg };
+    case 'normal':
+      return { dot: NEU.border, text: NEU.secondary, accent: NEU.bg };
+    case 'info':
+    default:
+      return { dot: MUTED, text: NEU.text, accent: NEU.bg };
+  }
+}
+
 // P1-P3 = RED (immediate / sepsis / critical lab),
 // P4-P7 = AMB (critical vital, AMS, pain, abnormal lab),
 // P8+   = NEU (incl. P9 code-status which renderers re-skin red contextually).

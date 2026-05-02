@@ -1,12 +1,24 @@
 import type { Citation, HandoffData, HandoffPatient } from '../types';
-import DisclaimerIcon from './DisclaimerIcon';
 import { RED, NEU, MUTED } from '../styles/tokens';
-import { SectionHeading, ClaimRow, PatientRow, DisclaimerFooter } from './primitives';
+import { SectionHeading, ClaimRow, PatientRow, Markdown, CitationFooter } from './primitives';
 
 interface HandoffRendererProps {
   data: HandoffData;
   narrative: string;
   citations: Citation[];
+}
+
+function CitationsList({ citations }: { citations: Citation[] }) {
+  return (
+    <ol style={{ margin: 0, paddingLeft: 18 }}>
+      {citations.map((c, i) => (
+        <li key={i} id={`copilot-citation-${i + 1}`} style={{ marginBottom: 2 }}>
+          {c.value_summary}
+          {c.effective_datetime ? ` — ${c.effective_datetime.slice(0, 10)}` : ''}
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 function HandoffPatientBlock({ patient }: { patient: HandoffPatient }) {
@@ -53,9 +65,18 @@ function HandoffPatientBlock({ patient }: { patient: HandoffPatient }) {
   );
 }
 
-export default function HandoffRenderer({ data, narrative }: HandoffRendererProps) {
+export default function HandoffRenderer({ data, narrative, citations }: HandoffRendererProps) {
+  const count = citations?.length ?? 0;
+
   if (!data?.patients?.length) {
-    return <p style={{ fontSize: 13, color: NEU.text, margin: 0, lineHeight: 1.6 }}>{narrative}</p>;
+    return (
+      <>
+        <Markdown narrative={narrative} citations={citations} />
+        <CitationFooter count={count}>
+          <CitationsList citations={citations} />
+        </CitationFooter>
+      </>
+    );
   }
 
   return (
@@ -71,9 +92,9 @@ export default function HandoffRenderer({ data, narrative }: HandoffRendererProp
         <HandoffPatientBlock key={pt.patient_id} patient={pt} />
       ))}
 
-      <DisclaimerFooter>
-        <DisclaimerIcon />
-      </DisclaimerFooter>
+      <CitationFooter count={count}>
+        <CitationsList citations={citations} />
+      </CitationFooter>
     </div>
   );
 }
