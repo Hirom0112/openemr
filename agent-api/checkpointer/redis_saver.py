@@ -22,7 +22,7 @@ Usage
 
 import json
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 import redis.asyncio as aioredis
 
@@ -32,6 +32,40 @@ logger = logging.getLogger(__name__)
 
 ConversationRole = Literal["user", "assistant", "tool"]
 
+# Sentinel prefix for a stored content value that is a JSON-encoded list of
+# Anthropic content blocks (text, tool_use, tool_result), as opposed to a
+# plain narrative string.  Picked as something that cannot occur in normal
+# free-text content.
+_BLOCKS_PREFIX = "__blocks__:"
+
+
+def _encode_content(content: str | list[dict[str, Any]]) -> str:
+    """Serialize content for storage.  Lists are tagged with _BLOCKS_PREFIX."""
+    if isinstance(content, list):
+        return _BLOCKS_PREFIX + json.dumps(content, default=_block_default)
+    return content
+
+
+def _block_default(obj: Any) -> Any:
+    # Anthropic SDK content blocks are pydantic models; fall back to .dict() / repr.
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    return str(obj)
+
+
+def _decode_content(content: Any) -> str | list[dict[str, Any]]:
+    """Inverse of _encode_content; tolerates legacy plain-string entries."""
+    if isinstance(content, str) and content.startswith(_BLOCKS_PREFIX):
+        try:
+            decoded = json.loads(content[len(_BLOCKS_PREFIX):])
+            if isinstance(decoded, list):
+                return decoded
+        except (ValueError, TypeError):
+            pass
+    return content if isinstance(content, str) else str(content)
+
 
 class RedisSaver:
     def __init__(self, client: aioredis.Redis) -> None:
@@ -40,13 +74,25 @@ class RedisSaver:
     def _key(self, session_id: str) -> str:
         return f"copilot:checkpoint:{session_id}"
 
-    async def append(self, session_id: str, role: ConversationRole, content: str, metadata: dict | None = None) -> int:
-        """Append one turn and return the new turn index."""
+    async def append(
+        self,
+        session_id: str,
+        role: ConversationRole,
+        content: str | list[dict[str, Any]],
+        metadata: dict | None = None,
+    ) -> int:
+        """Append one turn and return the new turn index.
+
+        ``content`` may be a plain string (legacy / final narrative) or a list
+        of Anthropic content blocks (text, tool_use, tool_result).  Lists are
+        tagged with a sentinel prefix so ``load`` can return them verbatim.
+        """
         key = self._key(session_id)
 
         turn_index: int = await self._redis.hlen(key)
         field = f"t{turn_index}"
-        payload = json.dumps({"role": role, "content": content, **(metadata or {})})
+        encoded = _encode_content(content)
+        payload = json.dumps({"role": role, "content": encoded, **(metadata or {})})
 
         pipe = self._redis.pipeline()
         pipe.hset(key, field, payload)
@@ -64,7 +110,13 @@ class RedisSaver:
             return []
 
         turns = sorted(raw.items(), key=lambda kv: int(kv[0].decode().lstrip("t")))
-        return [json.loads(v) for _, v in turns]
+        result: list[dict] = []
+        for _, v in turns:
+            entry = json.loads(v)
+            if "content" in entry:
+                entry["content"] = _decode_content(entry["content"])
+            result.append(entry)
+        return result
 
     async def clear(self, session_id: str) -> None:
         await self._redis.delete(self._key(session_id))

@@ -26,12 +26,40 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import aiosqlite
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+_BLOCKS_PREFIX = "__blocks__:"
+
+
+def _block_default(obj: Any) -> Any:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    return str(obj)
+
+
+def _encode_content(content: str | list[dict[str, Any]]) -> str:
+    if isinstance(content, list):
+        return _BLOCKS_PREFIX + json.dumps(content, default=_block_default)
+    return content
+
+
+def _decode_content(content: Any) -> str | list[dict[str, Any]]:
+    if isinstance(content, str) and content.startswith(_BLOCKS_PREFIX):
+        try:
+            decoded = json.loads(content[len(_BLOCKS_PREFIX):])
+            if isinstance(decoded, list):
+                return decoded
+        except (ValueError, TypeError):
+            pass
+    return content if isinstance(content, str) else str(content)
 
 
 class SqliteSaver:
@@ -56,7 +84,13 @@ class SqliteSaver:
             await db.execute("CREATE INDEX IF NOT EXISTS idx_session ON conversation_turns (session_id)")
             await db.commit()
 
-    async def append(self, session_id: str, role: str, content: str, metadata: dict | None = None) -> int:
+    async def append(
+        self,
+        session_id: str,
+        role: str,
+        content: str | list[dict[str, Any]],
+        metadata: dict | None = None,
+    ) -> int:
         async with aiosqlite.connect(self._path) as db:
             cursor = await db.execute(
                 "SELECT COALESCE(MAX(turn_index) + 1, 0) FROM conversation_turns WHERE session_id = ?",
@@ -65,9 +99,10 @@ class SqliteSaver:
             row = await cursor.fetchone()
             turn_index: int = row[0] if row else 0
 
+            encoded = _encode_content(content)
             await db.execute(
                 "INSERT INTO conversation_turns (session_id, turn_index, role, content, metadata) VALUES (?, ?, ?, ?, ?)",
-                (session_id, turn_index, role, content, json.dumps(metadata) if metadata else None),
+                (session_id, turn_index, role, encoded, json.dumps(metadata) if metadata else None),
             )
             await db.commit()
 
@@ -83,7 +118,7 @@ class SqliteSaver:
             rows = await cursor.fetchall()
 
         return [
-            {"role": role, "content": content, **(json.loads(meta) if meta else {})}
+            {"role": role, "content": _decode_content(content), **(json.loads(meta) if meta else {})}
             for role, content, meta in rows
         ]
 
