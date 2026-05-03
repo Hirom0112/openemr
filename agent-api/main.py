@@ -757,8 +757,9 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
         # patient instead of 2.
         sem = asyncio.Semaphore(6)
 
-        async def _warm_one(pid: str) -> None:
+        async def _warm_one(pid: str, triage_rank: int | None, warmup_order: int) -> None:
             async with sem:
+                t_warm_start = time.monotonic()
                 # Bundle first — both downstream warmers read it from Redis.
                 await warm_bundle_for_patient(
                     _redis, pid, force_refresh=effective_force_refresh
@@ -776,19 +777,49 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
                     ),
                     return_exceptions=True,
                 )
+                # Per-patient observability: one structured event per warmup so
+                # we can verify ordering (highest-priority patient warms first)
+                # and per-patient latency from the log stream alone. Pairs with
+                # the aggregate agent_prewarm_duration_seconds histogram.
+                logger.info(
+                    "Pre-fetch patient warmed",
+                    extra={
+                        "patient_id": pid,
+                        "triage_rank": triage_rank,
+                        "warmup_order": warmup_order,
+                        "duration_ms": int((time.monotonic() - t_warm_start) * 1000),
+                        "cache": "miss" if effective_force_refresh else "n/a",
+                    },
+                )
 
-        # When census-build failed, fall back to the patient_ids the client
-        # passed in. They are usable directly by the per-patient warmers
-        # (warm_bundle_for_patient / warm_briefing_for_patient resolve their
-        # own FHIR IDs via Patient?identifier=X — no bulk query required).
+        # Order the fan-out by triage rank so the patient most likely to be
+        # clicked first (level 1 = most urgent) warms first. Within a bounded
+        # semaphore the iteration order determines who gets a worker slot
+        # first, which is exactly the latency the user perceives on the
+        # initial click. Census entries are already sorted by
+        # (triage_level, name) inside build_census; we make the contract
+        # explicit here so a future re-shuffle of build_census's internal
+        # sort cannot silently regress the warm-order guarantee.
+        ranked_fanout: list[tuple[str, int | None]]
         if bulk_query_failed:
-            fanout_ids = list(request.patient_ids)
+            # When census-build failed, fall back to the patient_ids the
+            # client passed in. We have no triage rank for them — use None
+            # and preserve client-supplied order.
+            ranked_fanout = [(pid, None) for pid in request.patient_ids]
         else:
-            fanout_ids = [entry.patient_id for entry in entries]
+            # Tolerate entries that lack triage_level (legacy/test stubs);
+            # those sort last and carry None as the rank in the warmup log.
+            ranked_fanout = sorted(
+                (
+                    (entry.patient_id, getattr(entry, "triage_level", None))
+                    for entry in entries
+                ),
+                key=lambda pair: (pair[1] is None, pair[1] if pair[1] is not None else 0),
+            )
 
         warm_tasks = [
-            asyncio.create_task(_warm_one(pid))
-            for pid in fanout_ids
+            asyncio.create_task(_warm_one(pid, rank, idx))
+            for idx, (pid, rank) in enumerate(ranked_fanout)
         ]
         results: list[Any] = []
         if warm_tasks:

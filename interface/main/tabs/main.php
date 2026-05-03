@@ -611,7 +611,7 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
             // (matches census_cache_ttl). Per-day debounce was too sticky — once
             // the script ran on the first reload of the morning, every subsequent
             // reload skipped the prefetch and the user kept seeing stale data.
-            $copilotPrefetchKey = 'copilot_prefetched_' . date('Y-m-d-H') . '-' . str_pad((string) (intdiv((int) date('i'), 5) * 5), 2, '0', STR_PAD_LEFT);
+            $copilotPrefetchKey = 'copilot_prefetched_' . session_id() . '_' . date('Y-m-d-H') . '-' . str_pad((string) (intdiv((int) date('i'), 5) * 5), 2, '0', STR_PAD_LEFT);
             $copilotConfig = [
                 'agentApiUrl' => $copilotAgentUrl,
                 'sessionId'   => $copilotSessionId,
