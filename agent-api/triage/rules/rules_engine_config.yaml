@@ -80,11 +80,11 @@ priority_levels:
       critical_vital: false
       critical_lab: false
 
-  - level: 10
-    label: "Blank Code Status"
-    description: "Code-status field is empty — requires clarification"
-    criteria:
-      blank_code_status: true
+  # Level 10 ("Blank Code Status") removed: in this deployment OpenEMR
+  # does not always carry the LOINC 81638-3 observation, so patients
+  # without it were being mis-tiered as priority-10 even when their
+  # actual acuity was Routine. The blank-code-status flag is still
+  # available to downstream consumers (it just no longer drives a tier).
 
   - level: 11
     label: "Routine"
