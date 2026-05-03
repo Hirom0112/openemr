@@ -45,7 +45,7 @@ from briefing.schema import BriefingResponse
 from config import settings
 from handoff.generator import generate_handoffs
 from medication.safety import add_llm_summary, run_safety_checks
-from triage.census import build_census, census_cache_key
+from triage.census import _patient_pid, build_census, census_cache_key
 from triage.criteria import extract as extract_criteria
 from triage.explainer import explain_census
 from triage.rules_engine import rank
@@ -456,8 +456,12 @@ async def get_patient_briefing(
 
     citations = _citation_from_briefing(verified, patient_id)
     duration_ms = int((time.monotonic() - t0) * 1000)
+    # WHY: frontend's "Verify in Chart" button needs the numeric OpenEMR PID to
+    # build a working set_pid deep-link. The FHIR UUID won't pass demographics.php.
+    result_data = verified.model_dump()
+    result_data["openemr_pid"] = _patient_pid(patient)
     payload = {
-        "result": verified.model_dump(),
+        "result": result_data,
         "citations": citations,
         "metadata": _empty_metadata(
             "get_patient_briefing",
