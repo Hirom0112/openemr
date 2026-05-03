@@ -103,16 +103,26 @@ class RedisSaver:
         return turn_index
 
     async def load(self, session_id: str) -> list[dict]:
-        """Return turns in insertion order."""
+        """Return turns in insertion order.
+
+        Tolerates both bytes and str responses from Redis: clients configured
+        with ``decode_responses=True`` return str keys/values, otherwise bytes.
+        Without this defence ``kv[0].decode()`` raises ``AttributeError`` on
+        str — silently dropping the entire conversation history because the
+        dispatcher catches the exception and falls back to an empty load.
+        """
         key = self._key(session_id)
-        raw: dict[bytes, bytes] = await self._redis.hgetall(key)
+        raw = await self._redis.hgetall(key)
         if not raw:
             return []
 
-        turns = sorted(raw.items(), key=lambda kv: int(kv[0].decode().lstrip("t")))
+        def _as_str(v: bytes | str) -> str:
+            return v.decode() if isinstance(v, (bytes, bytearray)) else v
+
+        turns = sorted(raw.items(), key=lambda kv: int(_as_str(kv[0]).lstrip("t")))
         result: list[dict] = []
         for _, v in turns:
-            entry = json.loads(v)
+            entry = json.loads(_as_str(v))
             if "content" in entry:
                 entry["content"] = _decode_content(entry["content"])
             result.append(entry)
