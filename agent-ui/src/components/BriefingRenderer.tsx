@@ -1,7 +1,7 @@
 import type { BriefingSection, BriefingResponseSection, Citation } from '../types';
-import { RED, AMB, NEU, MUTED, cardStyle } from '../styles/tokens';
+import { RED, AMB, NEU, MUTED } from '../styles/tokens';
 import type { ColorToken } from '../styles/tokens';
-import { SectionHeading, ClaimRow, Pill, Markdown, CitationFooter } from './primitives';
+import { Header, SectionHeading, ClaimRow, Pill, Markdown, CitationFooter } from './primitives';
 
 const SECTION_META: Record<string, { label: string; color: ColorToken }> = {
   diagnosis:   { label: 'Active problems',    color: NEU },
@@ -72,41 +72,26 @@ export default function BriefingRenderer({ data, narrative, citations }: Briefin
     );
   }
 
+  const generatedTime = data.generated_at
+    ? new Date(data.generated_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+    : undefined;
+
   return (
     <div style={{ fontSize: 13, fontFamily: 'inherit' }}>
       {/* Patient header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
-        <div style={{ fontSize: 15, fontWeight: 500, color: '#111' }}>
-          {data.name}
-        </div>
-        {data.generated_at && (
-          <div style={{ fontSize: 11, color: MUTED }}>
-            {new Date(data.generated_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
-          </div>
-        )}
-      </div>
+      <Header
+        title={data.name}
+        meta={generatedTime ? <span style={{ fontSize: 11, color: MUTED }}>{generatedTime}</span> : undefined}
+      />
 
       {/* Hard alerts — always shown first */}
       {data.alerts?.length > 0 && (
-        <div style={{ ...cardStyle(RED), marginBottom: 10 }}>
-          <div
-            style={{
-              fontSize: 11,
-              fontWeight: 500,
-              textTransform: 'uppercase',
-              letterSpacing: '0.06em',
-              color: RED.text,
-              marginBottom: 6,
-            }}
-          >
-            Alerts
-          </div>
+        <>
+          <SectionHeading color={RED}>Alerts</SectionHeading>
           {data.alerts.map((a, i) => (
-            <div key={i} style={{ fontSize: 13, color: RED.text, lineHeight: 1.5 }}>
-              {a}
-            </div>
+            <ClaimRow key={i} color={RED}>{a}</ClaimRow>
           ))}
-        </div>
+        </>
       )}
 
       {/* Sections in order returned by backend */}
