@@ -1230,6 +1230,12 @@ async def dispatch(
     await _save_turn(session_id, session_context, "user", message)
 
     messages = _history_to_messages(history)
+    # Always run the validity sweep — not just when truncating. A saved
+    # history may contain orphan tool_use blocks (from a crashed earlier
+    # dispatch that wrote tool_use but never wrote its tool_result), and
+    # Anthropic rejects these with HTTP 400. Truncation alone doesn't
+    # catch under-budget sessions.
+    messages = _trim_to_valid_prefix(messages)
     messages.append({"role": "user", "content": message})
 
     system_blocks = _build_system_blocks(session_context)
