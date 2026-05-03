@@ -4,15 +4,34 @@ export const RED = { bg: '#FCEBEB', border: '#E24B4A', text: '#7F1D1D', secondar
 export const AMB = { bg: '#FAEEDA', border: '#EF9F27', text: '#78350F', secondary: '#92400E' };
 export const NEU = { bg: '#F8F9FA', border: '#E5E7EB', text: '#374151', secondary: '#6B7280' };
 export const GREEN_PILL = { bg: '#DCFCE7', border: '#86EFAC', text: '#166534' };
-export const MUTED = '#9CA3AF';
+export const MUTED = '#6B7280';
 export const LINK_TINT = '#E8EDF8';
+
+export const BRAND = {
+  base: '#1E3A8A',
+  hover: '#1E40AF',
+  tint: '#EEF2FF',
+  onBrand: '#FFFFFF',
+};
+
+export const SURFACE = {
+  bg: '#FFFFFF',
+  panel: '#F9FAFB',
+  hover: '#F3F4F6',
+  border: '#E5E7EB',
+  borderStrong: '#D1D5DB',
+  fg: '#111827',
+  fgStrong: '#0F172A',
+  muted: '#6B7280',
+  subtle: '#9CA3AF',
+};
 
 export type ColorToken = typeof RED;
 
 export function claimRowStyle(color: ColorToken): React.CSSProperties {
   return {
     background: color.bg,
-    borderLeft: `3px solid ${color.border}`,
+    border: `1px solid ${color.border}`,
     borderRadius: 6,
     padding: '6px 10px',
     marginBottom: 3,
@@ -42,10 +61,9 @@ export function footerDividerStyle(): React.CSSProperties {
 }
 
 export function sectionHeadingStyle(color: ColorToken): React.CSSProperties {
-  return { textTransform: 'uppercase', fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', color: color.text };
+  return { textTransform: 'uppercase', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', color: color.text };
 }
 
-// Census visual primitives (extracted from CensusRenderer.tsx)
 export function summaryCardStyle(color: ColorToken): React.CSSProperties {
   return {
     background: color.bg,
@@ -68,7 +86,7 @@ export function patientRowStyle(color: ColorToken): React.CSSProperties {
     padding: '8px 12px',
     borderRadius: 6,
     background: color.bg,
-    borderLeft: `3px solid ${color.border}`,
+    border: `1px solid ${color.border}`,
     marginBottom: 4,
   };
 }
@@ -101,7 +119,6 @@ export function admitBadgeStyle(badge: { bg: string; fg: string; border: string 
   };
 }
 
-// Severity scale used for inline severity dots and row treatments.
 export type Severity = 'critical' | 'high' | 'moderate' | 'normal' | 'info';
 
 export function severityColor(level: Severity): { dot: string; text: string; accent: string } {
@@ -116,9 +133,19 @@ export function severityColor(level: Severity): { dot: string; text: string; acc
       return { dot: NEU.border, text: NEU.secondary, accent: NEU.bg };
     case 'info':
     default:
-      return { dot: MUTED, text: NEU.text, accent: NEU.bg };
+      return { dot: SURFACE.subtle, text: NEU.text, accent: NEU.bg };
   }
 }
+
+// Type scale: 4 steps, ratio ~1.25 between adjacent steps. Weight contrast does
+// the rest of the work. Clinical UI — the smallest step still needs to be
+// readable on a fluorescent-lit hospital monitor.
+export const TYPE = {
+  caption: { fontSize: 11, fontWeight: 500 as const, lineHeight: 1.45 },
+  body: { fontSize: 13, fontWeight: 400 as const, lineHeight: 1.55 },
+  label: { fontSize: 12, fontWeight: 600 as const, lineHeight: 1.4, letterSpacing: '0.02em' },
+  heading: { fontSize: 14, fontWeight: 600 as const, lineHeight: 1.4 },
+};
 
 // P1-P3 = RED (immediate / sepsis / critical lab),
 // P4-P7 = AMB (critical vital, AMS, pain, abnormal lab),
