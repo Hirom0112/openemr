@@ -5,6 +5,7 @@ import type { AgentResponse, CensusPatient, ErrorClass, HandoffData, HandoffPati
 import ResponseRenderer from './ResponseRenderer';
 import { RED, AMB, NEU, BRAND, SURFACE, cardStyle, secondaryButtonStyle } from '../styles/tokens';
 import { resolvePatientPid } from '../utils/citations';
+import { formatFriendly } from '../utils/datetime';
 
 function usePrefersReducedMotion(): boolean {
   const [prefers, setPrefers] = useState<boolean>(() => {
@@ -366,7 +367,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     const m = id.match(/-(\d+)$/);
     const ts = m ? Number(m[1]) : NaN;
     const d = Number.isFinite(ts) ? new Date(ts) : new Date();
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return formatFriendly(d);
   };
 
   const labelForResponse = (response: AgentResponse | undefined): string => {

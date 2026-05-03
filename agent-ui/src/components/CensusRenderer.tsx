@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import type { CensusData, CensusPatient, Citation } from '../types';
 import { resolvePatientPid } from '../utils/citations';
+import { formatFriendly, formatFriendlyWithSeconds } from '../utils/datetime';
 import DisclaimerIcon from './DisclaimerIcon';
-import { RED, AMB, NEU, MUTED, primaryButtonStyle, secondaryButtonStyle, cardStyle } from '../styles/tokens';
+import { RED, AMB, NEU, MUTED, SURFACE, TYPE, primaryButtonStyle, secondaryButtonStyle, cardStyle, censusSectionHeadingStyle } from '../styles/tokens';
 import type { ColorToken } from '../styles/tokens';
 import {
-  TierDot,
+  TierChip,
   MetricStrip,
   PatientRow,
   LivePill,
@@ -83,12 +84,21 @@ function extractTrigger(explanation: string): string {
 
 function CensusSectionHeading({ label, color, aside }: { label: string; color: ColorToken; aside?: React.ReactNode }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, marginBottom: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <TierDot color={color} />
-        <h2 style={{ margin: 0, fontSize: 11, fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase', color: color.text }}>
-          {label}
-        </h2>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 20, marginBottom: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span
+          aria-hidden="true"
+          style={{
+            width: 10,
+            height: 10,
+            borderRadius: '50%',
+            background: color.border,
+            flexShrink: 0,
+            display: 'inline-block',
+            boxShadow: color === NEU ? 'none' : `0 0 0 3px ${color.bg}`,
+          }}
+        />
+        <h2 style={censusSectionHeadingStyle(color)}>{label}</h2>
       </div>
       {aside}
     </div>
@@ -98,34 +108,39 @@ function CensusSectionHeading({ label, color, aside }: { label: string; color: C
 function CensusPatientRow({ patient, color, onBrief, onMeds }: { patient: CensusPatient; color: ColorToken; onBrief: (name: string, patientId?: string) => void; onMeds: (name: string, patientId?: string) => void }) {
   const trigger = extractTrigger(patient.explanation);
   const briefBtnStyle: React.CSSProperties = {
-    flexShrink: 0, fontSize: 12, fontWeight: 500, padding: '4px 10px',
+    flexShrink: 0, fontSize: 12, fontWeight: 600, padding: '6px 12px', minHeight: 30,
     ...primaryButtonStyle(color),
     borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
   };
   const medsBtnStyle: React.CSSProperties = {
-    flexShrink: 0, fontSize: 12, fontWeight: 500, padding: '4px 10px',
+    flexShrink: 0, fontSize: 12, fontWeight: 600, padding: '6px 12px', minHeight: 30,
     ...primaryButtonStyle(color),
     borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
   };
   const chartBtnStyle: React.CSSProperties = {
-    flexShrink: 0, fontSize: 12, fontWeight: 500, padding: '4px 10px',
+    flexShrink: 0, fontSize: 12, fontWeight: 600, padding: '6px 12px', minHeight: 30,
     ...secondaryButtonStyle(),
-    color: color.text,
+    color: color === NEU ? SURFACE.fg : color.text,
     border: `1px solid ${color.border}`,
     borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
   };
   return (
     <PatientRow
       color={color}
-      left={`P${patient.triage_level}`}
+      left={<TierChip level={patient.triage_level} color={color} />}
       title={
         <>
           {patient.name}
-          <span style={{ fontSize: 11, color: color.secondary }}>#{patient.mrn.slice(0, 8)}</span>
+          <span style={{ fontSize: 11, fontWeight: 500, color: color === NEU ? SURFACE.subtle : color.secondary }}>#{patient.mrn.slice(0, 8)}</span>
         </>
       }
       badges={<AdmitBadge days={patient.days_since_admit} />}
-      subtitle={`${patient.triage_label} · ${trigger}`}
+      subtitle={
+        <>
+          <span style={{ fontWeight: 600, color: color === NEU ? SURFACE.fg : color.text }}>{patient.triage_label}</span>
+          <span style={{ color: color === NEU ? SURFACE.subtle : color.secondary }}> · {trigger}</span>
+        </>
+      }
       actions={
         <>
           <button
@@ -192,11 +207,9 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
       : ageMs > STALE_RED_MS ? RED.text
       : ageMs > STALE_AMBER_MS ? AMB.text
       : MUTED;
-  const generatedTimeShort = generatedValid
-    ? generatedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : undefined;
+  const generatedTimeShort = generatedValid ? formatFriendly(generatedDate) : undefined;
   const generatedTooltip = generatedValid
-    ? `Census generated ${generatedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} on ${generatedDate.toISOString().slice(0, 10)}`
+    ? `Census generated ${formatFriendlyWithSeconds(generatedDate)}`
     : undefined;
 
   const isRefreshing = refreshingFrom !== null;
@@ -245,12 +258,12 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
   const labHiddenCount = abnormalLab.length - LAB_PREVIEW_COUNT;
 
   return (
-    <div style={{ fontSize: 13, lineHeight: 1.5, fontFamily: 'inherit' }}>
+    <div style={{ ...TYPE.body, color: SURFACE.fg, fontFamily: 'inherit' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 500, color: '#111' }}>Morning census</div>
-          <div style={{ fontSize: 11, color: NEU.secondary, marginTop: 1 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: SURFACE.fgStrong, letterSpacing: '-0.01em', lineHeight: 1.3 }}>Morning census</div>
+          <div style={{ ...TYPE.caption, color: SURFACE.muted, marginTop: 3 }}>
             {census.length} patient{census.length !== 1 ? 's' : ''}
             {providerName ? ` · ${providerName}` : ''}
             {' · '}
@@ -290,7 +303,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
           title={data.dropped_ids && data.dropped_ids.length > 0 ? `Failed: ${data.dropped_ids.join(', ')}` : undefined}
           style={{ ...cardStyle(AMB), padding: '6px 10px', fontSize: 12, color: AMB.text, marginBottom: 10 }}
         >
-          Showing {data.total} of {data.requested} patients — {data.dropped} failed to load. Refresh to retry.
+          Showing {data.total} of {data.requested} patients · {data.dropped} failed to load. Refresh to retry.
         </div>
       ) : null}
 
@@ -321,7 +334,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
       {/* Critical lab — unacknowledged */}
       {criticalLab.length > 0 && (
         <section aria-labelledby="tier-critical-lab">
-          <CensusSectionHeading label="Critical lab — unacknowledged" color={RED} />
+          <CensusSectionHeading label="Critical lab: unacknowledged" color={RED} />
           {criticalLab.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} onMeds={onMeds} />)}
         </section>
       )}
@@ -346,7 +359,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
       {codeStatus.length > 0 && (
         <section aria-labelledby="tier-code">
           <CensusSectionHeading label="Code status not documented" color={RED} />
-          <div style={{ fontSize: 11, color: RED.secondary, marginBottom: 6, paddingLeft: 2 }}>
+          <div style={{ ...TYPE.caption, color: RED.secondary, marginBottom: 8, paddingLeft: 2 }}>
             Hard safety flag · verify before orders
           </div>
           {codeStatus.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} onMeds={onMeds} />)}
@@ -357,22 +370,22 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
       {abnormalLab.length > 0 && (
         <section aria-labelledby="tier-lab">
           <CensusSectionHeading
-            label="Abnormal lab · monitoring required"
+            label="Abnormal lab: monitoring required"
             color={AMB}
             aside={<span style={{ fontSize: 11, color: MUTED }}>{abnormalLab.length} patient{abnormalLab.length !== 1 ? 's' : ''}</span>}
           />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {labVisible.map(p => {
               const trigger = extractTrigger(p.explanation);
               return (
                 <PatientRow
                   key={p.patient_id}
                   color={AMB}
-                  left={`P${p.triage_level}`}
+                  left={<TierChip level={p.triage_level} color={AMB} />}
                   title={
                     <>
                       {p.name}
-                      <span style={{ fontSize: 11, color: AMB.secondary }}>#{p.mrn.slice(0, 8)}</span>
+                      <span style={{ fontSize: 11, fontWeight: 500, color: AMB.secondary }}>#{p.mrn.slice(0, 8)}</span>
                     </>
                   }
                   badges={<AdmitBadge days={p.days_since_admit} />}
@@ -384,7 +397,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
                         aria-label={`Brief ${p.name}`}
                         onClick={() => onBrief(p.name, p.patient_id)}
                         style={{
-                          flexShrink: 0, fontSize: 12, fontWeight: 500, padding: '4px 10px',
+                          flexShrink: 0, fontSize: 12, fontWeight: 600, padding: '6px 12px', minHeight: 30,
                           ...primaryButtonStyle(AMB),
                           borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
                         }}
@@ -395,7 +408,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
                         aria-label={`Medications for ${p.name}`}
                         onClick={() => onMeds(p.name, p.patient_id)}
                         style={{
-                          flexShrink: 0, fontSize: 12, fontWeight: 500, padding: '4px 10px',
+                          flexShrink: 0, fontSize: 12, fontWeight: 600, padding: '6px 12px', minHeight: 30,
                           ...primaryButtonStyle(AMB),
                           borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
                         }}
@@ -406,7 +419,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
                         aria-label={`Open chart for ${p.name}`}
                         onClick={() => openPatientChart(p.patient_id, p.openemr_pid)}
                         style={{
-                          flexShrink: 0, fontSize: 12, fontWeight: 500, padding: '4px 10px',
+                          flexShrink: 0, fontSize: 12, fontWeight: 600, padding: '6px 12px', minHeight: 30,
                           ...secondaryButtonStyle(),
                           color: AMB.text,
                           border: `1px solid ${AMB.border}`,
@@ -440,7 +453,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
       {stableChronic.length > 0 && (
         <section aria-labelledby="tier-stable">
           <CensusSectionHeading
-            label="Active condition — stable"
+            label="Active condition: stable"
             color={NEU}
             aside={<span style={{ fontSize: 11, color: MUTED }}>{stableChronic.length} patient{stableChronic.length !== 1 ? 's' : ''}</span>}
           />
@@ -519,12 +532,12 @@ function CapabilitiesFooter({ providerName, patientCount }: { providerName?: str
   return (
     <div
       style={{
-        marginTop: 14,
-        paddingTop: 10,
-        borderTop: `1px solid ${NEU.border}`,
+        marginTop: 20,
+        paddingTop: 12,
+        borderTop: `1px solid ${SURFACE.border}`,
+        ...TYPE.body,
         fontSize: 12,
-        color: NEU.secondary,
-        lineHeight: 1.6,
+        color: SURFACE.muted,
       }}
     >
       <div style={{ marginBottom: 6 }}>
