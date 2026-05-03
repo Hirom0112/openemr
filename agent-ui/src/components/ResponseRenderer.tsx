@@ -18,10 +18,12 @@ interface ResponseRendererProps {
   response: AgentResponse;
   onBrief?: (patientName: string, patientId?: string) => void;
   onMeds?: (patientName: string, patientId?: string) => void;
+  onHandoff?: (patientIds: string[], patientNames: Record<string, string>) => void;
+  handoffInFlight?: boolean;
   providerName?: string;
 }
 
-export default function ResponseRenderer({ response, onBrief, onMeds, providerName }: ResponseRendererProps) {
+export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff, handoffInFlight, providerName }: ResponseRendererProps) {
   const { type, data, narrative, citations } = response;
 
   if (type === 'error') {
@@ -41,6 +43,8 @@ export default function ResponseRenderer({ response, onBrief, onMeds, providerNa
           citations={citations}
           onBrief={onBrief ?? (() => {})}
           onMeds={onMeds ?? (() => {})}
+          onHandoff={onHandoff}
+          handoffInFlight={handoffInFlight}
           providerName={providerName}
         />
       );

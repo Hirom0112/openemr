@@ -1,14 +1,30 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety } from '../api';
-import type { AgentResponse, ErrorClass } from '../types';
+import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff } from '../api';
+import type { HandoffSummaryPayload } from '../api';
+import type { AgentResponse, ErrorClass, HandoffData, HandoffPatient } from '../types';
 import ResponseRenderer from './ResponseRenderer';
 import { RED, AMB, NEU, cardStyle, secondaryButtonStyle } from '../styles/tokens';
 import { resolvePatientPid } from '../utils/citations';
 
 function openChartForPatient(patientId: string): void {
   const pid = resolvePatientPid(patientId);
-  const url = `/interface/patient_file/summary/demographics_full.php?set_pid=${pid}`;
-  window.parent.postMessage({ type: 'copilot:openChart', url }, window.location.origin);
+  if (!/^\d+$/.test(pid)) {
+    console.warn('Cannot open chart: resolved pid is not a positive integer', {
+      patient_id: patientId,
+      resolved_pid: pid,
+    });
+    return;
+  }
+  const url = `/interface/patient_file/summary/demographics.php?set_pid=${pid}`;
+  const w = window as unknown as {
+    top?: { restoreSession?: () => void; RTop?: { location: string } };
+  };
+  if (w.top?.RTop) {
+    w.top.restoreSession?.();
+    w.top.RTop.location = url;
+    return;
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 function chartPatientIdForResponse(
@@ -438,6 +454,100 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     }
   }, [sessionId]);
 
+  // ── Streaming handoff ──────────────────────────────────────────────────────
+  // Tracks the in-flight stream so a second click is a no-op and the bubble
+  // ID is stable for incremental setMessages updates. Ref over state because
+  // the cancel callback and chunk handler need synchronous access to the
+  // current bubble id without re-binding setMessages.
+  const handoffStreamRef = useRef<{ cancel: () => void; bubbleId: string } | null>(null);
+  const [handoffStreaming, setHandoffStreaming] = useState(false);
+
+  // Cancel any in-flight handoff stream when ChatSurface unmounts.
+  useEffect(() => {
+    return () => {
+      handoffStreamRef.current?.cancel();
+      handoffStreamRef.current = null;
+    };
+  }, []);
+
+  /**
+   * Map I-PASS HandoffSummary → HandoffPatient (matches the dispatcher transform
+   * in agent-api/agent/tools/__init__.py::generate_handoff so the existing
+   * HandoffRenderer can consume both paths without divergence).
+   */
+  const ipassToHandoffPatient = (s: HandoffSummaryPayload): HandoffPatient => ({
+    patient_id: s.patient_id,
+    name: s.name,
+    status: s.illness_severity,
+    active_issues: s.patient_summary ? [s.patient_summary] : [],
+    pending_items: s.action_list ?? [],
+    escalation_triggers: [s.situation_awareness, s.contingency_plan].filter((t): t is string => !!t),
+  });
+
+  const dispatchHandoffStreamDirect = useCallback((patientIdsToHandoff: string[], patientNames: Record<string, string>) => {
+    if (handoffStreamRef.current) return; // second click while streaming = no-op
+    if (patientIdsToHandoff.length === 0) return;
+
+    const userId = `user-${Date.now()}`;
+    const bubbleId = `assistant-${Date.now() + 1}`;
+
+    // Placeholder data — one pending entry per patient, in census order.
+    const placeholders: HandoffPatient[] = patientIdsToHandoff.map((pid) => ({
+      patient_id: pid,
+      name: patientNames[pid] ?? 'Patient',
+      status: '',
+      active_issues: [],
+      pending_items: [],
+      escalation_triggers: [],
+      pending: true,
+    }));
+    const initialData: HandoffData = { patients: placeholders };
+    const initialResponse: AgentResponse = {
+      type: 'handoff',
+      data: initialData,
+      narrative: '',
+      citations: [],
+    };
+
+    setMessages((prev) => [
+      ...prev,
+      { id: userId, role: 'user', content: `Generate shift handoff for ${patientIdsToHandoff.length} patients` },
+      { id: bubbleId, role: 'assistant', response: initialResponse },
+    ]);
+    setHandoffStreaming(true);
+    setLoading(true);
+
+    const replaceEntry = (patientId: string, next: HandoffPatient): void => {
+      setMessages((prev) => prev.map((m) => {
+        if (m.id !== bubbleId || !m.response || m.response.type !== 'handoff') return m;
+        const cur = m.response.data as HandoffData;
+        const patients = cur.patients.map((p) => (p.patient_id === patientId ? next : p));
+        return { ...m, response: { ...m.response, data: { ...cur, patients } } };
+      }));
+    };
+
+    const cancel = streamHandoff(patientIdsToHandoff, sessionId, {
+      onChunk: (patientId, summary) => {
+        const next: HandoffPatient = ipassToHandoffPatient(summary);
+        if (summary.error) next.error = summary.error;
+        replaceEntry(patientId, next);
+      },
+      onError: (patientId, errorMsg, summary) => {
+        const next: HandoffPatient = {
+          ...ipassToHandoffPatient(summary),
+          error: errorMsg,
+        };
+        replaceEntry(patientId, next);
+      },
+      onDone: () => {
+        handoffStreamRef.current = null;
+        setHandoffStreaming(false);
+        setLoading(false);
+      },
+    });
+    handoffStreamRef.current = { cancel, bubbleId };
+  }, [sessionId]);
+
   const handleSend = useCallback(() => {
     const text = inputText.trim();
     if (!text || loading) return;
@@ -570,6 +680,8 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                               void dispatchMessage(`show meds for ${name}`);
                             }
                           }}
+                          onHandoff={(ids, names) => dispatchHandoffStreamDirect(ids, names)}
+                          handoffInFlight={handoffStreaming}
                           providerName={displayName}
                         />
                       ) : (
@@ -606,7 +718,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
             );
           })}
 
-          {loading && (
+          {loading && !handoffStreaming && (
             <div style={styles.assistantRow}>
               <div style={styles.assistantAvatar} aria-hidden="true">AI</div>
               <div style={{ ...styles.assistantBubble, padding: '10px 14px' }}>

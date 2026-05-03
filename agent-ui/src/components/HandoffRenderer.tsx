@@ -1,5 +1,5 @@
 import type { Citation, HandoffData, HandoffPatient } from '../types';
-import { RED, NEU, MUTED } from '../styles/tokens';
+import { RED, NEU, MUTED, AMB } from '../styles/tokens';
 import { SectionHeading, ClaimRow, PatientRow, Markdown, CitationFooter } from './primitives';
 
 interface HandoffRendererProps {
@@ -22,6 +22,36 @@ function CitationsList({ citations }: { citations: Citation[] }) {
 }
 
 function HandoffPatientBlock({ patient }: { patient: HandoffPatient }) {
+  if (patient.pending) {
+    return (
+      <div style={{ marginBottom: 8 }}>
+        <PatientRow
+          color={NEU}
+          title={patient.name}
+          subtitle="Generating handoff…"
+        />
+        <div style={{ paddingLeft: 12, fontSize: 12, color: MUTED, fontStyle: 'italic' }}>
+          Working on I-PASS summary for {patient.name}…
+        </div>
+      </div>
+    );
+  }
+
+  if (patient.error) {
+    return (
+      <div style={{ marginBottom: 8 }}>
+        <PatientRow
+          color={AMB}
+          title={patient.name}
+          subtitle="Handoff unavailable"
+        />
+        <div style={{ paddingLeft: 12, fontSize: 12, color: AMB.text }}>
+          {patient.error}
+        </div>
+      </div>
+    );
+  }
+
   const hasActive = patient.active_issues && patient.active_issues.length > 0;
   const hasPending = patient.pending_items && patient.pending_items.length > 0;
   const hasEscalate = patient.escalation_triggers && patient.escalation_triggers.length > 0;

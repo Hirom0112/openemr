@@ -249,6 +249,182 @@ export async function getMedicationSafety(
   }
 }
 
+// ── Streaming handoff (SSE) ───────────────────────────────────────────────────
+
+/**
+ * Raw I-PASS handoff summary as emitted by POST /handoff/generate/stream.
+ * Mirrors agent-api/handoff/generator.py::HandoffSummary.
+ */
+export interface HandoffSummaryPayload {
+  patient_id: string;
+  name: string;
+  mrn: string;
+  triage_level: number;
+  illness_severity: string;
+  patient_summary: string;
+  action_list: string[];
+  situation_awareness: string;
+  contingency_plan: string;
+  generated_at: string;
+  error?: string | null;
+}
+
+export interface HandoffStreamStats {
+  total: number;
+  succeeded: number;
+  failed: number;
+  duration_ms: number;
+}
+
+export interface StreamHandoffCallbacks {
+  onChunk: (patientId: string, summary: HandoffSummaryPayload) => void;
+  onError: (patientId: string, error: string, summary: HandoffSummaryPayload) => void;
+  onDone: (stats: HandoffStreamStats) => void;
+}
+
+interface ParsedSseEvent {
+  event: string;
+  data: string;
+}
+
+/**
+ * Parse an SSE event block (text between \n\n separators).
+ * Only the "event:" and "data:" fields are honored — handoff stream is simple.
+ */
+function parseSseBlock(block: string): ParsedSseEvent | null {
+  let event = 'message';
+  const dataLines: string[] = [];
+  for (const rawLine of block.split('\n')) {
+    if (!rawLine || rawLine.startsWith(':')) continue;
+    const colonIdx = rawLine.indexOf(':');
+    const field = colonIdx === -1 ? rawLine : rawLine.slice(0, colonIdx);
+    const value = colonIdx === -1 ? '' : rawLine.slice(colonIdx + 1).replace(/^ /, '');
+    if (field === 'event') event = value;
+    else if (field === 'data') dataLines.push(value);
+  }
+  if (dataLines.length === 0) return null;
+  return { event, data: dataLines.join('\n') };
+}
+
+/**
+ * Stream per-patient handoff summaries from POST /handoff/generate/stream.
+ *
+ * The fetch body reader is parsed as SSE manually — TCP reads can split
+ * mid-event, so we keep an unparsed-tail buffer between reads and only
+ * dispatch complete blocks (delimited by \n\n).
+ *
+ * Returns an abort function. Call it on unmount or on a new request.
+ */
+export function streamHandoff(
+  patientIds: string[],
+  sessionId: string,
+  callbacks: StreamHandoffCallbacks,
+): () => void {
+  const controller = new AbortController();
+  const t0 = performance.now();
+  let firstByteLogged = false;
+
+  const run = async (): Promise<void> => {
+    let res: Response;
+    try {
+      res = await fetch(`${cfg().agentApiUrl}/handoff/generate/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+        body: JSON.stringify({ patient_ids: patientIds }),
+        signal: controller.signal,
+      });
+    } catch (err: unknown) {
+      if ((err as { name?: string })?.name === 'AbortError') return;
+      throw err;
+    }
+    if (!res.ok || !res.body) {
+      throw new Error(`Handoff stream error ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    const dispatch = (parsed: ParsedSseEvent): void => {
+      if (!firstByteLogged && parsed.event === 'handoff_chunk') {
+        firstByteLogged = true;
+        postClientTiming({
+          action: 'chat_submit_to_first_byte',
+          duration_ms: Math.round(performance.now() - t0),
+          session_id: sessionId,
+          extra: { action: 'handoff_stream_first_byte', patient_count: patientIds.length },
+        });
+      }
+      let payload: unknown;
+      try {
+        payload = JSON.parse(parsed.data);
+      } catch {
+        return;
+      }
+      if (parsed.event === 'handoff_chunk') {
+        const p = payload as { patient_id?: string; summary?: HandoffSummaryPayload };
+        if (p.patient_id && p.summary) {
+          callbacks.onChunk(p.patient_id, p.summary);
+        }
+      } else if (parsed.event === 'error') {
+        const p = payload as {
+          patient_id?: string; message?: string; error_class?: string; summary?: HandoffSummaryPayload;
+        };
+        if (p.patient_id) {
+          const fallback: HandoffSummaryPayload = p.summary ?? {
+            patient_id: p.patient_id, name: 'Unknown', mrn: '', triage_level: 10,
+            illness_severity: '', patient_summary: '', action_list: [],
+            situation_awareness: '', contingency_plan: '', generated_at: '',
+          };
+          callbacks.onError(p.patient_id, p.message ?? 'Handoff failed', fallback);
+        }
+      } else if (parsed.event === 'done') {
+        const stats = payload as HandoffStreamStats;
+        postClientTiming({
+          action: 'chat_submit_to_done',
+          duration_ms: Math.round(performance.now() - t0),
+          session_id: sessionId,
+          extra: { action: 'handoff_stream_done', ...stats },
+        });
+        callbacks.onDone(stats);
+      }
+    };
+
+    try {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let sepIdx: number;
+        // Drain every fully terminated block from the buffer; keep the tail.
+        while ((sepIdx = buffer.indexOf('\n\n')) !== -1) {
+          const block = buffer.slice(0, sepIdx);
+          buffer = buffer.slice(sepIdx + 2);
+          const parsed = parseSseBlock(block);
+          if (parsed) dispatch(parsed);
+        }
+      }
+      // Flush any trailing event without final \n\n.
+      if (buffer.trim().length > 0) {
+        const parsed = parseSseBlock(buffer);
+        if (parsed) dispatch(parsed);
+      }
+    } catch (err: unknown) {
+      if ((err as { name?: string })?.name === 'AbortError') return;
+      throw err;
+    }
+  };
+
+  void run().catch((err: unknown) => {
+    console.warn('[copilot] streamHandoff failed', err);
+  });
+
+  return () => {
+    try { controller.abort(); } catch { /* noop */ }
+  };
+}
+
 // ── Legacy endpoints (kept for backward compatibility) ────────────────────────
 
 export async function fetchCensus(patientIds: string[], sessionId: string) {

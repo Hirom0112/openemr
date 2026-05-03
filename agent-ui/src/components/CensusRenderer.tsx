@@ -61,6 +61,8 @@ interface CensusRendererProps {
   citations: Citation[];
   onBrief: (patientName: string, patientId?: string) => void;
   onMeds: (patientName: string, patientId?: string) => void;
+  onHandoff?: (patientIds: string[], patientNames: Record<string, string>) => void;
+  handoffInFlight?: boolean;
   providerName?: string;
 }
 
@@ -158,7 +160,7 @@ function LabSeverityBadge({ level }: { level: number }) {
   return <Pill color={col} label={label} />;
 }
 
-export default function CensusRenderer({ data, citations, onBrief, onMeds, providerName }: CensusRendererProps) {
+export default function CensusRenderer({ data, citations, onBrief, onMeds, onHandoff, handoffInFlight, providerName }: CensusRendererProps) {
   const [labExpanded, setLabExpanded] = useState(false);
 
   const census = data?.census ?? [];
@@ -388,6 +390,33 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, provi
           />
           {other.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={NEU} onBrief={onBrief} onMeds={onMeds} />)}
         </section>
+      )}
+
+      {/* Generate shift handoff — global action, ONE button, NOT per-row */}
+      {onHandoff && census.length > 0 && (
+        <div style={{ marginTop: 14, display: 'flex', justifyContent: 'center' }}>
+          <button
+            type="button"
+            aria-label="Generate shift handoff for all census patients"
+            disabled={handoffInFlight}
+            onClick={() => {
+              const ids = census.map(p => p.patient_id);
+              const names: Record<string, string> = {};
+              for (const p of census) names[p.patient_id] = p.name;
+              onHandoff(ids, names);
+            }}
+            style={{
+              fontSize: 12, fontWeight: 500, padding: '6px 14px',
+              ...primaryButtonStyle(NEU),
+              borderRadius: 6,
+              cursor: handoffInFlight ? 'not-allowed' : 'pointer',
+              opacity: handoffInFlight ? 0.5 : 1,
+              fontFamily: 'inherit', whiteSpace: 'nowrap',
+            }}
+          >
+            {handoffInFlight ? 'Generating handoff…' : 'Generate shift handoff ↗'}
+          </button>
+        </div>
       )}
 
       {/* What I can do — informational footer */}
