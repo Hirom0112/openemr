@@ -781,21 +781,41 @@ async def get_medication_safety(
     patient_id_raw: str = input["patient_id"]
     patient_id = _normalize_patient_id(patient_id_raw, session_context) or patient_id_raw
     medication_name: str | None = input.get("medication_name")
+    # Surfaced from the UI Refresh button via /medication/safety. Mirrors the
+    # briefing tool's force_refresh path: bypass the bundle cache and fetch a
+    # fresh FHIR bundle so the safety report reflects current chart state and
+    # the response carries a brand-new generated_at timestamp.
+    force_refresh: bool = bool(input.get("force_refresh", False))
     langfuse = session_context.get("langfuse")
     redis_client: aioredis.Redis | None = session_context.get("redis_client")
 
     # Bundle cache mirrors the briefing tool's read-through pattern so this
-    # tool no longer triggers a fresh 8-search FHIR fanout per call.
-    bundle = await _get_cached_bundle(redis_client, patient_id)
-    if bundle is None:
+    # tool no longer triggers a fresh 8-search FHIR fanout per call. When the
+    # user clicks Refresh (force_refresh=True) we bypass the cache and stamp a
+    # new fingerprint via _set_cached_bundle.
+    if force_refresh:
         bundle = await fhir_client.get_bundle_for_patient(patient_id)
         await _set_cached_bundle(redis_client, patient_id, bundle)
+    else:
+        bundle = await _get_cached_bundle(redis_client, patient_id)
+        if bundle is None:
+            bundle = await fhir_client.get_bundle_for_patient(patient_id)
+            await _set_cached_bundle(redis_client, patient_id, bundle)
     resources = bundle.get("resources", {})
     meds = [e.get("resource", e) for e in resources.get("MedicationRequest", [])]
     allergies = [e.get("resource", e) for e in resources.get("AllergyIntolerance", [])]
     observations = [e.get("resource", e) for e in resources.get("Observation", [])]
 
     report = run_safety_checks(patient_id, meds, allergies, observations)
+    # Stamp generated_at from the bundle's _cached_at fingerprint so the
+    # renderer's "Data as of HH:MM" reflects underlying-data freshness, not
+    # the moment the LLM happened to summarise.  Falls back to "now" if the
+    # bundle was assembled without a fingerprint (e.g. no Redis).
+    bundle_fp = bundle.get("_cached_at")
+    report.generated_at = (
+        bundle_fp if isinstance(bundle_fp, str) and bundle_fp
+        else datetime.now(timezone.utc).isoformat()
+    )
     report = await add_llm_summary(report, langfuse=langfuse)
 
     flags_out = [
@@ -861,6 +881,10 @@ async def get_medication_safety(
             "current_medications": current_medications,
             "allergies": allergy_list,
             "interactions": interactions,
+            # Freshness timestamp for the renderer's "Data as of HH:MM ·
+            # Refresh" indicator. Reflects the bundle's _cached_at
+            # fingerprint so refreshes (force_refresh=True) bump it.
+            "generated_at": report.generated_at,
         },
         "citations": citations,
         "metadata": _empty_metadata(

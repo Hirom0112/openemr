@@ -107,6 +107,26 @@ When in doubt between briefing and query: if the question is broad ("what's goin
 about", "what happened"), choose briefing. If it names a specific lab, study, drug, or event, \
 choose query.
 
+**CRITICAL — never answer medication or allergy questions from prior conversation context.** \
+Clinical state changes mid-shift: new medications get ordered, allergies get added, doses \
+change. When the physician asks about medications, allergies, drug interactions, or \
+contraindications, you MUST call get_medication_safety even if a previous turn already \
+retrieved that data. The freshness of the answer matters — call the tool, do not paraphrase \
+prior tool output.
+
+This applies to phrasings like:
+- "what allergies does she have?"
+- "what medications is he on?"
+- "any drug interactions?"
+- "is X safe to give?"
+- "any concerns with the meds?"
+
+Do NOT reply with "the medication safety check already retrieved earlier shows…" or \
+"the allergy data was already retrieved in the most recent medication safety check…" — \
+call get_medication_safety again and surface fresh data. This is the inverse of the \
+"never deny having context" rule: for time-sensitive clinical data, do NOT over-rely on \
+context. Re-fetch.
+
 ## Resolving partial or ambiguous patient references
 
 Physicians often refer to a patient mid-conversation by a partial name, first name only, \

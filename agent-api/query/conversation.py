@@ -38,6 +38,7 @@ _EMPTY_NARRATIVES: dict[str, str] = {
     "Observation": "No matching observations are on file for the time window searched.",
     "Procedure": "No documented procedures are on file in the chart.",
     "DiagnosticReport": "No diagnostic reports are on file for the time window searched.",
+    "Encounter": "No encounter records are documented in the chart for the requested timeframe.",
     "Patient": "No patient demographics could be retrieved.",
 }
 

@@ -50,6 +50,11 @@ class TestEmptyRecordsNarrative:
         assert "CarePlan" in msg
         assert "unable" not in msg.lower()
 
+    def test_encounter_message_is_clinical_not_failure(self):
+        msg = _empty_records_narrative("Encounter")
+        assert "encounter" in msg.lower()
+        assert "unable" not in msg.lower()
+
 
 @pytest.mark.clinical_accuracy
 @pytest.mark.hard_failure
@@ -85,6 +90,24 @@ class TestConversationHandlerEmptyShortCircuit:
         assert "unable" not in result["answer"].lower()
         assert "medication" in result["answer"].lower()
         assert result["records_fetched"] == 0
+
+    @pytest.mark.asyncio
+    async def test_empty_encounter_records_returns_clear_message(self):
+        # Regression: "when was her last appointment" used to route to
+        # Observation (LLM fallback), slice an empty list out of the bundle,
+        # and return the generic "unable to retrieve" message. Now it routes
+        # to Encounter and surfaces the honest no-records narrative.
+        handler = _make_handler()
+        result = await handler.answer(
+            session_id="t3-enc",
+            patient_id="8",
+            query="when was her last appointment",
+            records_override=[],
+        )
+        assert "unable" not in result["answer"].lower()
+        assert "encounter" in result["answer"].lower()
+        assert result["records_fetched"] == 0
+        assert result["route"]["resource"] == "Encounter"
 
 
 @pytest.mark.clinical_accuracy
