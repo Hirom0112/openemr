@@ -707,6 +707,8 @@ async def query_patient_records(
         await sqlite_saver.init()
 
     from query.conversation import ConversationHandler
+    from query.router import route as route_query
+
     handler = ConversationHandler(
         redis_saver=redis_saver,
         sqlite_saver=sqlite_saver,
@@ -714,7 +716,47 @@ async def query_patient_records(
         langfuse=langfuse,
     )
     effective_session = session_id or f"anon-{patient_id}"
-    answer_dict = await handler.answer(effective_session, patient_id, query)
+
+    # Slice the cached bundle for the query's target resource and pass the
+    # records to the handler. WHY: the live FHIR fallback in
+    # ``query/fhir_search.py`` can't be relied on because (a) it does not
+    # resolve numeric PIDs to FHIR UUIDs, so ``patient=8`` returns 0 results,
+    # and (b) it forwards the router's ``clinical-status=active`` /
+    # ``status=active`` filters which OpenEMR's FHIR search drops on the
+    # floor (see auth/fhir_client.get_bundle_for_patient for the same
+    # workaround on the briefing path). Reusing the bundle keeps query
+    # answers in lockstep with what the briefing surfaces.
+    records_override: list[dict[str, Any]] | None = None
+    try:
+        query_route = await route_query(query, patient_id)
+        bundle = await _get_cached_bundle(redis_client, patient_id)
+        if bundle is None:
+            bundle = await fhir_client.get_bundle_for_patient(patient_id)
+            await _set_cached_bundle(redis_client, patient_id, bundle)
+        bundle_resources = bundle.get("resources", {})
+        entries = bundle_resources.get(query_route.resource, [])
+        records_override = [e.get("resource", e) for e in entries]
+        logger.debug(
+            "query_patient_records bundle slice",
+            extra={
+                "patient_id": patient_id,
+                "resource": query_route.resource,
+                "count": len(records_override),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "query_patient_records bundle slice failed; falling back to live FHIR",
+            extra={"patient_id": patient_id, "error": str(exc)},
+        )
+        records_override = None
+
+    answer_dict = await handler.answer(
+        effective_session,
+        patient_id,
+        query,
+        records_override=records_override,
+    )
 
     duration_ms = int((time.monotonic() - t0) * 1000)
     log_tool_outcome(
