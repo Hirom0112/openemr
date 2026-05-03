@@ -225,14 +225,15 @@ async def _generate_one(
             generated_at=generated_at, error=str(exc),
         )
 
-    # Per-patient handoff cache keyed on the bundle's fingerprint. Hit means
-    # we can skip the LLM call entirely for this patient — the cached I-PASS
-    # is still valid because the underlying bundle has not changed.
+    # NOTE: handoff intentionally does NOT cache its per-patient summary.
+    # Handoffs are clinical events at shift boundaries — the latency win
+    # of skipping the LLM call is not worth the risk of returning a stale
+    # I-PASS that doesn't reflect the most recent vitals/labs/orders. The
+    # bundle cache (with its fingerprint-aware briefing-cache pattern) is
+    # still in play, so per-patient FHIR fetches are fast on warm sessions,
+    # but the LLM-generated summary is regenerated every time.
     fingerprint_raw = bundle.get("_cached_at") if isinstance(bundle, dict) else None
     fingerprint = fingerprint_raw if isinstance(fingerprint_raw, str) else ""
-    cached_summary = await _get_cached_handoff(redis_client, patient_id, fingerprint)
-    if cached_summary is not None:
-        return cached_summary
 
     ctx = build_context(patient, bundle)
     criteria = extract(bundle)
@@ -280,7 +281,10 @@ async def _generate_one(
             contingency_plan=data.get("contingency_plan", ""),
             generated_at=generated_at,
         )
-        await _set_cached_handoff(redis_client, patient_id, fingerprint, summary)
+        # Handoff cache write intentionally removed — see read-side comment
+        # above. Cache helpers retained for any future opt-in path (e.g. a
+        # query parameter for "warm replay" of an in-flight shift).
+        _ = fingerprint  # suppress unused warning; keep variable for log context
         return summary
     except Exception as exc:
         logger.error("Handoff LLM failed", extra={"patient_id": patient_id, "error": str(exc)})
