@@ -149,6 +149,61 @@ def _handoff_canaries(data: dict[str, Any]) -> tuple[bool, bool]:
     return blank_allergies, blank_code_status
 
 
+def _briefing_identity_summary(final_data: dict[str, Any]) -> str:
+    """Build a short identity/fact line for a briefing payload.
+
+    Used to enrich the placeholder narrative the LLM sees on follow-up turns
+    so pronoun resolution ("can she have tylenol?") works against the saved
+    conversation history.  Kept under ~300 chars and strictly factual — only
+    fields that come straight from the briefing structured data, no
+    inference, no clinical claims beyond simple counts.
+    """
+    patient_id = final_data.get("patient_id") or final_data.get("patientId") or "patient"
+    # Patient name lives in a few possible spots depending on briefing shape.
+    name = (
+        final_data.get("patient_name")
+        or final_data.get("patientName")
+        or (final_data.get("patient") or {}).get("name")
+        or (final_data.get("demographics") or {}).get("name")
+        or (final_data.get("header") or {}).get("name")
+    )
+    if isinstance(name, dict):
+        # FHIR HumanName-ish dict.
+        name = name.get("display") or " ".join(
+            part for part in [name.get("given"), name.get("family")] if isinstance(part, str)
+        ).strip() or None
+    if not isinstance(name, str) or not name.strip():
+        name = None
+
+    if name:
+        base = f"Briefing generated for {name} (patient_id={patient_id})."
+    else:
+        base = f"Briefing generated for {patient_id}."
+
+    fact_parts: list[str] = []
+    alerts = final_data.get("alerts") or []
+    if isinstance(alerts, list) and alerts:
+        fact_parts.append(f"{len(alerts)} active alerts")
+    medications = (
+        final_data.get("active_medications")
+        or final_data.get("medications")
+        or (final_data.get("sections") or {})
+    )
+    if isinstance(medications, list) and medications:
+        fact_parts.append(f"{len(medications)} active medications")
+    code_status = final_data.get("code_status") or final_data.get("codeStatus")
+    if isinstance(code_status, str) and code_status.strip():
+        fact_parts.append(f"code status {code_status.strip()}")
+
+    if fact_parts:
+        # Keep the line tight: cap at ~250 chars so it stays a placeholder.
+        suffix = " " + ", ".join(fact_parts) + "."
+        candidate = base + suffix
+        if len(candidate) <= 280:
+            return candidate
+    return base
+
+
 def _structured_skip_narrative(response_type: str, final_data: dict[str, Any]) -> str:
     """Build a one-line placeholder narrative for a structured-renderer response.
 
@@ -159,21 +214,29 @@ def _structured_skip_narrative(response_type: str, final_data: dict[str, Any]) -
     contract is preserved even though the framing turn is skipped.
     """
     if response_type == "handoff":
-        total = final_data.get("total", len(final_data.get("patients", [])))
+        # Handoff payloads use ``total`` and ``patients``.  Fall back to the
+        # length of patients when ``total`` is absent.
+        patients = final_data.get("patients") or []
+        total = final_data.get("total", len(patients) if isinstance(patients, list) else 0)
         base = f"Handoff generated for {total} patients."
         blank_allergies, blank_code_status = _handoff_canaries(final_data)
     elif response_type == "census":
-        patients = final_data.get("patients") or []
-        base = f"Census summary generated for {len(patients)} patients."
+        # The census tool returns the patient list under the ``census`` key
+        # (see ``triage/census.py``).  Older test fixtures used ``patients``;
+        # check both so we stay compatible with either shape.
+        entries = final_data.get("census")
+        if not isinstance(entries, list):
+            entries = final_data.get("patients") or []
+        base = f"Census summary generated for {len(entries)} patients."
         # Census aggregates many patients; per-patient allergy / code-status
         # canaries belong on the briefing / medication_safety paths.
         blank_allergies, blank_code_status = False, False
     elif response_type == "briefing":
-        patient_id = final_data.get("patient_id") or final_data.get("patientId") or "patient"
-        base = f"Briefing generated for {patient_id}."
+        base = _briefing_identity_summary(final_data)
         blank_allergies, blank_code_status = _briefing_canaries(final_data)
     elif response_type == "medication_safety":
-        base = "Medication safety check generated."
+        patient_id = final_data.get("patient_id") or final_data.get("patientId") or "patient"
+        base = f"Medication safety check generated for patient_id={patient_id}."
         blank_allergies, blank_code_status = _medication_safety_canaries(final_data)
     else:
         return ""
@@ -531,12 +594,163 @@ def _history_to_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
 _MAX_HISTORY_TOKENS_EST = 150_000
 _HISTORY_KEEP_TURNS = 10
 
+# Tool calls whose result is "context-bearing" — i.e. establishes which
+# patient the rest of the conversation is talking about.  When truncating
+# we preserve any prior assistant tool_use + matching user tool_result
+# pair for these tools so pronoun resolution ("can she have tylenol?")
+# survives even when the recent window has scrolled past the turn that
+# named the patient.
+_CONTEXT_BEARING_TOOLS: frozenset[str] = frozenset({
+    "get_patient_briefing",
+    "get_medication_safety",
+})
+
+
+def _message_block_iter(message: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the message's content as a list of block dicts (or [] if none)."""
+    content = message.get("content")
+    if isinstance(content, list):
+        return [b for b in content if isinstance(b, dict)]
+    return []
+
+
+def _is_user_text(message: dict[str, Any]) -> bool:
+    """A 'real' user turn — plain string, or list of text blocks (no tool_result)."""
+    if message.get("role") != "user":
+        return False
+    content = message.get("content")
+    if isinstance(content, str):
+        return True
+    if isinstance(content, list):
+        if not content:
+            return False
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                return False
+        return True
+    return False
+
+
+def _has_tool_result(message: dict[str, Any]) -> bool:
+    if message.get("role") != "user":
+        return False
+    for block in _message_block_iter(message):
+        if block.get("type") == "tool_result":
+            return True
+    return False
+
+
+def _has_tool_use(message: dict[str, Any]) -> bool:
+    if message.get("role") != "assistant":
+        return False
+    for block in _message_block_iter(message):
+        if block.get("type") == "tool_use":
+            return True
+    return False
+
+
+def _assistant_tool_use_names(message: dict[str, Any]) -> list[str]:
+    if message.get("role") != "assistant":
+        return []
+    names: list[str] = []
+    for block in _message_block_iter(message):
+        if block.get("type") == "tool_use":
+            name = block.get("name")
+            if isinstance(name, str):
+                names.append(name)
+    return names
+
+
+def _trim_to_valid_prefix(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Walk forward until the messages slice starts with a valid user turn.
+
+    Anthropic rejects sequences that start with an orphan ``tool_result``
+    (no preceding ``tool_use``) or with an ``assistant`` turn.  Drop leading
+    messages until the first message is a real user text turn.
+
+    Also drops a trailing assistant turn whose ``tool_use`` has no matching
+    user ``tool_result`` in the kept slice — that would leave the model in
+    the middle of a tool call.
+    """
+    start = 0
+    while start < len(messages) and not _is_user_text(messages[start]):
+        start += 1
+    trimmed = messages[start:]
+    # Drop trailing orphan assistant tool_use.
+    while trimmed and trimmed[-1].get("role") == "assistant" and _has_tool_use(trimmed[-1]):
+        trimmed = trimmed[:-1]
+    return trimmed
+
+
+def _select_context_bearing_indices(
+    messages: list[dict[str, Any]],
+    recent_start: int,
+) -> set[int]:
+    """Return the set of indices (before ``recent_start``) we want to keep
+    so that earlier briefing / medication_safety tool calls stay anchored.
+
+    For each qualifying assistant ``tool_use`` turn we keep a triple:
+
+        (originating user_text)? + assistant tool_use + user tool_result
+
+    The originating user_text immediately preceding the assistant turn is
+    included so the kept slice is bracketed by a real user message and
+    Anthropic's alternation rules are satisfied without inserting synthetic
+    turns mid-stream.
+    """
+    keep: set[int] = set()
+    for i in range(recent_start):
+        msg = messages[i]
+        if msg.get("role") != "assistant":
+            continue
+        names = _assistant_tool_use_names(msg)
+        if not any(n in _CONTEXT_BEARING_TOOLS for n in names):
+            continue
+        # Find the matching tool_result turn that follows.
+        result_idx: int | None = None
+        for j in range(i + 1, len(messages)):
+            nxt = messages[j]
+            if nxt.get("role") == "user" and _has_tool_result(nxt):
+                result_idx = j
+                break
+            if nxt.get("role") == "assistant":
+                break
+        if result_idx is None:
+            continue
+        keep.add(i)
+        keep.add(result_idx)
+        # Also pull in the originating user-text prompt directly before the
+        # assistant turn (skip prior assistant tool_results) so the kept
+        # block starts on a user turn.
+        for k in range(i - 1, -1, -1):
+            prev = messages[k]
+            if _is_user_text(prev):
+                keep.add(k)
+                break
+            if prev.get("role") == "assistant":
+                # Hit another assistant — give up scanning further back.
+                break
+    return keep
+
 
 def _truncate_history_if_needed(
     messages: list[dict[str, Any]],
     session_id: str,
 ) -> list[dict[str, Any]]:
-    """Estimate token usage and trim oldest turns if over budget."""
+    """Estimate token usage and trim history if over budget while preserving
+    a valid Anthropic message sequence and any context-bearing tool turns.
+
+    Strategy when over budget:
+    1.  Compute the recent window (last ``_HISTORY_KEEP_TURNS`` messages).
+    2.  Pull in earlier (assistant tool_use + user tool_result) pairs for
+        context-bearing tools (briefing, medication_safety) so pronoun
+        references stay resolvable.
+    3.  Drop everything else.  Walk forward until the kept slice starts
+        with a real user text turn (no orphan tool_result), and drop any
+        trailing orphan assistant tool_use.
+    4.  Insert a single synthetic summary turn at the front noting what was
+        dropped, so the model knows context exists.
+    """
     if not messages:
         return messages
     try:
@@ -545,14 +759,27 @@ def _truncate_history_if_needed(
         return messages
     if approx_tokens <= _MAX_HISTORY_TOKENS_EST:
         return messages
-    kept = messages[-_HISTORY_KEEP_TURNS:]
+
+    total = len(messages)
+    recent_start = max(0, total - _HISTORY_KEEP_TURNS)
+
+    # Collect indices of context-bearing tool turns (briefing / med safety)
+    # that fall outside the recent window, plus their originating user
+    # prompt, so the kept slice is bracketed by real user turns.
+    earlier_keep = _select_context_bearing_indices(messages, recent_start)
+    keep_indices: set[int] = set(range(recent_start, total)) | earlier_keep
+
+    kept = [messages[i] for i in sorted(keep_indices)]
+    kept = _trim_to_valid_prefix(kept)
+
     logger.warning(
         "history_truncated_for_token_budget",
         extra={
             "session_id": session_id,
             "approx_tokens": approx_tokens,
-            "original_turns": len(messages),
+            "original_turns": total,
             "kept_turns": len(kept),
+            "preserved_earlier_turns": len(earlier_keep),
         },
     )
     return kept
