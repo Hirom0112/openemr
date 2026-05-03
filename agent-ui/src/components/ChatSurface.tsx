@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff, refreshCensus } from '../api';
 import type { HandoffSummaryPayload } from '../api';
 import type { AgentResponse, CensusPatient, ErrorClass, HandoffData, HandoffPatient } from '../types';
@@ -838,12 +838,60 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     }
   }, [sessionId, patientIds]);
 
+  // Free-text patterns that should route to the streaming handoff path
+  // (same as the in-census Generate Handoff button). Without this, typed
+  // "handoff" goes through the dispatcher → returns one big JSON blob at
+  // the end (~15-25s of stare-at-loading-dots), while the button streams
+  // patient-by-patient in 3-4s. Match the keywords mirrors
+  // _RESPONSE_TYPE_INTENT_HINTS["handoff"] in agent-api/agent/dispatcher.py.
+  const HANDOFF_KEYWORDS = useMemo(
+    () => [
+      'handoff',
+      'hand-off',
+      'hand off',
+      'sign-out',
+      'signout',
+      'sign out',
+      'end of rounds',
+      'end-of-rounds',
+      'shift end',
+      'generate handoff',
+    ],
+    [],
+  );
+
+  const isHandoffRequest = useCallback((text: string): boolean => {
+    const lowered = text.toLowerCase();
+    return HANDOFF_KEYWORDS.some((kw) => lowered.includes(kw));
+  }, [HANDOFF_KEYWORDS]);
+
   const handleSend = useCallback(() => {
     const text = inputText.trim();
     if (!text || loading) return;
     setInputText('');
+
+    // Route typed handoff requests to the same SSE path the button uses.
+    // Falls through to the dispatcher only when the latest census isn't
+    // available (no patient list to stream against — let the LLM handle it).
+    if (isHandoffRequest(text) && lastCensusRef.current?.length) {
+      const ids: string[] = [];
+      const names: Record<string, string> = {};
+      for (const p of lastCensusRef.current) {
+        if (typeof p.patient_id === 'string' && p.patient_id) {
+          ids.push(p.patient_id);
+          if (typeof p.name === 'string' && p.name) {
+            names[p.patient_id] = p.name;
+          }
+        }
+      }
+      if (ids.length > 0) {
+        dispatchHandoffStreamDirect(ids, names);
+        return;
+      }
+    }
+
     void dispatchMessage(text);
-  }, [inputText, loading, dispatchMessage]);
+  }, [inputText, loading, dispatchMessage, isHandoffRequest, dispatchHandoffStreamDirect]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
