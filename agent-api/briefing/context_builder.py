@@ -144,8 +144,37 @@ def build(patient: dict[str, Any], bundle: dict[str, Any]) -> BriefingContext:
         patient.get("id", ""),
     )
 
-    # Code status — look for a Condition or Observation with LOINC 45473-6
+    # Code status — Observation with LOINC 81638-3 (matches triage layer
+    # in triage/criteria.py and the synthetic-data fixtures). Read the
+    # valueCodeableConcept text first, falling back to the value's coding
+    # display. Empty string here flips has_blank_code_status to True and
+    # surfaces the BLANK_CODE_STATUS canary downstream.
     code_status = ""
+    for entry in resources.get("Observation", []):
+        obs = entry.get("resource", entry)
+        loinc = next(
+            (c.get("code") for c in obs.get("code", {}).get("coding", [])
+             if c.get("system") == "http://loinc.org"),
+            None,
+        )
+        if loinc != "81638-3":
+            continue
+        value_cc = obs.get("valueCodeableConcept") or {}
+        text = value_cc.get("text")
+        if isinstance(text, str) and text.strip():
+            code_status = text.strip()
+            break
+        coding_display = next(
+            (c.get("display") for c in value_cc.get("coding", []) if c.get("display")),
+            None,
+        )
+        if coding_display:
+            code_status = coding_display
+            break
+        value_str = obs.get("valueString")
+        if isinstance(value_str, str) and value_str.strip():
+            code_status = value_str.strip()
+            break
 
     # ── Conditions ────────────────────────────────────────────────────────────
     conditions: list[ActiveCondition] = []
