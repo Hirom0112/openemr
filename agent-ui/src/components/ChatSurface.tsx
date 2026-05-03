@@ -1,7 +1,36 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety } from '../api';
-import type { AgentResponse } from '../types';
+import type { AgentResponse, ErrorClass } from '../types';
 import ResponseRenderer from './ResponseRenderer';
+import { RED, AMB, NEU, cardStyle, secondaryButtonStyle } from '../styles/tokens';
+import { resolvePatientPid } from '../utils/citations';
+
+function openChartForPatient(patientId: string): void {
+  const pid = resolvePatientPid(patientId);
+  const url = `/interface/patient_file/summary/demographics_full.php?set_pid=${pid}`;
+  window.parent.postMessage({ type: 'copilot:openChart', url }, window.location.origin);
+}
+
+function chartPatientIdForResponse(
+  response: AgentResponse | undefined,
+  patientIdsInContext: string[],
+): string | null {
+  if (!response) return null;
+  if (response.type === 'census' || response.type === 'handoff' || response.type === 'error') {
+    return null;
+  }
+  const data = response.data as { patient_id?: unknown } | null | undefined;
+  if (data && typeof data.patient_id === 'string' && data.patient_id) {
+    return data.patient_id;
+  }
+  if (response.citations.length > 0 && response.citations[0].patient_id) {
+    return response.citations[0].patient_id;
+  }
+  if (patientIdsInContext.length === 1) {
+    return patientIdsInContext[0];
+  }
+  return null;
+}
 
 const CENSUS_INIT_MESSAGE = '__census_summary__';
 
@@ -30,6 +59,111 @@ interface Message {
   role: 'user' | 'assistant' | 'system';
   content?: string;
   response?: AgentResponse;
+  /** Original physician text that produced an error response — used by Retry. */
+  retryText?: string;
+}
+
+// ── Inline error rendering ────────────────────────────────────────────────────
+//
+// Distinguish four user-facing error categories so the chat surface can offer
+// the right CTA:
+//   transient    → retry likely to work (timeout, transient FHIR)
+//   persistent   → retry won't help; show support handle, hide retry
+//   missing_data → no record; no retry CTA
+//   unknown      → generic; offer retry but don't promise recovery
+type ErrorClassMeta = {
+  message: string;
+  showRetry: boolean;
+  tone: typeof RED | typeof AMB | typeof NEU;
+};
+
+const ERROR_CLASS_META: Record<ErrorClass, ErrorClassMeta> = {
+  transient: {
+    message: 'Temporary issue — please try again.',
+    showRetry: true,
+    tone: AMB,
+  },
+  persistent: {
+    message: 'Configuration issue — please contact IT.',
+    showRetry: false,
+    tone: RED,
+  },
+  missing_data: {
+    message: 'No record found.',
+    showRetry: false,
+    tone: NEU,
+  },
+  unknown: {
+    message: 'Something went wrong.',
+    showRetry: true,
+    tone: NEU,
+  },
+};
+
+function ErrorCard({
+  response,
+  retryText,
+  onRetry,
+  loading,
+}: {
+  response: AgentResponse;
+  retryText?: string;
+  onRetry: (text: string) => void;
+  loading: boolean;
+}) {
+  const meta = response.metadata ?? {};
+  const errorClass: ErrorClass = (meta.error_class as ErrorClass) ?? 'unknown';
+  const classMeta = ERROR_CLASS_META[errorClass] ?? ERROR_CLASS_META.unknown;
+  const retrySuggested = meta.retry_suggested ?? classMeta.showRetry;
+  const failureClass = typeof meta.failure_class === 'string' ? meta.failure_class : null;
+  const message = response.narrative?.trim() || classMeta.message;
+  const canRetry = retrySuggested && !!retryText && !loading;
+
+  return (
+    <div
+      style={{
+        ...cardStyle(classMeta.tone),
+        fontSize: 13,
+        color: classMeta.tone.text,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+      role="alert"
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+        <span aria-hidden="true" style={{ fontSize: 14, lineHeight: '18px' }}>!</span>
+        <div style={{ flex: 1 }}>{message}</div>
+      </div>
+      {(canRetry || failureClass) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {canRetry && retryText && (
+            <button
+              type="button"
+              onClick={() => onRetry(retryText)}
+              style={{
+                padding: '4px 10px',
+                background: '#fff',
+                border: `1px solid ${classMeta.tone.border}`,
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 600,
+                color: classMeta.tone.text,
+                cursor: 'pointer',
+              }}
+            >
+              Retry
+            </button>
+          )}
+          {failureClass && (
+            <span style={{ fontSize: 11, color: classMeta.tone.secondary, marginLeft: 'auto' }}>
+              ref: {failureClass}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface ChatSurfaceProps {
@@ -166,7 +300,12 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
 
       setMessages((prev) => [
         ...prev,
-        { id: `assistant-${Date.now()}`, role: 'assistant', response },
+        {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          response,
+          retryText: response.type === 'error' && !isAutoDispatch ? text : undefined,
+        },
       ]);
     } catch {
       setMessages((prev) => [
@@ -174,11 +313,17 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
         {
           id: `error-${Date.now()}`,
           role: 'assistant',
+          retryText: !isAutoDispatch ? text : undefined,
           response: {
             type: 'error',
             data: null,
             narrative: 'Agent unavailable — view chart directly.',
             citations: [],
+            metadata: {
+              error_class: 'transient',
+              retry_suggested: true,
+              failure_class: 'network',
+            },
           },
         },
       ]);
@@ -227,6 +372,11 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
             data: null,
             narrative: 'Agent unavailable — view chart directly.',
             citations: [],
+            metadata: {
+              error_class: 'transient',
+              retry_suggested: false,
+              failure_class: 'network',
+            },
           },
         },
       ]);
@@ -275,6 +425,11 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
             data: null,
             narrative: 'Agent unavailable — view chart directly.',
             citations: [],
+            metadata: {
+              error_class: 'transient',
+              retry_suggested: false,
+              failure_class: 'network',
+            },
           },
         },
       ]);
@@ -391,7 +546,14 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                   <div style={styles.assistantRow}>
                     <div style={styles.assistantAvatar} aria-hidden="true">AI</div>
                     <div style={styles.assistantBubble}>
-                      {msg.response ? (
+                      {msg.response && msg.response.type === 'error' ? (
+                        <ErrorCard
+                          response={msg.response}
+                          retryText={msg.retryText}
+                          loading={loading}
+                          onRetry={(text) => { void dispatchMessage(text); }}
+                        />
+                      ) : msg.response ? (
                         <ResponseRenderer
                           response={msg.response}
                           onBrief={(name, patientId) => {
@@ -413,6 +575,30 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                       ) : (
                         <span style={{ color: '#9ca3af' }}>…</span>
                       )}
+                      {(() => {
+                        const chartPid = chartPatientIdForResponse(msg.response, patientIds);
+                        if (!chartPid) return null;
+                        return (
+                          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+                            <button
+                              type="button"
+                              onClick={() => openChartForPatient(chartPid)}
+                              style={{
+                                fontSize: 11,
+                                fontWeight: 500,
+                                padding: '4px 10px',
+                                ...secondaryButtonStyle(),
+                                borderRadius: 4,
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                                fontFamily: 'inherit',
+                              }}
+                            >
+                              Verify in Chart ↗
+                            </button>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 )}
