@@ -398,6 +398,7 @@ The observability primitives that satisfy §5.4 live in a dedicated leaf package
 | `agent_checkpointer_op_duration_seconds` | Histogram | `op`, `backend` | `agent/dispatcher.py` |
 | `agent_client_timing_seconds` | Histogram | `action` | `POST /agent/client-timing` (frontend-submitted) |
 | `agent_census_dropped_patients_total` | Counter | — | `triage/census.py:_build_entry` |
+| `agent_pid_resolution_total` | Counter | `method` (`normalize`/`name_match`) | `agent/dispatcher.py` (pre-scope tool_input rewrite) |
 
 **Structured log event catalog.** All events are JSON-formatted via `JsonLogFormatter` and carry the per-request `request_id` field automatically. Listed fields are in addition to the standard log envelope (`timestamp`, `level`, `logger`, `message`, `request_id`).
 
@@ -413,6 +414,7 @@ The observability primitives that satisfy §5.4 live in a dedicated leaf package
 | `checkpointer_op` | INFO | `agent/dispatcher.py` | `op` (`load`/`save`), `backend`, `outcome`, `duration_ms` |
 | `fhir_token_cache` | DEBUG | `auth/fhir_client.py` | `outcome` (`hit`/`miss`), `expires_in_s` |
 | `client_timing` | INFO | `POST /agent/client-timing` | `action`, `duration_ms` |
+| `dispatcher.pid_resolution` | INFO | `agent/dispatcher.py` | `original_input`, `resolved_pid`, `resolution_method` (`normalize`/`name_match`), `tool_name`, `session_id` |
 
 When adding a new tool, cache, or background task, follow the same pattern: emit one `tool_outcome` (or equivalent) structured log line via `log_tool_outcome` and at least one Prometheus counter or histogram. This is the rule that keeps every latency or cache-hit claim verifiable from logs and metrics without re-reading the code.
 

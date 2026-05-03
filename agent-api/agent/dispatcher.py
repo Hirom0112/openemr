@@ -34,11 +34,13 @@ from agent.metrics import (
     agent_checkpointer_ops_total,
     agent_dispatch_latency_seconds,
     agent_fast_path_hits_total,
+    agent_pid_resolution_total,
     agent_prompt_cache_hits_total,
     agent_prompt_cache_misses_total,
     agent_tool_calls_total,
     agent_tool_misroute_total,
 )
+from agent.tools import _normalize_patient_id
 from agent.schemas import DISPATCHER_TOOLS
 from agent.system_prompt import build_system_prompt
 from agent.tool_registry import TOOL_REGISTRY
@@ -70,15 +72,14 @@ _STRUCTURED_RESPONSE_TYPES: frozenset[str] = frozenset({
     "briefing",
     "handoff",
     "query_answer",
-    # NOTE: medication_safety intentionally NOT in this set. It's the only
-    # tool that benefits from the LLM framing turn — physicians want the
-    # contextual prose analysis ("This could mean: no allergies have been
-    # documented, or reconciliation has not been completed for this
-    # admission") alongside the structured tables. Skipping the framing
-    # turn (which we tried) leaves only a thin placeholder narrative; the
-    # MedicationSafetyRenderer's "Analysis" section then has nothing to
-    # show. Costs ~2-3s extra per med-safety call but the prose is exactly
-    # what the user asked for.
+    # medication_safety is now included: the underlying tool already produces
+    # a physician-readable ``summary`` field (see ``medication/safety.py``'s
+    # ``add_llm_summary``), so the dispatcher can use that string directly as
+    # the narrative — no second framing turn required. This unifies behaviour
+    # with the button path (``GET /medication/safety/{patient_id}``) which has
+    # always returned the tool's ``summary`` to the UI, and saves one LLM call
+    # (~2 s) per med-safety request.
+    "medication_safety",
 })
 
 
@@ -341,8 +342,19 @@ def _structured_skip_narrative(response_type: str, final_data: dict[str, Any]) -
         base = _briefing_identity_summary(final_data)
         blank_allergies, blank_code_status = _briefing_canaries(final_data)
     elif response_type == "medication_safety":
-        patient_id = final_data.get("patient_id") or final_data.get("patientId") or "patient"
-        base = f"Medication safety check generated for patient_id={patient_id}."
+        # Prefer the tool's LLM-generated ``summary`` so the dispatcher path
+        # surfaces the same physician-readable analysis that the button path
+        # already returns (see ``medication/safety.py``'s ``add_llm_summary``
+        # and the ``GET /medication/safety/{patient_id}`` endpoint).  Fall
+        # back to a placeholder when the tool produced no summary so the
+        # canary suffix logic and downstream verification still see a
+        # non-empty narrative.
+        summary = final_data.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            base = summary.strip()
+        else:
+            patient_id = final_data.get("patient_id") or final_data.get("patientId") or "patient"
+            base = f"Medication safety check generated for patient_id={patient_id}."
         blank_allergies, blank_code_status = _medication_safety_canaries(final_data)
     elif response_type == "query_answer":
         # query_answer placeholder is built without canary appendage — the
@@ -1541,6 +1553,87 @@ async def dispatch(
                     # Compensating control for AUDIT finding #6 (ARCHITECTURE.md §6.1).
                     census_ids: list[str] = session_context.get("patient_ids", [])
                     requested_pid: str | None = tool_input.get("patient_id")
+
+                    # Pre-scope resolution: the planner may emit a synthetic
+                    # form (``pt-001``) or even a free-text name (``Marcus
+                    # Webb``) instead of the canonical census pid. Try cheap
+                    # normalization first, then census name lookup. On
+                    # success, rewrite tool_input so the downstream tool sees
+                    # the canonical pid; on ambiguity, surface a distinct
+                    # ``ambiguous_name`` failure_class. Only the
+                    # genuinely-unresolvable case falls into the existing
+                    # census_scope_violation rejection below.
+                    ambiguous_name = False
+                    if (
+                        requested_pid is not None
+                        and census_ids
+                        and requested_pid not in census_ids
+                    ):
+                        resolved_pid: str | None = None
+                        resolution_method: str | None = None
+
+                        try:
+                            normalized = _normalize_patient_id(requested_pid, session_context)
+                        except (TypeError, ValueError):
+                            normalized = None
+                        if (
+                            normalized is not None
+                            and normalized != requested_pid
+                            and normalized in census_ids
+                        ):
+                            resolved_pid = normalized
+                            resolution_method = "normalize"
+
+                        if resolved_pid is None:
+                            try:
+                                name_match = _resolve_patient_from_census(
+                                    requested_pid, session_context
+                                )
+                            except (TypeError, AttributeError):
+                                name_match = None
+                            if name_match is not None and name_match in census_ids:
+                                resolved_pid = name_match
+                                resolution_method = "name_match"
+                            else:
+                                # Detect ambiguity: needle appears in 2+
+                                # census entry names. The helper returns
+                                # None for both "no match" and "ambiguous";
+                                # disambiguate by inspecting the entries.
+                                entries = (
+                                    session_context.get("census")
+                                    or session_context.get("patients")
+                                    or []
+                                )
+                                if isinstance(entries, list):
+                                    needle = (requested_pid or "").lower().strip()
+                                    if needle:
+                                        match_count = 0
+                                        for _entry in entries:
+                                            if not isinstance(_entry, dict):
+                                                continue
+                                            _name = _entry.get("name") or _entry.get("patient_name") or ""
+                                            if isinstance(_name, str) and needle in _name.lower():
+                                                match_count += 1
+                                                if match_count > 1:
+                                                    break
+                                        if match_count > 1:
+                                            ambiguous_name = True
+
+                        if resolved_pid is not None and resolution_method is not None:
+                            agent_pid_resolution_total.labels(method=resolution_method).inc()
+                            logger.info(
+                                "dispatcher.pid_resolution",
+                                extra={
+                                    "session_id": session_id,
+                                    "original_input": requested_pid,
+                                    "resolved_pid": resolved_pid,
+                                    "resolution_method": resolution_method,
+                                    "tool_name": tool_name,
+                                },
+                            )
+                            tool_input["patient_id"] = resolved_pid
+                            requested_pid = resolved_pid
+
                     if (
                         requested_pid is not None
                         and census_ids
@@ -1562,7 +1655,7 @@ async def dispatch(
                             outcome="blocked",
                             duration_ms=0,
                             patient_id=requested_pid,
-                            failure_class="census_scope_violation",
+                            failure_class="ambiguous_name" if ambiguous_name else "census_scope_violation",
                         )
                         tool_results.append({
                             "type": "tool_result",
