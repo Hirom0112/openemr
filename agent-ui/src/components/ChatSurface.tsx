@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff } from '../api';
 import type { HandoffSummaryPayload } from '../api';
-import type { AgentResponse, ErrorClass, HandoffData, HandoffPatient } from '../types';
+import type { AgentResponse, CensusPatient, ErrorClass, HandoffData, HandoffPatient } from '../types';
 import ResponseRenderer from './ResponseRenderer';
 import { RED, AMB, NEU, cardStyle, secondaryButtonStyle } from '../styles/tokens';
 import { resolvePatientPid } from '../utils/citations';
@@ -30,6 +30,28 @@ function openChartForPatient(patientId: string, openemrPid?: string): void {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
+// Phrases the agent uses when it explicitly tells the physician to confirm
+// something in the chart. The chart button is only rendered when one of
+// these appears in the response narrative — without this gate, the button
+// shows up on every clinical response (including safety refusals and
+// follow-ups that don't actually need chart verification), which adds
+// noise and can attach the button to the wrong patient.
+const CHART_VERIFY_PHRASES = [
+  'verify in chart',
+  'verify in the chart',
+  'view in chart',
+  'view in the chart',
+  'verify directly in the chart',
+  'verify directly in chart',
+  'verify before placing orders',
+];
+
+function narrativeRequestsChartVerify(narrative: string | undefined): boolean {
+  if (!narrative) return false;
+  const lowered = narrative.toLowerCase();
+  return CHART_VERIFY_PHRASES.some((phrase) => lowered.includes(phrase));
+}
+
 function chartPatientIdForResponse(
   response: AgentResponse | undefined,
   patientIdsInContext: string[],
@@ -41,13 +63,26 @@ function chartPatientIdForResponse(
   const data = response.data as { patient_id?: unknown; openemr_pid?: unknown } | null | undefined;
   const openemrPid = data && typeof data.openemr_pid === 'string' && data.openemr_pid
     ? data.openemr_pid : undefined;
+
+  // Structured responses (briefing, medication_safety with full data) always
+  // get the chart button — they ARE chart-style summaries the physician is
+  // expected to verify against the chart.
+  if (response.type === 'briefing' || response.type === 'medication_safety') {
+    if (data && typeof data.patient_id === 'string' && data.patient_id) {
+      return { patientId: data.patient_id, openemrPid };
+    }
+  }
+
+  // Free-text responses (text, query_answer): only render the chart button
+  // when the narrative explicitly tells the physician to verify in chart.
+  // Otherwise the button is noise on conversational answers and refusals.
+  if (!narrativeRequestsChartVerify(response.narrative)) {
+    return null;
+  }
+
   if (data && typeof data.patient_id === 'string' && data.patient_id) {
     return { patientId: data.patient_id, openemrPid };
   }
-  // Free-text responses (text, query_answer, medication_safety) have no
-  // patient_id in `data`. Fall back to the metadata field surfaced by the
-  // dispatcher from the most recent successful tool call so the chart
-  // button still renders after pronoun resolution ("can i give her tylenol?").
   const meta = response.metadata;
   if (meta?.patient_id) {
     return {
@@ -254,6 +289,10 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const censusDispatched = useRef(false);
   const censusContext = useRef<string | undefined>(undefined);
+  // Snapshot of the most recent census, used to render handoff placeholders in
+  // triage order (P1 first) instead of whichever order SSE chunks land. Updated
+  // on every census response; null until the first census arrives.
+  const lastCensusRef = useRef<CensusPatient[] | null>(null);
   // Stick-to-bottom state. `isAtBottomRef` mirrors the state for synchronous
   // reads inside the layout effect (avoids stale closure on rapid streaming
   // chunks). `programmaticScrollRef` suppresses the scroll listener while we
@@ -444,10 +483,11 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       // After the census loads, cache a name→ID map so the LLM doesn't need
       // to re-fetch it on every subsequent query.
       if (response.type === 'census' && response.data) {
-        const data = response.data as { census?: Array<{ patient_id: string; name: string }> };
+        const data = response.data as { census?: CensusPatient[] };
         if (data.census?.length) {
           const lines = data.census.map((p) => `  - ${p.name}: ${p.patient_id}`).join('\n');
           censusContext.current = `## Census patient name → ID mapping\n${lines}`;
+          lastCensusRef.current = data.census;
         }
       }
 
@@ -647,8 +687,26 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     const userId = `user-${Date.now()}`;
     const bubbleId = `assistant-${Date.now() + 1}`;
 
-    // Placeholder data — one pending entry per patient, in census order.
-    const placeholders: HandoffPatient[] = patientIdsToHandoff.map((pid) => ({
+    // Determine canonical placeholder order: triage rank ascending (P1 first).
+    // SSE chunks land in arrival order, but we want the rendered list stable
+    // and clinically sorted. We read the latest census snapshot and sort the
+    // requested ids by triage_level; ids not in the census fall back to their
+    // original position. If the census is unavailable, we keep the order the
+    // caller passed (typically census order from CensusRenderer).
+    const censusSnapshot = lastCensusRef.current;
+    const orderedPatientIds = (() => {
+      if (!censusSnapshot) return patientIdsToHandoff;
+      const triageRank = new Map<string, number>();
+      for (const p of censusSnapshot) triageRank.set(p.patient_id, p.triage_level);
+      // Stable sort: index breaks ties so unknown ids preserve relative order.
+      return [...patientIdsToHandoff]
+        .map((pid, idx) => ({ pid, idx, level: triageRank.get(pid) ?? Number.POSITIVE_INFINITY }))
+        .sort((a, b) => (a.level - b.level) || (a.idx - b.idx))
+        .map((e) => e.pid);
+    })();
+
+    // Placeholder data — one pending entry per patient, in canonical order.
+    const placeholders: HandoffPatient[] = orderedPatientIds.map((pid) => ({
       patient_id: pid,
       name: patientNames[pid] ?? 'Patient',
       status: '',
@@ -686,7 +744,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       }));
     };
 
-    const cancel = streamHandoff(patientIdsToHandoff, sessionId, {
+    const cancel = streamHandoff(orderedPatientIds, sessionId, {
       onChunk: (patientId, summary) => {
         const next: HandoffPatient = ipassToHandoffPatient(summary);
         if (summary.error) next.error = summary.error;

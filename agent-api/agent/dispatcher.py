@@ -1708,7 +1708,17 @@ async def dispatch(
         # context), scan the loaded conversation history backward for the
         # most recent assistant tool_use with a patient_id input and surface
         # that — so the chart button stays visible across follow-up turns.
-        if not last_tool_patient_id:
+        #
+        # Important guard: only fall back to history when the model actually
+        # produced a clinical answer about a patient. Safety refusals
+        # ("I cannot bypass admin", "ignore previous instructions" responses)
+        # are short, non-clinical, and have no narrative reference to the
+        # prior patient — falling back surfaces a chart button on a refusal
+        # that has nothing to do with that patient.
+        if not last_tool_patient_id and turn_count > 1:
+            # turn_count > 1 means at least one LLM round-trip happened with
+            # tool potential. For turn 1 with no tools, it's a pure
+            # text/refusal response — don't reach back into history.
             for msg in reversed(messages):
                 if msg.get("role") != "assistant":
                     continue
