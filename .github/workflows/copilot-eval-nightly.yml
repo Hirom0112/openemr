@@ -1,0 +1,88 @@
+name: Clinical Co-Pilot — Nightly Live Eval
+
+# Runs the prompt eval harness against the real Anthropic API to catch
+# request-shape regressions (orphan tool_use blocks, accumulated
+# cache_control breakpoints, non-standard fields on loaded blocks) that
+# the stubbed CI run cannot see.
+#
+# Cost: ~$0.20-0.40 per run (24 cases against Claude). DO NOT wire this
+# to push/pull_request — keep it nightly + manual only.
+
+on:
+  schedule:
+    # 09:00 UTC = 02:00 PT / 10:00 CET — outside US and EU deploy windows.
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+jobs:
+  eval-live:
+    name: Eval Suite (Live Anthropic)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      OPENEMR_BASE_URL: "http://localhost"
+      FHIR_CLIENT_ID: ""
+      FHIR_CLIENT_SECRET: ""
+      REDIS_URL: "redis://localhost:6379/0"
+      LANGFUSE_SECRET_KEY: "test"
+      LANGFUSE_PUBLIC_KEY: "test"
+      LANGFUSE_HOST: "http://localhost:3000"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify ANTHROPIC_API_KEY secret is configured
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ERROR: ANTHROPIC_API_KEY repo secret not configured — see CONTRIBUTING.md" >&2
+            exit 1
+          fi
+          echo "ANTHROPIC_API_KEY is present"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: agent-api/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r agent-api/requirements.txt pytest
+
+      - name: Run prompt eval suite against live Anthropic API
+        id: live_eval
+        env:
+          EVAL_LIVE: "1"
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        working-directory: agent-api
+        run: |
+          set -o pipefail
+          python3 -m pytest tests/test_prompt_eval.py \
+            -v --tb=short \
+            --junitxml=eval-live-results.xml \
+            | tee eval-live.log
+
+      - name: Summarize failed cases
+        if: always()
+        working-directory: agent-api
+        run: |
+          {
+            echo "## Nightly Live Eval — ${{ steps.live_eval.outcome }}"
+            echo ""
+            echo '### Failed cases'
+            echo '```'
+            [ -f eval-live.log ] && (grep -E "FAILED|ERROR" eval-live.log || echo "(none)") || echo "(no log)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload eval results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-live-results
+          path: |
+            agent-api/eval-live-results.xml
+            agent-api/eval-live.log
