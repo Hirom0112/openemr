@@ -171,8 +171,11 @@ export default function BriefingRenderer({ data, narrative, citations, onBrief }
       {/* Sections in order returned by backend */}
       {data.sections.map((sec) => renderSection(sec))}
 
-      {/* Optional summary narrative alongside sections */}
-      {narrative && (
+      {/* Narrative is a fallback only — when structured sections or alerts
+          are present, the prose duplicates the same facts (and the alerts
+          array already surfaces any safety canaries). Suppress to avoid
+          double-rendering. */}
+      {!(data.sections?.length > 0 || data.alerts?.length > 0) && narrative && (
         <div style={{ marginTop: 10 }}>
           <Markdown narrative={narrative} citations={citations} />
         </div>
