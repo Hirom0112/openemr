@@ -126,6 +126,81 @@ async def _set_cached_bundle(
         )
 
 
+_HANDOFF_CACHE_TTL_SECONDS = 600  # ~10 min — invalidates anyway when bundle refreshes
+
+
+def _handoff_cache_key(patient_id: str, fingerprint: str) -> str:
+    """Cache key binds the handoff to the bundle fingerprint that generated it.
+
+    When the bundle cache turns over (e.g. census refresh re-fetches FHIR),
+    the fingerprint changes and the next handoff lookup misses naturally —
+    no separate invalidation pass needed.
+    """
+    return f"copilot:handoff:{patient_id}:{fingerprint}"
+
+
+async def _get_cached_handoff(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+    fingerprint: str,
+) -> HandoffSummary | None:
+    if redis_client is None or not fingerprint:
+        return None
+    key = _handoff_cache_key(patient_id, fingerprint)
+    try:
+        raw = await redis_client.get(key)
+    except Exception as exc:
+        logger.warning(
+            "Handoff cache read failed",
+            extra={"cache": "miss", "site": "handoff", "patient_id": patient_id, "error": str(exc)},
+        )
+        agent_data_cache_misses_total.labels(cache="handoff").inc()
+        return None
+    if not raw:
+        agent_data_cache_misses_total.labels(cache="handoff").inc()
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception as exc:
+        logger.warning(
+            "Handoff cache decode failed",
+            extra={"site": "handoff", "patient_id": patient_id, "error": str(exc)},
+        )
+        agent_data_cache_misses_total.labels(cache="handoff").inc()
+        return None
+    agent_data_cache_hits_total.labels(cache="handoff").inc()
+    try:
+        return HandoffSummary(**data)
+    except Exception as exc:
+        logger.warning(
+            "Handoff cache shape mismatch",
+            extra={"site": "handoff", "patient_id": patient_id, "error": str(exc)},
+        )
+        return None
+
+
+async def _set_cached_handoff(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+    fingerprint: str,
+    summary: HandoffSummary,
+) -> None:
+    if redis_client is None or not fingerprint:
+        return
+    from dataclasses import asdict
+    try:
+        await redis_client.setex(
+            _handoff_cache_key(patient_id, fingerprint),
+            _HANDOFF_CACHE_TTL_SECONDS,
+            json.dumps(asdict(summary)),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Handoff cache write failed",
+            extra={"site": "handoff", "patient_id": patient_id, "error": str(exc)},
+        )
+
+
 async def _generate_one(
     patient_id: str,
     client: anthropic.AsyncAnthropic,
@@ -149,6 +224,15 @@ async def _generate_one(
             action_list=[], situation_awareness="", contingency_plan="",
             generated_at=generated_at, error=str(exc),
         )
+
+    # Per-patient handoff cache keyed on the bundle's fingerprint. Hit means
+    # we can skip the LLM call entirely for this patient — the cached I-PASS
+    # is still valid because the underlying bundle has not changed.
+    fingerprint_raw = bundle.get("_cached_at") if isinstance(bundle, dict) else None
+    fingerprint = fingerprint_raw if isinstance(fingerprint_raw, str) else ""
+    cached_summary = await _get_cached_handoff(redis_client, patient_id, fingerprint)
+    if cached_summary is not None:
+        return cached_summary
 
     ctx = build_context(patient, bundle)
     criteria = extract(bundle)
@@ -184,7 +268,7 @@ async def _generate_one(
         if generation:
             generation.end(output=data)
 
-        return HandoffSummary(
+        summary = HandoffSummary(
             patient_id=patient_id,
             name=ctx.name,
             mrn=ctx.mrn,
@@ -196,6 +280,8 @@ async def _generate_one(
             contingency_plan=data.get("contingency_plan", ""),
             generated_at=generated_at,
         )
+        await _set_cached_handoff(redis_client, patient_id, fingerprint, summary)
+        return summary
     except Exception as exc:
         logger.error("Handoff LLM failed", extra={"patient_id": patient_id, "error": str(exc)})
         return HandoffSummary(
@@ -207,7 +293,11 @@ async def _generate_one(
         )
 
 
-_CONCURRENCY = 4          # max parallel Anthropic calls
+# Bumped 4 → 8 (2026-05): Anthropic's anthropic-ratelimit-requests-limit
+# header reports 1000 RPM on this account, so 8 concurrent handoff LLM calls
+# leaves ample headroom even when the briefing/medication paths are also
+# firing. Bottleneck moves from per-shift latency to upstream FHIR fanout.
+_CONCURRENCY = 8          # max parallel Anthropic calls
 _PATIENT_TIMEOUT = 25.0   # seconds per patient before returning error stub
 
 
