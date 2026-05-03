@@ -251,6 +251,12 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   const isAtBottomRef = useRef(true);
   const programmaticScrollRef = useRef(false);
   const [showNewMessagesPill, setShowNewMessagesPill] = useState(false);
+  // When the user explicitly triggers a request (Send, Brief/Meds/Chart,
+  // Refresh, Generate Handoff), set this flag so the next `messages` change
+  // force-scrolls to bottom regardless of current scroll position. Background
+  // updates (handoff SSE chunks, etc.) leave it false and fall through to the
+  // existing isAtBottom gate.
+  const forceScrollOnNextMessage = useRef(false);
 
   // When a NEW finalized assistant message arrives, collapse all prior assistant messages.
   // Census responses are exempt — they stay open as the persistent reference frame.
@@ -338,9 +344,26 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     requestAnimationFrame(() => { programmaticScrollRef.current = false; });
   }, []);
 
-  // Stick-to-bottom on new content, but only if the user hasn't scrolled up.
+  // Stick-to-bottom on new content. Two distinct paths:
+  //   (1) Force path — the most recent message addition was the result of a
+  //       user-initiated action (Send, Brief/Meds/Chart, Refresh, Generate
+  //       Handoff). Always scroll to bottom and hide the pill; the user
+  //       expects to see their response.
+  //   (2) Background path — incremental updates (handoff SSE chunks, etc.).
+  //       Only scroll if the user is already at the bottom; otherwise show
+  //       the "↓ New messages" pill so we don't yank them down.
   useLayoutEffect(() => {
-    if (isAtBottomRef.current) {
+    if (forceScrollOnNextMessage.current) {
+      forceScrollOnNextMessage.current = false;
+      programmaticScrollRef.current = true;
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      isAtBottomRef.current = true;
+      setIsAtBottom(true);
+      setShowNewMessagesPill(false);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => { programmaticScrollRef.current = false; });
+      });
+    } else if (isAtBottomRef.current) {
       programmaticScrollRef.current = true;
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
       // Release the suppression flag after the smooth scroll has had a chance
@@ -370,6 +393,8 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
 
   const dispatchMessage = useCallback(async (text: string, isAutoDispatch = false) => {
     if (!isAutoDispatch) {
+      // User-initiated (Send, Retry): force scroll on the user bubble append.
+      forceScrollOnNextMessage.current = true;
       setMessages((prev) => [
         ...prev,
         { id: `user-${Date.now()}`, role: 'user', content: text },
@@ -415,6 +440,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
         }
       }
 
+      if (!isAutoDispatch) forceScrollOnNextMessage.current = true;
       setMessages((prev) => [
         ...prev,
         {
@@ -425,6 +451,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
         },
       ]);
     } catch {
+      if (!isAutoDispatch) forceScrollOnNextMessage.current = true;
       setMessages((prev) => [
         ...prev,
         {
@@ -455,6 +482,8 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     options?: { forceRefresh?: boolean },
   ) => {
     const forceRefresh = options?.forceRefresh === true;
+    // User-initiated (Brief or Refresh button): force scroll.
+    forceScrollOnNextMessage.current = true;
     setMessages((prev) => [
       ...prev,
       {
@@ -483,11 +512,13 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
         session_id: sessionId,
         extra: { action: 'brief_direct_done', patient_id: patientId },
       });
+      forceScrollOnNextMessage.current = true;
       setMessages((prev) => [
         ...prev,
         { id: `assistant-${Date.now()}`, role: 'assistant', response: meta.response },
       ]);
     } catch {
+      forceScrollOnNextMessage.current = true;
       setMessages((prev) => [
         ...prev,
         {
@@ -512,6 +543,8 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   }, [sessionId]);
 
   const dispatchMedsDirect = useCallback(async (name: string, patientId: string) => {
+    // User-initiated (Meds button): force scroll.
+    forceScrollOnNextMessage.current = true;
     setMessages((prev) => [
       ...prev,
       { id: `user-${Date.now()}`, role: 'user', content: `Medications for ${name}` },
@@ -536,11 +569,13 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
         session_id: sessionId,
         extra: { action: 'meds_direct_done', patient_id: patientId },
       });
+      forceScrollOnNextMessage.current = true;
       setMessages((prev) => [
         ...prev,
         { id: `assistant-${Date.now()}`, role: 'assistant', response: meta.response },
       ]);
     } catch {
+      forceScrollOnNextMessage.current = true;
       setMessages((prev) => [
         ...prev,
         {
@@ -619,6 +654,10 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       citations: [],
     };
 
+    // User-initiated (Generate Handoff button): force scroll for the placeholder
+    // bubble. Subsequent SSE chunk replacements in `replaceEntry` are background
+    // updates and intentionally do NOT set this flag.
+    forceScrollOnNextMessage.current = true;
     setMessages((prev) => [
       ...prev,
       { id: userId, role: 'user', content: `Generate shift handoff for ${patientIdsToHandoff.length} patients` },
