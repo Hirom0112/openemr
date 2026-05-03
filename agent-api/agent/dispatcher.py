@@ -57,8 +57,10 @@ _MODEL = getattr(settings, "anthropic_model", "claude-sonnet-4-6")
 # Response types whose frontend renderers consume `response.data` and ignore
 # the narrative.  For these we can skip the second (framing) Anthropic call
 # entirely — a ~1.5–2 s latency win per turn — because the renderer never
-# displays the narrative anyway.  Free-text response types (`text`,
-# `query_answer`) still need the framing pass and are NOT included.
+# displays the narrative anyway.  Free-text `text` still needs the framing
+# pass.  ``query_answer`` is included because the underlying tool result
+# already carries a physician-readable ``answer`` string (see
+# ``query/conversation.py``) — the framing turn was just rewrapping it.
 #
 # Keep this set in sync with the structured renderer types in
 # `agent-ui/src/types.ts` (ResponseType union) and the tool→response_type map
@@ -68,6 +70,7 @@ _STRUCTURED_RESPONSE_TYPES: frozenset[str] = frozenset({
     "briefing",
     "medication_safety",
     "handoff",
+    "query_answer",
 })
 
 
@@ -208,6 +211,97 @@ def _briefing_identity_summary(final_data: dict[str, Any]) -> str:
     return base
 
 
+def _query_answer_narrative(
+    final_data: dict[str, Any],
+    *,
+    patient_name: str | None = None,
+    patient_id: str | None = None,
+) -> str:
+    """Build a placeholder narrative for a ``query_answer`` structured-skip.
+
+    The QueryAnswerRenderer in the UI reads ``data.answer`` directly, so the
+    narrative is never displayed.  But the narrative IS persisted to history
+    and is what the LLM sees on follow-up turns when it tries to resolve
+    pronouns (e.g. "what about her potassium?").  We therefore include the
+    patient name / id and the answer snippet so pronoun resolution still has
+    enough context to bind to the right patient and prior fact.
+    """
+    answer = final_data.get("answer")
+    if not isinstance(answer, str):
+        answer = ""
+    answer = answer.strip()
+
+    # The answer can be long — clip to keep history compact while retaining
+    # the load-bearing fact.
+    snippet = answer if len(answer) <= 280 else answer[:277].rstrip() + "..."
+
+    name = patient_name or final_data.get("patient_name") or final_data.get("name")
+    if isinstance(name, dict):
+        name = name.get("display") or None
+    if not isinstance(name, str) or not name.strip():
+        name = None
+    pid = patient_id or final_data.get("patient_id") or final_data.get("patientId")
+    if pid is not None and not isinstance(pid, str):
+        pid = str(pid)
+
+    if name and pid:
+        prefix = f"Answered query for {name} (patient_id={pid})."
+    elif name:
+        prefix = f"Answered query for {name}."
+    elif pid:
+        prefix = f"Answered query for patient_id={pid}."
+    else:
+        prefix = "Answered query."
+
+    # Empty answer (e.g. tool found no results) — the framing turn would have
+    # said "no results found"; preserve that semantic in the placeholder so
+    # downstream verification, history, and any text-mode follow-up see the
+    # same "no data" signal.
+    if not snippet:
+        body = "No results found in the chart for this query."
+    else:
+        body = snippet
+
+    # Detect blank-code-status / blank-allergies signals in the answer text
+    # and surface the verbatim canary phrases mandated by
+    # ``agent/system_prompt.py``.  The framing turn is normally what surfaces
+    # these; keep the prompt contract intact when we skip it.
+    canary_parts: list[str] = []
+    answer_lower = answer.lower()
+    if (
+        "code status" in answer_lower
+        and (
+            "blank" in answer_lower
+            or "not documented" in answer_lower
+            or "missing" in answer_lower
+            or "empty" in answer_lower
+            or "unknown" in answer_lower
+            or "no code status" in answer_lower
+        )
+    ):
+        canary_parts.append(_CANARY_BLANK_CODE_STATUS)
+    if (
+        ("allerg" in answer_lower)
+        and (
+            "blank" in answer_lower
+            or "missing" in answer_lower
+            or "empty" in answer_lower
+            or "incomplete" in answer_lower
+            or "no known" in answer_lower
+            or "not documented" in answer_lower
+        )
+    ):
+        canary_parts.append(_CANARY_BLANK_ALLERGIES)
+
+    # Append the verify-in-chart disclaimer mandated by ``agent/system_prompt.py``
+    # ("Every final response must end with the disclaimer ... Verify ... in
+    # the chart.").  The framing turn is what normally surfaces this; keep
+    # the contract intact when we skip framing.
+    disclaimer = "Verify in the chart before clinical decisions."
+    suffix = " " + " ".join(canary_parts) if canary_parts else ""
+    return f"{prefix} {body}{suffix} {disclaimer}"
+
+
 def _structured_skip_narrative(response_type: str, final_data: dict[str, Any]) -> str:
     """Build a one-line placeholder narrative for a structured-renderer response.
 
@@ -242,6 +336,12 @@ def _structured_skip_narrative(response_type: str, final_data: dict[str, Any]) -
         patient_id = final_data.get("patient_id") or final_data.get("patientId") or "patient"
         base = f"Medication safety check generated for patient_id={patient_id}."
         blank_allergies, blank_code_status = _medication_safety_canaries(final_data)
+    elif response_type == "query_answer":
+        # query_answer placeholder is built without canary appendage — the
+        # tool's ``answer`` already contains any safety-relevant text and the
+        # blank-allergy / blank-code-status canaries are scoped to briefing
+        # and medication_safety paths.
+        return _query_answer_narrative(final_data)
     else:
         return ""
 
@@ -399,6 +499,40 @@ _RESPONSE_TYPE_INTENT_HINTS: dict[str, list[str]] = {
         "end of rounds",
         "end-of-rounds",
         "shift end",
+    ],
+    # Targeted free-text questions ("what was the last potassium", "creatinine
+    # trend", "echo show", "what is the current X").  When the model dispatches
+    # ``query_patient_records`` and the user's intent reads like a direct
+    # records lookup, the tool's ``answer`` is already physician-readable, so
+    # the framing turn is redundant.  Keep these substrings broad but
+    # non-overlapping with the structured-renderer intents above.
+    "query_answer": [
+        "what was",
+        "what is",
+        "what did",
+        "what's the",
+        "show me the",
+        "show the",
+        "echo show",
+        "trend",
+        "potassium",
+        "creatinine",
+        "sodium",
+        "glucose",
+        "hemoglobin",
+        "platelet",
+        "wbc",
+        "inr",
+        "labs",
+        "vitals",
+        "last ",
+        "most recent",
+        "current ",
+        "how high",
+        "how low",
+        "did the",
+        "did her",
+        "did his",
     ],
 }
 
@@ -1578,7 +1712,18 @@ async def dispatch(
                     and final_data is not None
                     and _user_intent_matches_response(message, response_type)
                 ):
-                    final_narrative = _structured_skip_narrative(response_type, final_data)
+                    if response_type == "query_answer":
+                        # Enrich the placeholder with patient context tracked
+                        # by the loop so follow-up turns ("what about her
+                        # potassium?") have the right pronoun-resolution
+                        # context in saved history.
+                        final_narrative = _query_answer_narrative(
+                            final_data,
+                            patient_name=last_tool_patient_name,
+                            patient_id=last_tool_patient_id,
+                        )
+                    else:
+                        final_narrative = _structured_skip_narrative(response_type, final_data)
                     # No framing call will run, so persist a synthetic assistant
                     # text block so subsequent turns see a complete user/assistant
                     # exchange rather than ending mid-tool_result.
