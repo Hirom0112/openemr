@@ -448,16 +448,29 @@ async def targeted_query(session_id: str, body: QueryRequest) -> dict:
 # ── UC-4 Medication Safety ────────────────────────────────────────────────────  LEGACY — retire after Phase 13 cutover
 
 @app.get("/medication/safety/{patient_id}")
-async def medication_safety(patient_id: str, session_id: str | None = None) -> dict:
+async def medication_safety(
+    patient_id: str,
+    session_id: str | None = None,
+    force_refresh: bool = False,
+) -> dict:
     """Button-driven medication safety surface.
 
     Optional ?session_id= query param: when provided, the result is persisted
     as a synthetic conversation turn so subsequent dispatcher calls see this
     in their loaded history (allows pronoun resolution after a button click).
+
+    Optional ?force_refresh=true query param: when true, bypasses the bundle
+    cache so the safety report reflects current FHIR state and the response
+    carries a fresh ``generated_at`` timestamp. Wired to the in-UI Refresh
+    button on the medication-safety bubble (mirrors the briefing endpoint).
     """
     try:
         tool_result = await get_medication_safety(
-            {"patient_id": patient_id, "provider_id": "system"},
+            {
+                "patient_id": patient_id,
+                "provider_id": "system",
+                "force_refresh": force_refresh,
+            },
             session_context=_session_ctx(session_id),
         )
         result = tool_result["result"]

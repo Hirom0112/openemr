@@ -23,13 +23,18 @@ interface ResponseRendererProps {
   providerName?: string;
   /** Refresh the census (force_refresh=true). Wired to the Refresh button in CensusRenderer. */
   onRefreshCensus?: () => void;
+  /** Refresh the medication-safety bubble (force_refresh=true). Wired to
+   *  the Refresh button in MedicationSafetyRenderer — re-issues
+   *  /medication/safety with force_refresh=true so the bundle cache is
+   *  bypassed and a fresh generated_at is stamped. */
+  onRefreshMedicationSafety?: (patientId: string) => void;
   /** Patient name surfaced by the dispatcher (response.metadata.patient_name).
    *  Used by free-text renderers (query_answer, medication_safety) to render a
    *  prominent banner so the physician can confirm patient identity at a glance. */
   patientName?: string;
 }
 
-export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff, handoffInFlight, providerName, patientName, onRefreshCensus }: ResponseRendererProps) {
+export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff, handoffInFlight, providerName, patientName, onRefreshCensus, onRefreshMedicationSafety }: ResponseRendererProps) {
   const { type, data, narrative, citations } = response;
 
   if (type === 'error') {
@@ -80,6 +85,7 @@ export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff,
           narrative={narrative}
           citations={citations}
           patientName={patientName}
+          onRefresh={onRefreshMedicationSafety}
         />
       );
     case 'handoff':

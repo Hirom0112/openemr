@@ -773,6 +773,65 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     handoffStreamRef.current = { cancel, bubbleId };
   }, [sessionId]);
 
+  // Force-refresh the medication-safety bubble. Mirrors dispatchBriefDirect's
+  // force_refresh path: re-issues /medication/safety with force_refresh=true
+  // so the bundle cache is bypassed and the response carries a fresh
+  // generated_at. Wired to the Refresh button in MedicationSafetyRenderer.
+  const dispatchMedsForceRefresh = useCallback(async (patientId: string) => {
+    forceScrollOnNextMessage.current = true;
+    setMessages((prev) => [
+      ...prev,
+      { id: `user-${Date.now()}`, role: 'user', content: 'Refresh medications' },
+    ]);
+    setLoading(true);
+    const submitT0 = performance.now();
+    try {
+      const meta = await getMedicationSafety(patientId, sessionId, (requestId) => {
+        postClientTiming({
+          action: 'chat_submit_to_first_byte',
+          duration_ms: Math.round(performance.now() - submitT0),
+          request_id: requestId,
+          session_id: sessionId,
+          extra: { action: 'meds_refresh_first_byte', patient_id: patientId },
+        });
+      }, true);
+      postClientTiming({
+        action: 'chat_submit_to_done',
+        duration_ms: Math.round(performance.now() - submitT0),
+        request_id: meta.requestId,
+        session_id: sessionId,
+        extra: { action: 'meds_refresh_done', patient_id: patientId },
+      });
+      forceScrollOnNextMessage.current = true;
+      setMessages((prev) => [
+        ...prev,
+        { id: `assistant-${Date.now()}`, role: 'assistant', response: meta.response },
+      ]);
+    } catch {
+      forceScrollOnNextMessage.current = true;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `error-${Date.now()}`,
+          role: 'assistant',
+          response: {
+            type: 'error',
+            data: null,
+            narrative: 'Medication safety refresh failed — try again or view the chart directly.',
+            citations: [],
+            metadata: {
+              error_class: 'transient',
+              retry_suggested: true,
+              failure_class: 'network',
+            },
+          },
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }, [sessionId]);
+
   // Force-refresh the census via /triage/census with force_refresh=true.
   // Bypasses the 5-min Redis cache and gives the user a brand-new
   // generated_at. Wired to the Refresh button in CensusRenderer.
@@ -1063,6 +1122,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                           handoffInFlight={handoffStreaming}
                           providerName={displayName}
                           onRefreshCensus={() => { void dispatchCensusForceRefresh(); }}
+                          onRefreshMedicationSafety={(patientId) => { void dispatchMedsForceRefresh(patientId); }}
                         />
                       ) : (
                         <span style={{ color: '#9ca3af' }}>…</span>

@@ -64,3 +64,49 @@ def test_medication_safety_endpoint_returns_renderer_fields(monkeypatch: pytest.
     # `interactions` list, so a Penicillin-vs-Penicillin G clash should NOT
     # appear under interactions.
     assert all("ALLERGY_CONFLICT" not in s for s in body["interactions"])
+
+    # Freshness contract — the renderer's "Data as of HH:MM · Refresh"
+    # indicator depends on this field. Should be a non-empty ISO-8601 string.
+    assert isinstance(body.get("generated_at"), str) and body["generated_at"]
+
+
+@pytest.mark.hard_failure
+@pytest.mark.clinical_accuracy
+def test_medication_safety_force_refresh_param_is_threaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """?force_refresh=true must reach get_medication_safety as input["force_refresh"]."""
+    from typing import Any as _Any
+
+    captured: dict[str, _Any] = {}
+
+    async def _fake_tool(input_dict: dict[str, _Any], session_context: dict[str, _Any]) -> dict[str, _Any]:
+        captured["force_refresh"] = input_dict.get("force_refresh")
+        return {
+            "result": {
+                "patient_id": input_dict["patient_id"],
+                "medications_reviewed": 0,
+                "flag_count": 0,
+                "flags": [],
+                "summary": "",
+                "current_medications": [],
+                "allergies": [],
+                "interactions": [],
+                "generated_at": "2026-05-02T00:00:00+00:00",
+            },
+            "citations": [],
+            "metadata": {},
+        }
+
+    import main as main_module
+    monkeypatch.setattr(main_module, "get_medication_safety", _fake_tool)
+
+    client = TestClient(main_module.app)
+
+    # Default (no query param) → force_refresh False.
+    r1 = client.get("/medication/safety/pt-test")
+    assert r1.status_code == 200
+    assert captured["force_refresh"] is False
+
+    # Explicit force_refresh=true → True threaded into the tool.
+    r2 = client.get("/medication/safety/pt-test?force_refresh=true")
+    assert r2.status_code == 200
+    assert captured["force_refresh"] is True

@@ -138,6 +138,14 @@ export interface MedicationSafetyData {
   current_medications: string[];
   allergies: string[];
   interactions: string[];
+  /** ISO-8601 UTC timestamp from the underlying FHIR bundle's _cached_at
+   *  fingerprint. Drives the "Data as of HH:MM · Refresh" indicator in
+   *  MedicationSafetyRenderer. Optional for backward compat with legacy
+   *  responses that predate the freshness signal. */
+  generated_at?: string;
+  /** Patient ID surfaced for the Refresh button so it can re-fetch the
+   *  safety report without relying on the parent for context. */
+  patient_id?: string;
 }
 
 export interface HandoffPatient {
