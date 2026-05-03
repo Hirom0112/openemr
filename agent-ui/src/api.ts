@@ -92,14 +92,38 @@ export async function fetchHealth() {
   return result;
 }
 
-/** Fire-and-forget signal to warm the FHIR cache on panel mount. */
-export async function prefetchPatientData(sessionId: string, patientIds: string[]): Promise<void> {
+/**
+ * Fire-and-forget signal to warm the FHIR cache on panel mount.
+ *
+ * When ``forceRefresh`` is true the backend cascades a fresh warm across
+ * census, bundles, briefings, and medication-safety — invalidating per-layer
+ * caches before regenerating. Used by the census Refresh button so any
+ * subsequent Brief/Meds click is guaranteed to read fresh data, not the
+ * stale bundle that was sitting behind the previous-shift census.
+ *
+ * Backend gates the actual force-refresh behaviour behind
+ * ``PREFETCH_FORCE_REFRESH_ON_LOGIN`` — clients can ask but the server
+ * decides whether to honour the cost.
+ */
+export interface PrefetchOptions {
+  forceRefresh?: boolean;
+}
+
+export async function prefetchPatientData(
+  sessionId: string,
+  patientIds: string[],
+  options: PrefetchOptions = {},
+): Promise<void> {
   try {
-    await post('/agent/prefetch', {
+    const body: Record<string, unknown> = {
       session_id: sessionId,
       provider_id: String(cfg().providerId),
       patient_ids: patientIds,
-    });
+    };
+    if (options.forceRefresh) {
+      body.force_refresh = true;
+    }
+    await post('/agent/prefetch', body);
   } catch {
     // Non-blocking — pre-fetch failure must never block the panel
   }

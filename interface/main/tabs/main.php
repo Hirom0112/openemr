@@ -630,13 +630,24 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
                     sessionStorage.setItem(c.flagKey, '1');
                 } catch (e) { /* private mode — fire once anyway */ }
                 try {
+                    // force_refresh ensures the cached census + bundles +
+                    // briefings + medication-safety reports reflect the actual
+                    // current FHIR state, not whatever was cached from the
+                    // previous shift. Cost: one-time warm of ~10 patients
+                    // takes ~20-30s of background Anthropic + FHIR work; runs
+                    // invisibly while the user reads emails before clicking
+                    // Co-Pilot. Server-side gated by
+                    // PREFETCH_FORCE_REFRESH_ON_LOGIN — when False (default
+                    // for prod), the backend silently downgrades to a normal
+                    // EXISTS-checked warm.
                     fetch(c.agentApiUrl + '/agent/prefetch', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             session_id: c.sessionId,
                             provider_id: c.providerId,
-                            patient_ids: c.patientIds
+                            patient_ids: c.patientIds,
+                            force_refresh: true
                         }),
                         keepalive: true
                     }).catch(function () {});
