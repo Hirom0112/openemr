@@ -143,15 +143,17 @@ class Bootstrap
         var moduleUrl = {$moduleUrlJson};
         var modulePath = {$modulePathJson};
 
-        // Fix 1: warm agent caches in the background.
-        try {
-            fetch(agentApiUrl + '/agent/prefetch', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-                keepalive: true
-            }).catch(function () {});
-        } catch (e) { /* silent */ }
+        // Prefetch warm intentionally REMOVED here. Was firing with
+        // session_id() (PHP session id) which doesn't match the
+        // deterministic 'copilot-' + sha256(provider_id + '|' + Y-m-d)
+        // formula the iframe uses — the warmed cache landed in a
+        // different session and was never read. Plus this didn't pass
+        // force_refresh, so even if the session matched, bundles +
+        // briefings would have stayed at whatever was cached from a
+        // previous shift. The correct prefetch lives at
+        // interface/main/tabs/main.php and uses the right session_id
+        // formula + force_refresh: true. Keep this Bootstrap focused
+        // on the tab pre-load below.
 
         // Fix 2: pre-load the Co-Pilot iframe in the tab bar (hidden).
         function pushCopilotTab() {
