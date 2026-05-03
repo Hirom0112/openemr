@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { buildCitationUrl } from './citations';
+import { buildCitationUrl, resolvePatientPid } from './citations';
 import type { Citation } from '../types';
 
 const baseCitation: Citation = {
@@ -12,10 +12,10 @@ const baseCitation: Citation = {
 };
 
 describe('buildCitationUrl', () => {
-  test('Observation returns results_report URL with patient_id', () => {
+  test('Observation returns results_report URL with resolved numeric pid', () => {
     const url = buildCitationUrl(baseCitation);
     expect(url).not.toBeNull();
-    expect(url).toContain('pt-001');
+    expect(url).toContain('pid=1');
     expect(url).toContain('results_report');
   });
 
@@ -24,11 +24,11 @@ describe('buildCitationUrl', () => {
     expect(url).toContain('results_report');
   });
 
-  test('MedicationRequest returns medications section URL', () => {
+  test('MedicationRequest returns medications section URL with resolved pid', () => {
     const url = buildCitationUrl({ ...baseCitation, resource_type: 'MedicationRequest' });
     expect(url).not.toBeNull();
     expect(url).toContain('medications');
-    expect(url).toContain('pt-001');
+    expect(url).toContain('set_pid=1');
   });
 
   test('AllergyIntolerance returns allergies section URL', () => {
@@ -49,10 +49,10 @@ describe('buildCitationUrl', () => {
     expect(url).toContain('encounter_top');
   });
 
-  test('Flag (isolation) returns patient summary URL', () => {
+  test('Flag (isolation) returns patient summary URL with resolved pid', () => {
     const url = buildCitationUrl({ ...baseCitation, resource_type: 'Flag', claim_class: 'isolation' });
     expect(url).not.toBeNull();
-    expect(url).toContain('pt-001');
+    expect(url).toContain('set_pid=1');
   });
 
   test('Unknown resource type returns null', () => {
@@ -60,11 +60,31 @@ describe('buildCitationUrl', () => {
     expect(url).toBeNull();
   });
 
-  test('All URLs contain the patient_id', () => {
+  test('All URLs contain the resolved numeric pid (not the synthetic pt-NNN)', () => {
     const types = ['Observation', 'MedicationRequest', 'Condition', 'AllergyIntolerance', 'Encounter', 'DiagnosticReport', 'Flag'];
     for (const resource_type of types) {
       const url = buildCitationUrl({ ...baseCitation, resource_type });
-      expect(url).toContain('pt-001');
+      // OpenEMR's set_pid / pid query param requires the numeric integer pid,
+      // not the synthetic "pt-001" identifier. Resolution happens inside
+      // buildCitationUrl via resolvePatientPid().
+      expect(url).toMatch(/(?:set_)?pid=1(?:#|$)/);
+      expect(url).not.toContain('pt-001');
     }
+  });
+
+  test('regression: pt-001 resolves to numeric pid 1 in URL', () => {
+    // OpenEMR's demographics_full.php?set_pid=N expects an integer. The
+    // synthetic "pt-NNN" identifiers from FHIR fixtures must be converted
+    // before being placed in a chart-navigation URL. See PatientCard.tsx
+    // and CensusRenderer.openPatientChart for the parallel resolution path.
+    expect(resolvePatientPid('pt-001')).toBe('1');
+    expect(resolvePatientPid('pt-010')).toBe('10');
+    const url = buildCitationUrl({ ...baseCitation, patient_id: 'pt-001', resource_type: 'MedicationRequest' });
+    expect(url).toBe('/interface/patient_file/summary/demographics_full.php?set_pid=1#medications');
+  });
+
+  test('plain numeric pid is passed through unchanged', () => {
+    const url = buildCitationUrl({ ...baseCitation, patient_id: '42', resource_type: 'Observation' });
+    expect(url).toContain('pid=42');
   });
 });
