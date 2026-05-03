@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { CensusData, CensusPatient, Citation } from '../types';
 import { resolvePatientPid } from '../utils/citations';
 import DisclaimerIcon from './DisclaimerIcon';
-import { RED, AMB, NEU, MUTED, primaryButtonStyle, secondaryButtonStyle } from '../styles/tokens';
+import { RED, AMB, NEU, MUTED, primaryButtonStyle, secondaryButtonStyle, cardStyle } from '../styles/tokens';
 import type { ColorToken } from '../styles/tokens';
 import {
   TierDot,
@@ -11,6 +11,7 @@ import {
   LivePill,
   AdmitBadge,
   DisclaimerFooter,
+  Pill,
 } from './primitives';
 
 function openPatientChart(patientId: string, openemrPid?: string): void {
@@ -28,7 +29,18 @@ function openPatientChart(patientId: string, openemrPid?: string): void {
     });
     return;
   }
-  const url = `/interface/patient_file/summary/demographics_full.php?set_pid=${pid}`;
+  const url = `/interface/patient_file/summary/demographics.php?set_pid=${pid}`;
+  // Switch the patient inside OpenEMR's frame shell — same flow used by the
+  // patient finder and tracker (interface/main/tabs/js/frame_proxies.js).
+  // Falls back to a new tab if loaded outside the shell (standalone dev).
+  const w = window as unknown as {
+    top?: { restoreSession?: () => void; RTop?: { location: string } };
+  };
+  if (w.top?.RTop) {
+    w.top.restoreSession?.();
+    w.top.RTop.location = url;
+    return;
+  }
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
@@ -142,14 +154,7 @@ function LabSeverityBadge({ level }: { level: number }) {
   const isCritical = level === CRITICAL_LAB_LEVEL;
   const col = isCritical ? RED : AMB;
   const label = isCritical ? 'Critical' : 'Borderline';
-  return (
-    <span style={{
-      background: col.border, color: '#fff', borderRadius: 999,
-      padding: '2px 8px', fontSize: 11, fontWeight: 500, whiteSpace: 'nowrap',
-    }}>
-      {label}
-    </span>
-  );
+  return <Pill color={col} label={label} />;
 }
 
 export default function CensusRenderer({ data, citations, onBrief, onMeds, providerName }: CensusRendererProps) {
@@ -187,16 +192,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, provi
         <div
           role="status"
           title={data.dropped_ids && data.dropped_ids.length > 0 ? `Failed: ${data.dropped_ids.join(', ')}` : undefined}
-          style={{
-            margin: '0 0 10px 0',
-            padding: '6px 10px',
-            fontSize: 12,
-            color: AMB.text,
-            background: AMB.bg,
-            border: `1px solid ${AMB.border}`,
-            borderLeft: `3px solid ${AMB.border}`,
-            borderRadius: 4,
-          }}
+          style={{ ...cardStyle(AMB), padding: '6px 10px', fontSize: 12, color: AMB.text, marginBottom: 10 }}
         >
           Showing {data.total} of {data.requested} patients — {data.dropped} failed to load. Refresh to retry.
         </div>
@@ -340,10 +336,42 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, provi
         </section>
       )}
 
+      {/* What I can do — informational footer */}
+      <CapabilitiesFooter providerName={providerName} patientCount={census.length} />
+
       {/* Disclaimer */}
       <DisclaimerFooter>
         <DisclaimerIcon citations={citations} />
       </DisclaimerFooter>
+    </div>
+  );
+}
+
+function CapabilitiesFooter({ providerName, patientCount }: { providerName?: string; patientCount: number }) {
+  const name = providerName?.trim() ? `${providerName}'s` : 'your';
+  const providerId = window.__COPILOT_CONFIG__?.providerId;
+  const providerIdParenthetical = providerId !== undefined && providerId !== null && String(providerId) !== ''
+    ? ` (Provider ID: ${providerId})`
+    : '';
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        paddingTop: 10,
+        borderTop: `1px solid ${NEU.border}`,
+        fontSize: 12,
+        color: NEU.secondary,
+        lineHeight: 1.6,
+      }}
+    >
+      <div style={{ marginBottom: 6 }}>
+        What I can do: I&rsquo;m scoped to support {name} active session{providerIdParenthetical} and the {patientCount} patient{patientCount === 1 ? '' : 's'} on the current census. I can:
+      </div>
+      <div>🏥 Run morning triage on the active census</div>
+      <div>📋 Brief any patient currently on rounds</div>
+      <div>🔍 Answer targeted clinical questions from chart data</div>
+      <div>💊 Surface medication safety flags for census patients</div>
+      <div>📝 Generate shift handoff notes</div>
     </div>
   );
 }
