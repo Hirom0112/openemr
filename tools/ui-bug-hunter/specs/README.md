@@ -62,6 +62,7 @@ test runner output before any spec executes.
 | `theme.spec.ts` | All tool-output containers share a small canonical token set. **Currently `test.fixme`** — flip on after Issue 1. |
 | `chart-button.spec.ts` | "View in Chart" popups have integer pid and a populated body. |
 | `latency.spec.ts` | Soft probe of `/agent`, `/triage`, `/briefing` p95/mean/stdev. Never fails on latency yet. |
+| `chat-behaviors.spec.ts` | Chat-surface behaviors that the prompt-eval suite cannot test: chart-button gating, auto-collapse with census exemption, census Refresh updating the timestamp, handoff cascade ≥300ms stagger, markdown-narrative rendering. |
 
 ## Selectors
 
