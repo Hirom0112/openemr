@@ -61,13 +61,7 @@ export default function MedicationSafetyRenderer({ data, narrative, citations, p
   const hasAllergies = data.allergies && data.allergies.length > 0;
   const hasInteractions = data.interactions && data.interactions.length > 0;
   const hasMeds = data.current_medications && data.current_medications.length > 0;
-  const hasStructured = hasAllergies || hasInteractions || hasMeds;
   const count = citations?.length ?? 0;
-  // When structured data is present we suppress the LLM narrative to avoid
-  // duplicating the same facts (vancomycin appearing 3x bug). Surface any
-  // safety canary phrases the narrative carried as top-of-card alert rows
-  // so they don't get lost with the rest of the prose.
-  const canaries = hasStructured ? extractCanaries(narrative) : [];
   // Prefer the explicit patientName prop (from metadata.patient_name); fall
   // back to a name field on data if the tool surfaces one in-line. Don't
   // fabricate — render no banner if neither is present.
@@ -90,15 +84,6 @@ export default function MedicationSafetyRenderer({ data, narrative, citations, p
         >
           {displayName}
         </div>
-      )}
-
-      {canaries.length > 0 && (
-        <>
-          <SectionHeading color={AMB}>Safety flags</SectionHeading>
-          {canaries.map((c, i) => (
-            <ClaimRow key={i} color={AMB}>{c}</ClaimRow>
-          ))}
-        </>
       )}
 
       {hasAllergies && (
@@ -128,8 +113,17 @@ export default function MedicationSafetyRenderer({ data, narrative, citations, p
         </>
       )}
 
-      {!hasStructured && narrative && (
-        <div style={{ marginTop: 8 }}>
+      {/* Render the LLM narrative below the structured data. The clinician
+          values the prose analysis (e.g. "Marcus is critically ill with
+          sepsis; clinical context for any new medication is yours to weigh")
+          even when the structured tables above already cover the bare facts.
+          The earlier full-suppression behavior left the response feeling
+          empty — the structured data alone doesn't carry the analysis. */}
+      {narrative && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${NEU.border}` }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: NEU.secondary, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 }}>
+            Analysis
+          </div>
           <Markdown narrative={narrative} citations={citations} />
         </div>
       )}

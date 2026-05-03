@@ -744,54 +744,27 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       }));
     };
 
-    // In-order populate: even though SSE chunks arrive in completion order
-    // (Linda may finish before Marcus), the user wants to read the handoff
-    // top-down. Buffer out-of-order chunks until the next-in-line patient
-    // lands, then flush sequentially. This matches the "read rounds in
-    // order" mental model and avoids a P5 summary appearing while P1 is
-    // still pending.
-    const pendingChunks = new Map<string, HandoffPatient>();
-    let nextIdx = 0;
-    const flushInOrder = (): void => {
-      while (nextIdx < orderedPatientIds.length) {
-        const id = orderedPatientIds[nextIdx];
-        const ready = pendingChunks.get(id);
-        if (!ready) break;
-        replaceEntry(id, ready);
-        pendingChunks.delete(id);
-        nextIdx++;
-      }
-    };
-    const enqueue = (patientId: string, next: HandoffPatient): void => {
-      pendingChunks.set(patientId, next);
-      flushInOrder();
-    };
-
+    // Chunks render in place as they arrive. The placeholder ARRAY is
+    // already triage-sorted (P1 first), so visual order holds even when
+    // Linda's chunk lands before Marcus's — Linda's data fills slot 1,
+    // Marcus's data fills slot 0 when it lands. The previous in-order
+    // buffer attempted strict population order but could strand chunks
+    // when an unexpected patient_id arrived; direct replaceEntry is more
+    // robust.
     const cancel = streamHandoff(orderedPatientIds, sessionId, {
       onChunk: (patientId, summary) => {
         const next: HandoffPatient = ipassToHandoffPatient(summary);
         if (summary.error) next.error = summary.error;
-        enqueue(patientId, next);
+        replaceEntry(patientId, next);
       },
       onError: (patientId, errorMsg, summary) => {
         const next: HandoffPatient = {
           ...ipassToHandoffPatient(summary),
           error: errorMsg,
         };
-        enqueue(patientId, next);
+        replaceEntry(patientId, next);
       },
       onDone: () => {
-        // Flush any remaining buffered chunks (e.g. if a head-of-line
-        // patient errored without producing a chunk, the rest are still
-        // in the buffer — drain them now so the user sees the full list).
-        for (let i = nextIdx; i < orderedPatientIds.length; i++) {
-          const id = orderedPatientIds[i];
-          const stuck = pendingChunks.get(id);
-          if (stuck) {
-            replaceEntry(id, stuck);
-            pendingChunks.delete(id);
-          }
-        }
         handoffStreamRef.current = null;
         setHandoffStreaming(false);
         setLoading(false);
