@@ -220,58 +220,67 @@ export default function HandoffRenderer({ data, narrative, citations }: HandoffR
   // alone forever.
   useEffect(() => {
     if (!patients?.length) return;
-    const expandedTimers: number[] = [];
-    setCollapsedPatients((prev) => {
-      const next = new Set(prev);
-      let changed = false;
-      let allPriorReady = true;
-      const toExpand: string[] = [];
-      for (const p of patients) {
-        const id = p.patient_id;
-        if (!seenPatientsRef.current.has(id)) {
-          seenPatientsRef.current.add(id);
-          if (!userTouchedIdsRef.current.has(id)) {
-            if (!next.has(id)) {
-              next.add(id);
-              changed = true;
-            }
-          }
-        }
-        const ready = isDataReady(p);
-        const shouldExpand = ready && allPriorReady && !userTouchedIdsRef.current.has(id);
-        if (shouldExpand && next.has(id)) {
-          toExpand.push(id);
-        }
-        if (!ready) {
-          allPriorReady = false;
+    // Step 1: compute newly-seen patients and which ones should expand.
+    // Done OUTSIDE setState so we can call setCollapsedPatients later from
+    // the timer callbacks without nesting setState calls (which would race:
+    // the inner updater reads stale `cur` and the outer return overwrites
+    // it — that bug stranded the first patient in collapsed state).
+    const newlySeen: string[] = [];
+    const toExpand: string[] = [];
+    let allPriorReady = true;
+    for (const p of patients) {
+      const id = p.patient_id;
+      const wasSeen = seenPatientsRef.current.has(id);
+      if (!wasSeen) {
+        seenPatientsRef.current.add(id);
+        if (!userTouchedIdsRef.current.has(id)) {
+          newlySeen.push(id);
         }
       }
-      // Schedule expansions with always-visible cascade. Each expansion
-      // fires at: max(now, lastExpandAt + EXPAND_STAGGER_MS) + idx*STAGGER.
-      // The first one in a batch is gated by the previous expansion's
-      // wall-clock time; subsequent ones in the same batch stack on top.
-      const now = Date.now();
-      const earliestNext = Math.max(now, lastExpandAtRef.current + EXPAND_STAGGER_MS);
-      toExpand.forEach((id, idx) => {
-        const fireAt = earliestNext + idx * EXPAND_STAGGER_MS;
-        const delay = Math.max(0, fireAt - now);
-        const fire = (): void => {
-          setCollapsedPatients((cur) => {
-            if (!cur.has(id)) return cur;
-            const updated = new Set(cur);
-            updated.delete(id);
-            return updated;
-          });
-          lastExpandAtRef.current = Date.now();
-        };
-        if (delay === 0) {
-          fire();
-        } else {
-          const t = window.setTimeout(fire, delay);
-          expandedTimers.push(t);
+      const ready = isDataReady(p);
+      const shouldExpand = ready && allPriorReady && !userTouchedIdsRef.current.has(id);
+      if (shouldExpand) {
+        toExpand.push(id);
+      }
+      if (!ready) {
+        allPriorReady = false;
+      }
+    }
+
+    // Step 2: add newly-seen patients to collapsed state.
+    if (newlySeen.length > 0) {
+      setCollapsedPatients((prev) => {
+        let changed = false;
+        const next = new Set(prev);
+        for (const id of newlySeen) {
+          if (!next.has(id)) {
+            next.add(id);
+            changed = true;
+          }
         }
+        return changed ? next : prev;
       });
-      return changed ? next : prev;
+    }
+
+    // Step 3: schedule expansions with always-visible cascade. Every patient
+    // — including idx 0 — defers through setTimeout so the collapsed-set
+    // write from Step 2 commits first.
+    const now = Date.now();
+    const earliestNext = Math.max(now, lastExpandAtRef.current + EXPAND_STAGGER_MS);
+    const expandedTimers: number[] = [];
+    toExpand.forEach((id, idx) => {
+      const fireAt = earliestNext + idx * EXPAND_STAGGER_MS;
+      const delay = Math.max(0, fireAt - now);
+      const t = window.setTimeout(() => {
+        setCollapsedPatients((cur) => {
+          if (!cur.has(id)) return cur;
+          const updated = new Set(cur);
+          updated.delete(id);
+          return updated;
+        });
+        lastExpandAtRef.current = Date.now();
+      }, delay);
+      expandedTimers.push(t);
     });
     return () => {
       for (const t of expandedTimers) window.clearTimeout(t);

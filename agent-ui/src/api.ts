@@ -268,7 +268,15 @@ export async function getMedicationSafety(
       try { onFirstByte(serverRequestId); } catch (err: unknown) { console.debug('[copilot] onFirstByte threw', err); }
     }
     if (!res.ok) throw new Error(`API error ${res.status}: /medication/safety/${patientId}`);
-    const data = (await res.json()) as import('./types').MedicationSafetyData;
+    // The endpoint returns the flat MedicationSafetyData payload (see
+    // tests/test_medication_safety_endpoint_shape.py for the contract). It
+    // also carries a top-level `summary` field — the LLM-generated
+    // physician-readable analysis produced by medication/safety.py's
+    // add_llm_summary. Surface that as the AgentResponse.narrative so the
+    // button path renders the same Analysis section as the typed-query path
+    // (where dispatcher's _structured_skip_narrative does the same lift).
+    const raw = (await res.json()) as import('./types').MedicationSafetyData & { summary?: string };
+    const { summary, ...data } = raw;
     const durationMs = performance.now() - t0;
     postClientTiming({
       action: 'meds_direct_total',
@@ -280,7 +288,7 @@ export async function getMedicationSafety(
     const response: AgentResponse = {
       type: 'medication_safety',
       data,
-      narrative: '',
+      narrative: typeof summary === 'string' ? summary : '',
       citations: [],
     };
     return { response, requestId: serverRequestId, durationMs };

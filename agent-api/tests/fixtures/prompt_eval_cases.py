@@ -124,6 +124,14 @@ def _med_safety_payload(patient_id: str) -> dict[str, Any]:
         "patient_id": patient_id,
         "interactions": [],
         "allergies": [{"substance": "penicillin", "reaction": "hives"}],
+        # Mirrors production: medication/safety.py's add_llm_summary attaches a
+        # physician-readable analysis string. The dispatcher uses this as the
+        # narrative for medication_safety responses (structured-skip path).
+        "summary": (
+            "Penicillin allergy (hives) on file for the patient. No active "
+            "drug-drug interactions detected. Verify in chart before any "
+            "beta-lactam orders."
+        ),
     }
 
 

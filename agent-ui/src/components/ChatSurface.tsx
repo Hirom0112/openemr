@@ -3,8 +3,27 @@ import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postCl
 import type { HandoffSummaryPayload } from '../api';
 import type { AgentResponse, CensusPatient, ErrorClass, HandoffData, HandoffPatient } from '../types';
 import ResponseRenderer from './ResponseRenderer';
-import { RED, AMB, NEU, cardStyle, secondaryButtonStyle } from '../styles/tokens';
+import { RED, AMB, NEU, BRAND, SURFACE, cardStyle, secondaryButtonStyle } from '../styles/tokens';
 import { resolvePatientPid } from '../utils/citations';
+
+function usePrefersReducedMotion(): boolean {
+  const [prefers, setPrefers] = useState<boolean>(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const handler = (e: MediaQueryListEvent): void => setPrefers(e.matches);
+    if (typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', handler);
+      return () => mq.removeEventListener('change', handler);
+    }
+    mq.addListener(handler);
+    return () => mq.removeListener(handler);
+  }, []);
+  return prefers;
+}
 
 function openChartForPatient(patientId: string, openemrPid?: string): void {
   // openemrPid is the numeric integer PID OpenEMR's set_pid requires.
@@ -116,6 +135,7 @@ const PROGRESS_INTERVAL_MS = 1500;
 
 function ThinkingIndicator() {
   const [index, setIndex] = useState(0);
+  const reduceMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     setIndex(0);
@@ -147,7 +167,7 @@ function ThinkingIndicator() {
           border: `2px solid ${NEU.border}`,
           borderTopColor: NEU.text,
           display: 'inline-block',
-          animation: 'copilot-spin 0.8s linear infinite',
+          animation: reduceMotion ? 'none' : 'copilot-spin 0.8s linear infinite',
         }}
       />
       <span>{PROGRESS_MESSAGES[index]}</span>
@@ -180,12 +200,12 @@ type ErrorClassMeta = {
 
 const ERROR_CLASS_META: Record<ErrorClass, ErrorClassMeta> = {
   transient: {
-    message: 'Temporary issue — please try again.',
+    message: 'Temporary issue. Please try again.',
     showRetry: true,
     tone: AMB,
   },
   persistent: {
-    message: 'Configuration issue — please contact IT.',
+    message: 'Configuration issue. Please contact IT.',
     showRetry: false,
     tone: RED,
   },
@@ -244,13 +264,14 @@ function ErrorCard({
               onClick={() => onRetry(retryText)}
               style={{
                 padding: '4px 10px',
-                background: '#fff',
+                background: SURFACE.bg,
                 border: `1px solid ${classMeta.tone.border}`,
                 borderRadius: 6,
                 fontSize: 12,
                 fontWeight: 600,
                 color: classMeta.tone.text,
                 cursor: 'pointer',
+                minHeight: 32,
               }}
             >
               Retry
@@ -275,7 +296,7 @@ interface ChatSurfaceProps {
 
 export default function ChatSurface({ sessionId, patientIds, providerName }: ChatSurfaceProps) {
   const displayName = (providerName && providerName.trim()) || 'Doctor';
-  const greeting = `Good day, ${displayName} — ready for your census`;
+  const greeting = `Good day, ${displayName}. Ready for your census.`;
 
   const [messages, setMessages] = useState<Message[]>([
     { id: 'greeting', role: 'system', content: greeting },
@@ -301,6 +322,9 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   const isAtBottomRef = useRef(true);
   const programmaticScrollRef = useRef(false);
   const [showNewMessagesPill, setShowNewMessagesPill] = useState(false);
+  const reduceMotion = usePrefersReducedMotion();
+  const scrollBehaviorRef = useRef<ScrollBehavior>(reduceMotion ? 'auto' : 'smooth');
+  scrollBehaviorRef.current = reduceMotion ? 'auto' : 'smooth';
   // When the user explicitly triggers a request (Send, Brief/Meds/Chart,
   // Refresh, Generate Handoff), set this flag so the next `messages` change
   // force-scrolls to bottom regardless of current scroll position. Background
@@ -406,7 +430,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     if (forceScrollOnNextMessage.current) {
       forceScrollOnNextMessage.current = false;
       programmaticScrollRef.current = true;
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      bottomRef.current?.scrollIntoView({ behavior: scrollBehaviorRef.current });
       isAtBottomRef.current = true;
       setIsAtBottom(true);
       setShowNewMessagesPill(false);
@@ -415,7 +439,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       });
     } else if (isAtBottomRef.current) {
       programmaticScrollRef.current = true;
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      bottomRef.current?.scrollIntoView({ behavior: scrollBehaviorRef.current });
       // Release the suppression flag after the smooth scroll has had a chance
       // to fire its scroll events. One rAF is enough — the listener early-exits
       // while the flag is true and we re-derive `isAtBottom` on the next real
@@ -432,7 +456,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     const el = scrollContainerRef.current;
     if (!el) return;
     programmaticScrollRef.current = true;
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    el.scrollTo({ top: el.scrollHeight, behavior: scrollBehaviorRef.current });
     isAtBottomRef.current = true;
     setIsAtBottom(true);
     setShowNewMessagesPill(false);
@@ -512,7 +536,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           response: {
             type: 'error',
             data: null,
-            narrative: 'Agent unavailable — view chart directly.',
+            narrative: 'Agent unavailable. View chart directly.',
             citations: [],
             metadata: {
               error_class: 'transient',
@@ -578,7 +602,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           response: {
             type: 'error',
             data: null,
-            narrative: 'Agent unavailable — view chart directly.',
+            narrative: 'Agent unavailable. View chart directly.',
             citations: [],
             metadata: {
               error_class: 'transient',
@@ -635,7 +659,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           response: {
             type: 'error',
             data: null,
-            narrative: 'Agent unavailable — view chart directly.',
+            narrative: 'Agent unavailable. View chart directly.',
             citations: [],
             metadata: {
               error_class: 'transient',
@@ -817,7 +841,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           response: {
             type: 'error',
             data: null,
-            narrative: 'Medication safety refresh failed — try again or view the chart directly.',
+            narrative: 'Medication safety refresh failed. Try again or view the chart directly.',
             citations: [],
             metadata: {
               error_class: 'transient',
@@ -889,7 +913,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           response: {
             type: 'error',
             data: null,
-            narrative: 'Census refresh failed — try again or view the chart directly.',
+            narrative: 'Census refresh failed. Try again or view the chart directly.',
             citations: [],
             metadata: {
               error_class: 'transient',
@@ -976,31 +1000,31 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       `}</style>
 
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', minHeight: 0, position: 'relative' }}>
-        {/* "↓ New messages" pill — only visible when content arrived while the
-            user was scrolled up. Click to resume pinning. */}
+        {/* pinned above input row */}
         {showNewMessagesPill && !isAtBottom && (
           <button
             type="button"
             onClick={scrollToBottom}
             style={{
               position: 'absolute',
-              bottom: 70,
+              bottom: PILL_BOTTOM_OFFSET,
               left: '50%',
               transform: 'translateX(-50%)',
               zIndex: 10,
-              padding: '6px 14px',
-              background: '#2c3e9e',
-              color: '#fff',
+              padding: '8px 14px',
+              background: BRAND.base,
+              color: BRAND.onBrand,
               border: 'none',
               borderRadius: 16,
               fontSize: 12,
               fontWeight: 600,
               cursor: 'pointer',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+              boxShadow: '0 2px 8px rgba(15, 23, 42, 0.18)',
               fontFamily: 'inherit',
               display: 'flex',
               alignItems: 'center',
               gap: 6,
+              minHeight: 36,
             }}
           >
             <span aria-hidden="true">↓</span>
@@ -1016,8 +1040,8 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
             if (msg.role === 'system') {
               return (
                 <div key={msg.id} style={styles.systemMsg}>
-                  <span style={styles.systemIcon}>✦</span>
-                  {msg.content}
+                  <span aria-hidden="true" style={styles.systemGlyph}>◆</span>
+                  <span>{msg.content}</span>
                 </div>
               );
             }
@@ -1032,46 +1056,52 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
 
             // assistant
             // Census is collapsible MANUALLY (chevron + click) but is exempt
-            // from the auto-collapse-on-new-message effect at line ~324 so
-            // it stays the persistent reference frame unless the user
-            // explicitly folds it.
+            // from the auto-collapse-on-new-message effect so it stays the
+            // persistent reference frame unless the user explicitly folds it.
             const collapsed = collapsedIds.has(msg.id);
             const label = labelForResponse(msg.response);
             const time = formatHeaderTime(msg.id);
             const isHovered = hoveredHeaderId === msg.id;
+            const patientLabel =
+              typeof msg.response?.metadata?.patient_name === 'string' && msg.response.metadata.patient_name
+                ? ` · ${msg.response.metadata.patient_name as string}`
+                : '';
             const headerStyle: React.CSSProperties = {
               display: 'flex',
               alignItems: 'center',
               gap: 8,
-              fontSize: 11,
-              color: '#6b7280',
-              fontWeight: 500,
-              padding: '4px 8px',
-              marginBottom: collapsed ? 8 : 4,
-              marginLeft: 34,
-              marginRight: '4%',
-              background: isHovered ? '#f3f4f6' : 'transparent',
-              border: 'none',
-              borderRadius: 6,
+              fontSize: 12,
+              color: SURFACE.muted,
+              fontWeight: 600,
+              letterSpacing: '0.02em',
+              padding: '6px 12px',
+              minHeight: 32,
+              background: isHovered ? SURFACE.hover : SURFACE.panel,
+              border: `1px solid ${SURFACE.border}`,
+              borderBottom: collapsed ? `1px solid ${SURFACE.border}` : 'none',
+              borderRadius: collapsed ? 8 : '8px 8px 0 0',
               cursor: 'pointer',
-              width: 'calc(96% - 34px)',
+              width: '100%',
               textAlign: 'left',
               fontFamily: 'inherit',
               transition: 'background 0.12s',
             };
             const headerInner = (
               <>
-                <span style={{ color: '#3b5bdb' }}>◆</span>
-                <span>{label}</span>
-                <span style={{ color: '#9ca3af' }}>·</span>
-                <span>{time}</span>
-                <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }} aria-hidden="true">
+                <span aria-hidden="true" style={{ color: BRAND.base, fontSize: 11 }}>◆</span>
+                <span style={{ color: SURFACE.fg }}>{label}</span>
+                <span style={{ color: SURFACE.subtle, fontWeight: 400 }}>·</span>
+                <span style={{ fontWeight: 500 }}>{time}</span>
+                {patientLabel && (
+                  <span style={{ fontWeight: 400, color: SURFACE.muted }}>{patientLabel}</span>
+                )}
+                <span style={{ marginLeft: 'auto', fontSize: 12, color: SURFACE.muted }} aria-hidden="true">
                   {collapsed ? '▸' : '▾'}
                 </span>
               </>
             );
             return (
-              <div key={msg.id}>
+              <div key={msg.id} style={styles.assistantFrame}>
                 <button
                   type="button"
                   aria-expanded={!collapsed}
@@ -1086,72 +1116,75 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                   {headerInner}
                 </button>
                 {!collapsed && (
-                  <div style={styles.assistantRow}>
-                    <div style={styles.assistantAvatar} aria-hidden="true">AI</div>
-                    <div style={styles.assistantBubble}>
-                      {msg.response && msg.response.type === 'error' ? (
-                        <ErrorCard
-                          response={msg.response}
-                          retryText={msg.retryText}
-                          loading={loading}
-                          onRetry={(text) => { void dispatchMessage(text); }}
-                        />
-                      ) : msg.response ? (
-                        <ResponseRenderer
-                          response={msg.response}
-                          patientName={
-                            typeof msg.response.metadata?.patient_name === 'string'
-                              ? (msg.response.metadata.patient_name as string)
-                              : undefined
+                  <div style={styles.assistantBody}>
+                    {msg.response && msg.response.type === 'error' ? (
+                      <ErrorCard
+                        response={msg.response}
+                        retryText={msg.retryText}
+                        loading={loading}
+                        onRetry={(text) => { void dispatchMessage(text); }}
+                      />
+                    ) : msg.response ? (
+                      <ResponseRenderer
+                        response={msg.response}
+                        patientName={
+                          typeof msg.response.metadata?.patient_name === 'string'
+                            ? (msg.response.metadata.patient_name as string)
+                            : undefined
+                        }
+                        onBrief={(name, patientId, options) => {
+                          if (patientId) {
+                            void dispatchBriefDirect(name, patientId, options);
+                          } else {
+                            void dispatchMessage(`Brief ${name}`);
                           }
-                          onBrief={(name, patientId, options) => {
-                            if (patientId) {
-                              void dispatchBriefDirect(name, patientId, options);
-                            } else {
-                              void dispatchMessage(`Brief ${name}`);
-                            }
-                          }}
-                          onMeds={(name, patientId) => {
-                            if (patientId) {
-                              void dispatchMedsDirect(name, patientId);
-                            } else {
-                              void dispatchMessage(`show meds for ${name}`);
-                            }
-                          }}
-                          onHandoff={(ids, names) => dispatchHandoffStreamDirect(ids, names)}
-                          handoffInFlight={handoffStreaming}
-                          providerName={displayName}
-                          onRefreshCensus={() => { void dispatchCensusForceRefresh(); }}
-                          onRefreshMedicationSafety={(patientId) => { void dispatchMedsForceRefresh(patientId); }}
-                        />
-                      ) : (
-                        <span style={{ color: '#9ca3af' }}>…</span>
-                      )}
-                      {(() => {
-                        const chartTarget = chartPatientIdForResponse(msg.response, patientIds);
-                        if (!chartTarget) return null;
-                        return (
-                          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
-                            <button
-                              type="button"
-                              onClick={() => openChartForPatient(chartTarget.patientId, chartTarget.openemrPid)}
-                              style={{
-                                fontSize: 11,
-                                fontWeight: 500,
-                                padding: '4px 10px',
-                                ...secondaryButtonStyle(),
-                                borderRadius: 4,
-                                cursor: 'pointer',
-                                whiteSpace: 'nowrap',
-                                fontFamily: 'inherit',
-                              }}
-                            >
-                              Verify in Chart ↗
-                            </button>
-                          </div>
-                        );
-                      })()}
-                    </div>
+                        }}
+                        onMeds={(name, patientId) => {
+                          if (patientId) {
+                            void dispatchMedsDirect(name, patientId);
+                          } else {
+                            void dispatchMessage(`show meds for ${name}`);
+                          }
+                        }}
+                        onHandoff={(ids, names) => dispatchHandoffStreamDirect(ids, names)}
+                        handoffInFlight={handoffStreaming}
+                        providerName={displayName}
+                        onRefreshCensus={() => { void dispatchCensusForceRefresh(); }}
+                        onRefreshMedicationSafety={(patientId) => { void dispatchMedsForceRefresh(patientId); }}
+                      />
+                    ) : (
+                      <span style={{ color: SURFACE.subtle }}>…</span>
+                    )}
+                    {(() => {
+                      const chartTarget = chartPatientIdForResponse(msg.response, patientIds);
+                      if (!chartTarget) return null;
+                      const patientName =
+                        typeof msg.response?.metadata?.patient_name === 'string' && msg.response.metadata.patient_name
+                          ? (msg.response.metadata.patient_name as string)
+                          : 'patient';
+                      return (
+                        <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            aria-label={`Open chart for ${patientName} in OpenEMR`}
+                            onClick={() => openChartForPatient(chartTarget.patientId, chartTarget.openemrPid)}
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 500,
+                              padding: '6px 12px',
+                              minHeight: 32,
+                              ...secondaryButtonStyle(),
+                              borderRadius: 6,
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                              fontFamily: 'inherit',
+                            }}
+                          >
+                            Verify in Chart <span aria-hidden="true">↗</span>
+                          </button>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
               </div>
@@ -1159,9 +1192,8 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           })}
 
           {loading && !handoffStreaming && (
-            <div style={styles.assistantRow}>
-              <div style={styles.assistantAvatar} aria-hidden="true">AI</div>
-              <div style={{ ...styles.assistantBubble, padding: '10px 14px' }}>
+            <div style={styles.assistantFrame}>
+              <div style={{ ...styles.assistantBody, borderRadius: 8 }}>
                 <ThinkingIndicator />
               </div>
             </div>
@@ -1172,12 +1204,16 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
 
         {/* Input row */}
         <div style={styles.inputRow}>
+          <label htmlFor="copilot-chat-input" style={styles.visuallyHidden}>
+            Ask Clinical Copilot about a patient
+          </label>
           <input
+            id="copilot-chat-input"
             style={styles.input}
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={`Ask about a patient — try "Brief Marcus Webb" or "why is ${displayName.split(' ')[0]} P1?"`}
+            placeholder={`Ask about a patient. Try "Brief Marcus Webb" or "why is ${displayName.split(' ')[0]} P1?"`}
             disabled={loading}
           />
           <button
@@ -1197,26 +1233,25 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   );
 }
 
+// Input row sits ~56px tall (44px button + 12px padding); pin pill above it.
+const PILL_BOTTOM_OFFSET = 72;
+
 const styles: Record<string, React.CSSProperties> = {
   systemMsg: {
     display: 'flex',
-    alignItems: 'flex-start',
+    alignItems: 'baseline',
     gap: 8,
-    fontSize: 13,
-    color: '#1e3a8a',
-    fontWeight: 500,
-    padding: '8px 12px',
+    fontSize: 12,
+    color: SURFACE.muted,
+    fontWeight: 400,
+    padding: '4px 4px',
     marginBottom: 12,
-    borderLeft: '3px solid #3b5bdb',
-    background: 'linear-gradient(90deg, #eef2ff 0%, #f8f9fa 100%)',
-    borderRadius: '0 6px 6px 0',
     lineHeight: 1.5,
   },
-  systemIcon: {
-    color: '#3b5bdb',
-    fontSize: 14,
+  systemGlyph: {
+    color: BRAND.base,
+    fontSize: 11,
     flexShrink: 0,
-    marginTop: 1,
   },
   userRow: {
     display: 'flex',
@@ -1224,78 +1259,71 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 10,
   },
   userBubble: {
-    background: 'linear-gradient(135deg, #3b5bdb 0%, #2c3e9e 100%)',
-    color: '#fff',
-    borderRadius: '14px 14px 4px 14px',
+    background: BRAND.base,
+    color: BRAND.onBrand,
+    borderRadius: 8,
     padding: '9px 14px',
     maxWidth: '78%',
     fontSize: 13,
     lineHeight: 1.5,
-    boxShadow: '0 1px 3px rgba(44,62,158,0.25)',
   },
-  assistantRow: {
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: 8,
-    marginBottom: 10,
+  assistantFrame: {
+    marginBottom: 12,
     marginRight: '4%',
   },
-  assistantAvatar: {
-    flexShrink: 0,
-    width: 26,
-    height: 26,
-    borderRadius: '50%',
-    background: 'linear-gradient(135deg, #3b5bdb 0%, #6d28d9 100%)',
-    color: '#fff',
-    fontSize: 9,
-    fontWeight: 800,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    letterSpacing: 0.5,
-    marginTop: 2,
-    boxShadow: '0 1px 3px rgba(0,0,0,0.18)',
-  },
-  assistantBubble: {
-    background: '#fff',
-    border: '1px solid #e5e7eb',
-    borderRadius: '4px 14px 14px 14px',
+  assistantBody: {
+    background: SURFACE.bg,
+    border: `1px solid ${SURFACE.border}`,
+    borderTop: 'none',
+    borderRadius: '0 0 8px 8px',
     padding: '10px 14px',
     fontSize: 13,
     lineHeight: 1.55,
-    boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
-    flex: 1,
     minWidth: 0,
   },
   inputRow: {
     display: 'flex',
     gap: 8,
     padding: '10px 14px',
-    borderTop: '1px solid #e5e7eb',
+    borderTop: `1px solid ${SURFACE.border}`,
     flex: '0 0 auto',
-    background: '#fff',
+    background: SURFACE.bg,
   },
   input: {
     flex: 1,
-    padding: '9px 12px',
-    border: '1px solid #d1d5db',
+    padding: '11px 12px',
+    minHeight: 44,
+    border: `1px solid ${SURFACE.borderStrong}`,
     borderRadius: 8,
     fontFamily: 'inherit',
     fontSize: 13,
     outline: 'none',
-    background: '#f9fafb',
-    color: '#111',
+    background: SURFACE.panel,
+    color: SURFACE.fgStrong,
     transition: 'border-color 0.15s',
   },
   sendBtn: {
-    padding: '9px 18px',
-    background: '#2c3e9e',
-    color: '#fff',
+    padding: '0 18px',
+    minHeight: 44,
+    background: BRAND.base,
+    color: BRAND.onBrand,
     border: 'none',
     borderRadius: 8,
     fontSize: 13,
     fontWeight: 600,
-    letterSpacing: 0.2,
+    letterSpacing: '0.02em',
     transition: 'opacity 0.15s',
   },
+  visuallyHidden: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    padding: 0,
+    margin: -1,
+    overflow: 'hidden',
+    clip: 'rect(0,0,0,0)',
+    whiteSpace: 'nowrap',
+    border: 0,
+  },
 };
+
