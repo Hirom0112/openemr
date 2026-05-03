@@ -61,6 +61,12 @@ export interface AgentResponseMetadata {
   retry_after_ms?: number;
   /** Internal failure class (telemetry / support handle). */
   failure_class?: string;
+  /** Patient context established by the most recent successful tool call. */
+  patient_id?: string;
+  /** Display name for the patient surfaced by the most recent tool call. */
+  patient_name?: string;
+  /** Numeric OpenEMR PID for chart navigation, when available. */
+  openemr_pid?: string;
   [key: string]: unknown;
 }
 

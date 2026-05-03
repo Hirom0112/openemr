@@ -44,6 +44,17 @@ function chartPatientIdForResponse(
   if (data && typeof data.patient_id === 'string' && data.patient_id) {
     return { patientId: data.patient_id, openemrPid };
   }
+  // Free-text responses (text, query_answer, medication_safety) have no
+  // patient_id in `data`. Fall back to the metadata field surfaced by the
+  // dispatcher from the most recent successful tool call so the chart
+  // button still renders after pronoun resolution ("can i give her tylenol?").
+  const meta = response.metadata;
+  if (meta?.patient_id) {
+    return {
+      patientId: meta.patient_id,
+      openemrPid: meta.openemr_pid ?? openemrPid,
+    };
+  }
   if (response.citations.length > 0 && response.citations[0].patient_id) {
     return { patientId: response.citations[0].patient_id, openemrPid };
   }
@@ -848,6 +859,11 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                       ) : msg.response ? (
                         <ResponseRenderer
                           response={msg.response}
+                          patientName={
+                            typeof msg.response.metadata?.patient_name === 'string'
+                              ? (msg.response.metadata.patient_name as string)
+                              : undefined
+                          }
                           onBrief={(name, patientId, options) => {
                             if (patientId) {
                               void dispatchBriefDirect(name, patientId, options);
