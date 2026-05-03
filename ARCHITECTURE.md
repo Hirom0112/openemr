@@ -406,6 +406,7 @@ The observability primitives that satisfy §5.4 live in a dedicated leaf package
 | `prewarm_start` | INFO | `main.py:_warm` | `provider_id`, `census_size` |
 | `prewarm_complete` | INFO | `main.py:_warm` | `duration_ms`, `bundle_outcomes`, `briefing_outcomes`, `census_outcome` |
 | `prewarm_failed` | ERROR | `main.py:_warm` | `duration_ms`, `error` |
+| `Pre-fetch patient warmed` | INFO | `main.py:_warm._warm_one` | `patient_id`, `triage_rank`, `warmup_order`, `duration_ms`, `cache` (`miss` when force-refresh, else `n/a`) |
 | `tool_call_start` | INFO | `agent/dispatcher.py` | `tool_name`, `session_id`, `patient_id` |
 | `tool_call_end` | INFO | `agent/dispatcher.py` | `tool_name`, `duration_ms`, `outcome` |
 | `tool_outcome` | INFO | `observability/tool_logging.py:log_tool_outcome` | `tool_name`, `duration_ms`, `cache` (`hit`/`miss`/`n/a`), `session_id`, `patient_id` |
