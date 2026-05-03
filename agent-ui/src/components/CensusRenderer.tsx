@@ -457,6 +457,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
                     <>
                       {p.name}
                       <span style={{ fontSize: 11, fontWeight: 500, color: AMB.secondary }}>#{p.mrn.slice(0, 8)}</span>
+                      <WarmDot status={warmMap[p.patient_id]} />
                     </>
                   }
                   badges={<AdmitBadge days={p.days_since_admit} />}
