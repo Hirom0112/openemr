@@ -716,6 +716,29 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
         },
     )
 
+    # Server-side dedupe: when the iframe + landing-page script both fire
+    # /agent/prefetch within the same login flow (observed 2-3× per
+    # login), each pass overwrites the warm-status hash and races on
+    # bundle writes — that race was producing fingerprint mismatches
+    # that invalidated the cached briefing on the first Brief click.
+    # Hold a 30s in-flight lock per session so only the first POST runs
+    # the warm; subsequent POSTs return immediately.
+    if _redis is not None and request.session_id:
+        in_flight_key = f"copilot:warm-inflight:{request.session_id}"
+        try:
+            acquired = await _redis.set(in_flight_key, "1", nx=True, ex=60)
+            if not acquired:
+                logger.info(
+                    "Pre-fetch deduped — warm already in flight",
+                    extra={"session_id": request.session_id},
+                )
+                return {"status": "deduped"}
+        except Exception as exc:
+            logger.warning(
+                "Pre-fetch dedupe lock failed, proceeding anyway",
+                extra={"session_id": request.session_id, "error": str(exc)},
+            )
+
     # Eagerly seed "pending" status for every requested patient BEFORE the
     # background warm task even starts census-build. Without this the UI's
     # first poll (~1-2s in) sees an empty hash and renders no pills until
