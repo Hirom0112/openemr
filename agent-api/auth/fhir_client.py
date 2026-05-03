@@ -249,11 +249,13 @@ class FHIRClient:
         if provider_id:
             # Synthetic encounters land as status=in-progress (admitted but
             # not yet discharged) so a status=finished filter zeroes the
-            # result. Drop the filter entirely and rely on participant +
-            # _sort=_id for stable, deterministic ordering across reloads.
+            # result. Drop the filter entirely and rely on participant.
+            # ``_sort=_id`` was previously included for stable ordering, but
+            # OpenEMR's FHIR search trips a SearchFieldOrder type bug
+            # (ResourceServiceSearchTrait passes a ServiceField where a
+            # string is required) and 500s. Sort client-side instead.
             result = await self.search("Encounter", {
                 "participant.individual": f"Practitioner/{provider_id}",
-                "_sort": "_id",
                 "_count": str(count),
             })
             seen: set[str] = set()
@@ -271,7 +273,11 @@ class FHIRClient:
                 "falling back to all patients provider_id=%s",
                 provider_id,
             )
-        result = await self.search("Patient", {"_count": str(count), "_sort": "_id"})
+        # ``_sort=_id`` removed: OpenEMR's SearchFieldOrder constructor
+        # requires a string field name but ResourceServiceSearchTrait passes
+        # a ServiceField, returning HTTP 500. The census builder sorts
+        # client-side anyway, so server-side ordering buys nothing.
+        result = await self.search("Patient", {"_count": str(count)})
         return sorted(e["resource"]["id"] for e in result.get("entry", []))
 
     async def get_patient(self, patient_id: str) -> dict[str, Any]:

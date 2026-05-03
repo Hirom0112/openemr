@@ -232,6 +232,19 @@ def verify_briefing(
                 verified_claims.append(claim)
             else:
                 removed_count += 1
+                citations_for_resource = index.get(claim.source_resource, [])
+                if not citations_for_resource:
+                    failure_reason = "no_citations_for_source_resource"
+                elif claim.source_value and not any(
+                    claim.source_value.lower() in c.value.lower() for c in citations_for_resource
+                ):
+                    failure_reason = "source_value_no_substring_match"
+                elif claim.source_code and not any(
+                    c.code == claim.source_code for c in citations_for_resource
+                ):
+                    failure_reason = "source_code_mismatch"
+                else:
+                    failure_reason = "unknown"
                 logger.warning(
                     "Unattributed claim removed",
                     extra={
@@ -240,6 +253,9 @@ def verify_briefing(
                         "claim_text": claim.text,
                         "source_resource": claim.source_resource,
                         "source_code": claim.source_code,
+                        "source_value": claim.source_value,
+                        "failure_reason": failure_reason,
+                        "citations_in_resource": len(citations_for_resource),
                     },
                 )
                 if not strict:
