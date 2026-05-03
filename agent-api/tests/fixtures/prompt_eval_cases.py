@@ -469,6 +469,161 @@ CASES: list[PromptEvalCase] = [
         ),
     ),
 
+    # ── Routing-accuracy regression cases (Cutover Gate 1) ──────────────────
+    # The phrasings below correspond to the 8 misroutes flagged by
+    # scripts/04-verify-cutover-gates.sh.  They guard against the prompt
+    # regressing back to "stop after the auto-discovery census" behavior
+    # or failing to pick the medication-safety tool for med/allergy queries.
+
+    # G1.1 — Brief by name with bed reference. With census already loaded
+    # in session_context (warm path: morning census ran first), the model
+    # should pick get_patient_briefing directly. The cold-start path
+    # (census not yet loaded) requires a census→briefing chain, but the
+    # dispatcher's structured-skip shortcut prevents chaining in a single
+    # request — see report for the recommended gate-script update.
+    PromptEvalCase(
+        name="route_brief_by_name_bed_marcus",
+        user_message="Brief me on Marcus Webb in bed 501.",
+        session_context={"patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004"]},
+        stub_assistant_turns=[
+            StubToolUse("get_patient_briefing", {"patient_id": "pt-001"}),
+        ],
+        stub_tool_results={
+            "get_patient_briefing": _briefing_payload("pt-001", "Marcus Webb"),
+        },
+        expected=Expected(
+            tool_called=("get_patient_briefing",),
+            tool_input_contains={"get_patient_briefing": {"patient_id": "pt-001"}},
+        ),
+    ),
+
+    # G1.2 — "Pre-encounter briefing for Delia Fontaine." (warm path)
+    PromptEvalCase(
+        name="route_brief_pre_encounter_fontaine",
+        user_message="Pre-encounter briefing for Delia Fontaine.",
+        session_context={"patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004"]},
+        stub_assistant_turns=[
+            StubToolUse("get_patient_briefing", {"patient_id": "pt-002"}),
+        ],
+        stub_tool_results={
+            "get_patient_briefing": _briefing_payload("pt-002", "Delia Fontaine"),
+        },
+        expected=Expected(
+            tool_called=("get_patient_briefing",),
+            tool_input_contains={"get_patient_briefing": {"patient_id": "pt-002"}},
+        ),
+    ),
+
+    # G1.3 — "What happened overnight with patient pt-002?" → briefing.
+    # Broad open-ended question → briefing, not query.
+    PromptEvalCase(
+        name="route_overnight_broad_to_briefing",
+        user_message="What happened overnight with patient pt-002?",
+        session_context={"patient_ids": ["pt-002"]},
+        stub_assistant_turns=[
+            StubToolUse("get_patient_briefing", {"patient_id": "pt-002"}),
+        ],
+        stub_tool_results={
+            "get_patient_briefing": _briefing_payload("pt-002", "Delia Fontaine"),
+        },
+        expected=Expected(
+            tool_called=("get_patient_briefing",),
+            tool_input_contains={"get_patient_briefing": {"patient_id": "pt-002"}},
+        ),
+    ),
+
+    # G1.4 — "When was the last chest X-ray for Fontaine?" → query (warm path).
+    PromptEvalCase(
+        name="route_last_xray_fontaine_to_query",
+        user_message="When was the last chest X-ray for Fontaine?",
+        session_context={"patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004"]},
+        stub_assistant_turns=[
+            StubToolUse("query_patient_records", {"patient_id": "pt-002", "query": "last chest x-ray"}),
+            StubText("Last chest X-ray for Delia Fontaine on file: 2026-04-20."),
+        ],
+        stub_tool_results={
+            "query_patient_records": _query_payload("Last chest X-ray on file: 2026-04-20."),
+        },
+        expected=Expected(
+            tool_called=("query_patient_records",),
+            tool_input_contains={"query_patient_records": {"patient_id": "pt-002"}},
+        ),
+    ),
+
+    # G1.5 — "Has patient pt-001 been on steroids before?" → query.
+    # Must NOT deflect with "I cannot help".
+    PromptEvalCase(
+        name="route_steroids_history_to_query",
+        user_message="Has patient pt-001 been on steroids before?",
+        session_context={"patient_ids": ["pt-001"]},
+        stub_assistant_turns=[
+            StubToolUse("query_patient_records", {"patient_id": "pt-001", "query": "steroid history"}),
+            StubText("Marcus Webb's steroid history is summarized in the chart."),
+        ],
+        stub_tool_results={
+            "query_patient_records": _query_payload("Prior steroid courses on file."),
+        },
+        expected=Expected(
+            tool_called=("query_patient_records",),
+            tool_input_contains={"query_patient_records": {"patient_id": "pt-001"}},
+            narrative_excludes=("i cannot help", "i can't help", "i am unable"),
+        ),
+    ),
+
+    # G1.6 — "Are there any allergy concerns with patient pt-001 medications?"
+    # → medication_safety; must NOT be unknown / deflection.
+    PromptEvalCase(
+        name="route_allergy_concerns_to_med_safety",
+        user_message="Are there any allergy concerns with patient pt-001 medications?",
+        session_context={"patient_ids": ["pt-001"]},
+        stub_assistant_turns=[
+            StubToolUse("get_medication_safety", {"patient_id": "pt-001"}),
+        ],
+        stub_tool_results={
+            "get_medication_safety": _med_safety_payload("pt-001"),
+        },
+        expected=Expected(
+            tool_called=("get_medication_safety",),
+            tool_input_contains={"get_medication_safety": {"patient_id": "pt-001"}},
+            narrative_excludes=("i cannot help", "i can't help", "i am unable"),
+        ),
+    ),
+
+    # G1.7 — "Check medication safety for patient pt-001." → medication_safety.
+    PromptEvalCase(
+        name="route_check_med_safety_explicit",
+        user_message="Check medication safety for patient pt-001.",
+        session_context={"patient_ids": ["pt-001"]},
+        stub_assistant_turns=[
+            StubToolUse("get_medication_safety", {"patient_id": "pt-001"}),
+        ],
+        stub_tool_results={
+            "get_medication_safety": _med_safety_payload("pt-001"),
+        },
+        expected=Expected(
+            tool_called=("get_medication_safety",),
+            tool_input_contains={"get_medication_safety": {"patient_id": "pt-001"}},
+            narrative_excludes=("i cannot help", "i can't help", "i am unable"),
+        ),
+    ),
+
+    # G1.8 — "Tell me about the patient in bed 502." (warm path)
+    PromptEvalCase(
+        name="route_tell_me_about_bed_to_briefing",
+        user_message="Tell me about the patient in bed 502.",
+        session_context={"patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004"]},
+        stub_assistant_turns=[
+            StubToolUse("get_patient_briefing", {"patient_id": "pt-002"}),
+        ],
+        stub_tool_results={
+            "get_patient_briefing": _briefing_payload("pt-002", "Delia Fontaine"),
+        },
+        expected=Expected(
+            tool_called=("get_patient_briefing",),
+            tool_input_contains={"get_patient_briefing": {"patient_id": "pt-002"}},
+        ),
+    ),
+
     # 15. Handoff request
     PromptEvalCase(
         name="handoff_signout",
