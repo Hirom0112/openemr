@@ -160,8 +160,12 @@ def _briefing_identity_summary(final_data: dict[str, Any]) -> str:
     """
     patient_id = final_data.get("patient_id") or final_data.get("patientId") or "patient"
     # Patient name lives in a few possible spots depending on briefing shape.
+    # The actual briefing tool returns `name` at the top level (per
+    # /briefing/{pid} response) — that is the load-bearing key. The others
+    # are defensive fallbacks for adjacent shapes.
     name = (
-        final_data.get("patient_name")
+        final_data.get("name")
+        or final_data.get("patient_name")
         or final_data.get("patientName")
         or (final_data.get("patient") or {}).get("name")
         or (final_data.get("demographics") or {}).get("name")
