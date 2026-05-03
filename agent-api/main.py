@@ -752,10 +752,12 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
         # EXISTS-checks before writing so re-mounts are cheap; when
         # effective_force_refresh is True the EXISTS check is skipped and
         # all three layers cascade-refresh against current FHIR state.
-        # 6-way fan-out keeps roughly the same per-patient latency as the
-        # previous 4-way fan-out even though we now have 3 work items per
-        # patient instead of 2.
-        sem = asyncio.Semaphore(6)
+        # 12-way fan-out (bumped from 6) roughly halves wall time for the
+        # login warm at the cost of higher concurrent FHIR + Anthropic
+        # load. Acceptable trade-off because force_refresh login is rare
+        # (gated by PREFETCH_FORCE_REFRESH_ON_LOGIN); steady-state mounts
+        # still EXISTS-skip and stay cheap.
+        sem = asyncio.Semaphore(12)
 
         async def _warm_one(pid: str, triage_rank: int | None, warmup_order: int) -> None:
             async with sem:
