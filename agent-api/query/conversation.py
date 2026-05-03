@@ -329,7 +329,40 @@ class ConversationHandler:
                 f"Question: {query}"
             )
 
-            messages = [{"role": t["role"], "content": t["content"]} for t in history if t["role"] in ("user", "assistant")]
+            # Only carry forward TEXT turns from history. The shared
+            # checkpointer also stores the dispatcher's tool_use / tool_result
+            # blocks (and a "tool" role for legacy entries). Re-sending those
+            # to this UC-3 LLM produces 400 invalid_request_error
+            # ("tool_use ids were found without tool_result blocks
+            # immediately after") because the dispatcher's tool ids don't
+            # belong to this LLM's tool surface. The query LLM only needs
+            # the conversational text history.
+            def _is_text_turn(t: dict) -> bool:
+                if t.get("role") not in ("user", "assistant"):
+                    return False
+                content = t.get("content")
+                if isinstance(content, str):
+                    return True
+                # Rich content list: keep if it has any text block AND no
+                # tool_use / tool_result blocks (those are dispatcher-scoped).
+                if isinstance(content, list):
+                    has_text = any(isinstance(b, dict) and b.get("type") == "text" for b in content)
+                    has_tool = any(isinstance(b, dict) and b.get("type") in ("tool_use", "tool_result") for b in content)
+                    return has_text and not has_tool
+                return False
+
+            def _flatten_text(content) -> str:
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    return " ".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+                return ""
+
+            messages = [
+                {"role": t["role"], "content": _flatten_text(t["content"])}
+                for t in history
+                if _is_text_turn(t)
+            ]
             messages.append({"role": "user", "content": user_content})
 
             # LLM call via tool_use
@@ -344,6 +377,19 @@ class ConversationHandler:
                     tool_choice={"type": "any"},
                 )
                 tool_block = next((b for b in response.content if b.type == "tool_use"), None)
+                # Log the full response shape so we can see why the LLM is
+                # returning empty answers when records are clearly present.
+                logger.info(
+                    "uc3_llm_response",
+                    extra={
+                        "session_id": session_id,
+                        "stop_reason": getattr(response, "stop_reason", None),
+                        "block_types": [getattr(b, "type", None) for b in response.content],
+                        "tool_input_keys": list(tool_block.input.keys()) if tool_block else None,
+                        "answer_len": len((tool_block.input.get("answer") or "")) if tool_block else 0,
+                        "text_preview": next((b.text for b in response.content if getattr(b, "type", None) == "text"), "")[:200],
+                    },
+                )
                 if tool_block is None:
                     logger.error("No tool_use block in UC-3 response", extra={"session_id": session_id})
                     answer_text = ""
