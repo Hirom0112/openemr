@@ -362,7 +362,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   useEffect(() => {
     if (censusDispatched.current) return;
     censusDispatched.current = true;
-    void prefetchPatientData(sessionId, patientIds);
+    void prefetchPatientData(sessionId, patientIds, { forceRefresh: true });
     void dispatchMessage(CENSUS_INIT_MESSAGE, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
