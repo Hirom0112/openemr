@@ -72,16 +72,46 @@ export default function BriefingRenderer({ data, narrative, citations }: Briefin
     );
   }
 
-  const generatedTime = data.generated_at
-    ? new Date(data.generated_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+  // Data freshness indicator. The briefing's `generated_at` is the only
+  // wire-format timestamp available — it reflects when the agent assembled
+  // the briefing from the (possibly cached) FHIR bundle. Sara needs to
+  // distinguish a fresh fetch from a 30-min Redis cache hit.
+  const STALE_AMBER_MS = 10 * 60 * 1000;  // >10 min → amber
+  const STALE_RED_MS = 30 * 60 * 1000;    // >30 min → red
+
+  const generatedDate = data.generated_at ? new Date(data.generated_at) : null;
+  const generatedValid = generatedDate && !Number.isNaN(generatedDate.getTime());
+  const ageMs = generatedValid ? Date.now() - generatedDate.getTime() : 0;
+  const stalenessColor =
+    !generatedValid ? MUTED
+      : ageMs > STALE_RED_MS ? RED.text
+      : ageMs > STALE_AMBER_MS ? AMB.text
+      : MUTED;
+
+  const generatedTimeShort = generatedValid
+    ? generatedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : undefined;
+  const generatedTooltip = generatedValid
+    ? `Last fetched from chart at ${generatedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} on ${generatedDate.toISOString().slice(0, 10)}`
+    : undefined;
+
+  // TODO: wire to onBrief(data.name, data.patient_id) — callback isn't plumbed
+  // through ResponseRenderer → BriefingRenderer yet. Until then, "Refresh" is
+  // shown as muted hint text (not interactive) so it doesn't lie to the user.
+  const freshnessMeta = generatedTimeShort ? (
+    <span style={{ fontSize: 11, color: stalenessColor }}>
+      <span title={generatedTooltip}>Data as of {generatedTimeShort}</span>
+      <span style={{ color: MUTED }}>{'  ·  '}</span>
+      <span style={{ color: MUTED }}>Refresh</span>
+    </span>
+  ) : undefined;
 
   return (
     <div style={{ fontSize: 13, fontFamily: 'inherit' }}>
       {/* Patient header */}
       <Header
         title={data.name}
-        meta={generatedTime ? <span style={{ fontSize: 11, color: MUTED }}>{generatedTime}</span> : undefined}
+        meta={freshnessMeta}
       />
 
       {/* Hard alerts — always shown first */}
