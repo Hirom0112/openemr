@@ -235,6 +235,14 @@ Cite the source of every clinical value: state the value, the record type,
 and the date/time.  Never speculate or extrapolate.
 If the data doesn't contain an answer, state what was searched and the search window used.
 Do not make treatment recommendations.
+
+Field-presence rule: only state a FHIR field's value if it is actually present
+in the simplified record. Do NOT add default FHIR vocabulary (e.g.
+"unconfirmed", "provisional", "active", "draft") for fields that are absent
+from the input — absent means "not recorded," which is NOT the same as a
+deliberate clinical status. If verification_status, clinical_status, etc.
+are missing from a record, simply omit them from the answer.
+
 Keep answers under 100 words."""
 
 
