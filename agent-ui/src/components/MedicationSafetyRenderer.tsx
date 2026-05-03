@@ -1,5 +1,6 @@
+import { useState, useEffect, useRef } from 'react';
 import type { Citation, MedicationSafetyData } from '../types';
-import { RED, AMB, NEU } from '../styles/tokens';
+import { RED, AMB, NEU, MUTED } from '../styles/tokens';
 import { Header, SectionHeading, ClaimRow, Markdown, CitationFooter } from './primitives';
 
 /**
@@ -42,6 +43,11 @@ interface MedicationSafetyRendererProps {
    *  banner above the medication content so the physician can confirm
    *  identity at a glance (especially after pronoun resolution). */
   patientName?: string;
+  /** Force-refresh callback wired to the in-bubble Refresh button.  Mirrors
+   *  BriefingRenderer's onBrief({forceRefresh:true}) plumbing — the parent
+   *  re-issues /medication/safety with force_refresh=true and pushes the
+   *  fresh bundle as a new assistant message. */
+  onRefresh?: (patientId: string) => void;
 }
 
 function CitationsList({ citations }: { citations: Citation[] }) {
@@ -57,7 +63,7 @@ function CitationsList({ citations }: { citations: Citation[] }) {
   );
 }
 
-export default function MedicationSafetyRenderer({ data, narrative, citations, patientName }: MedicationSafetyRendererProps) {
+export default function MedicationSafetyRenderer({ data, narrative, citations, patientName, onRefresh }: MedicationSafetyRendererProps) {
   const hasAllergies = data.allergies && data.allergies.length > 0;
   const hasInteractions = data.interactions && data.interactions.length > 0;
   const hasMeds = data.current_medications && data.current_medications.length > 0;
@@ -69,9 +75,92 @@ export default function MedicationSafetyRenderer({ data, narrative, citations, p
     ?? (data as unknown as { name?: string; patient_name?: string }).patient_name;
   const displayName = patientName ?? (typeof dataName === 'string' && dataName ? dataName : undefined);
 
+  // Refresh-button state: track the generated_at value captured at click
+  // time. When a fresh response arrives the parent re-renders this component
+  // with a different generated_at — that change clears the pending state.
+  // Mirrors BriefingRenderer's pattern verbatim.
+  const [refreshingFrom, setRefreshingFrom] = useState<string | null>(null);
+  const hoveredRef = useRef(false);
+  const [hovered, setHovered] = useState(false);
+  hoveredRef.current = hovered;
+
+  useEffect(() => {
+    if (refreshingFrom !== null && data?.generated_at && data.generated_at !== refreshingFrom) {
+      setRefreshingFrom(null);
+    }
+  }, [data?.generated_at, refreshingFrom]);
+
+  // Freshness colour thresholds — same as BriefingRenderer for visual
+  // consistency across the chat surface.
+  const STALE_AMBER_MS = 10 * 60 * 1000;  // >10 min → amber
+  const STALE_RED_MS = 30 * 60 * 1000;    // >30 min → red
+
+  const generatedDate = data.generated_at ? new Date(data.generated_at) : null;
+  const generatedValid = generatedDate && !Number.isNaN(generatedDate.getTime());
+  const ageMs = generatedValid ? Date.now() - generatedDate.getTime() : 0;
+  const stalenessColor =
+    !generatedValid ? MUTED
+      : ageMs > STALE_RED_MS ? RED.text
+      : ageMs > STALE_AMBER_MS ? AMB.text
+      : MUTED;
+
+  const generatedTimeShort = generatedValid
+    ? generatedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : undefined;
+  const generatedTooltip = generatedValid
+    ? `Last fetched from chart at ${generatedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} on ${generatedDate.toISOString().slice(0, 10)}`
+    : undefined;
+
+  const isRefreshing = refreshingFrom !== null;
+  const refreshTargetId = data.patient_id;
+  const canRefresh = !!onRefresh && !!refreshTargetId && !isRefreshing;
+  const handleRefresh = () => {
+    if (!canRefresh || !onRefresh || !refreshTargetId) return;
+    setRefreshingFrom(data.generated_at ?? '');
+    onRefresh(refreshTargetId);
+  };
+  const refreshBtnStyle: React.CSSProperties = {
+    background: hovered && canRefresh ? '#f3f4f6' : 'transparent',
+    border: 'none',
+    padding: '0 4px',
+    margin: 0,
+    fontFamily: 'inherit',
+    fontSize: 11,
+    color: canRefresh ? MUTED : '#9ca3af',
+    cursor: canRefresh ? 'pointer' : 'not-allowed',
+    borderRadius: 4,
+    lineHeight: 'inherit',
+  };
+  // Header meta slot. Mirrors briefing's fallback: when generated_at is
+  // missing we still render a Refresh button (no time) so legacy responses
+  // keep the affordance.
+  const freshnessMeta = onRefresh ? (
+    <span style={{ fontSize: 11, color: stalenessColor }}>
+      {generatedTimeShort && (
+        <>
+          <span title={generatedTooltip}>Data as of {generatedTimeShort}</span>
+          <span style={{ color: MUTED }}>{'  ·  '}</span>
+        </>
+      )}
+      <button
+        type="button"
+        onClick={handleRefresh}
+        disabled={!canRefresh}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onFocus={() => setHovered(true)}
+        onBlur={() => setHovered(false)}
+        aria-label="Refresh medication safety"
+        style={refreshBtnStyle}
+      >
+        {isRefreshing ? 'Refreshing…' : 'Refresh'}
+      </button>
+    </span>
+  ) : undefined;
+
   return (
     <div style={{ fontSize: 13, color: NEU.text, fontFamily: 'inherit' }}>
-      <Header title="Medication safety" subtitle={displayName} />
+      <Header title="Medication safety" subtitle={displayName} meta={freshnessMeta} />
       {displayName && (
         <div
           style={{

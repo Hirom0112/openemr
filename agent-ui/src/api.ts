@@ -243,6 +243,7 @@ export async function getMedicationSafety(
   patientId: string,
   sessionId: string,
   onFirstByte?: (requestId: string) => void,
+  forceRefresh?: boolean,
 ): Promise<GetMedicationSafetyResult> {
   const t0 = performance.now();
   const controller = new AbortController();
@@ -251,8 +252,12 @@ export async function getMedicationSafety(
   try {
     // Pass session_id so the backend can persist this button-driven action
     // into conversation history (mirrors getBriefing — required for pronoun
-    // resolution in subsequent /agent/query calls).
-    const url = `${cfg().agentApiUrl}/medication/safety/${patientId}?session_id=${encodeURIComponent(sessionId)}`;
+    // resolution in subsequent /agent/query calls).  When forceRefresh is
+    // true, append force_refresh=true so the bundle cache is bypassed and
+    // the response carries a fresh generated_at (mirrors briefing's path).
+    const params = new URLSearchParams({ session_id: sessionId });
+    if (forceRefresh) params.set('force_refresh', 'true');
+    const url = `${cfg().agentApiUrl}/medication/safety/${patientId}?${params.toString()}`;
     const res = await fetch(url, {
       method: 'GET',
       headers: { 'X-Request-ID': clientRequestId },

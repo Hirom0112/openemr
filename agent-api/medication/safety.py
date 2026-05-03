@@ -64,6 +64,11 @@ class MedicationSafetyReport:
     flags: list[SafetyFlag] = field(default_factory=list)
     summary: str = ""
     medications_reviewed: int = 0
+    # ISO-8601 UTC timestamp reflecting the freshness of the underlying FHIR
+    # bundle (preferred) or the moment this report was assembled (fallback).
+    # Mirrors the briefing's ``generated_at`` so the renderer can display a
+    # "Data as of HH:MM · Refresh" freshness indicator.
+    generated_at: str = ""
 
 
 def _extract_med_name(med_resource: dict) -> str:
