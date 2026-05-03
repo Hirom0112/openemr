@@ -40,12 +40,16 @@ export async function openCopilot(page: Page): Promise<FrameLocator> {
 
 /**
  * Wait until the census has rendered patient cards inside the iframe.
- * Returns the count of P-cards visible.
+ * Returns the count of patient rows visible.
+ *
+ * CensusRenderer renders one "Open chart for <name>" button per patient
+ * (label "Chart ↗"). PatientCard.tsx (which used "View in Chart") is no
+ * longer rendered by ChatSurface, so we match the census aria-label instead.
  */
 export async function waitForCensus(frame: FrameLocator, timeout = 30_000): Promise<number> {
   // Greeting renders immediately; tier counts appear when census resolves.
   await frame.getByText(/ready for your census/i).waitFor({ state: 'visible', timeout });
-  // Cards have a "View in Chart" button — wait for at least one.
-  await frame.getByRole('button', { name: /view in chart/i }).first().waitFor({ state: 'visible', timeout });
-  return frame.getByRole('button', { name: /view in chart/i }).count();
+  const chartButtons = frame.getByRole('button', { name: /open chart for /i });
+  await chartButtons.first().waitFor({ state: 'visible', timeout });
+  return chartButtons.count();
 }

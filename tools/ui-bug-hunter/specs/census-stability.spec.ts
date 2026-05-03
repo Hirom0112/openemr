@@ -5,14 +5,15 @@ import { openCopilot, waitForCensus } from './_helpers';
  * Issue 2: census output should be deterministic — reloading the Co-Pilot
  * panel should not change the count of patients in the rendered list.
  *
- * Currently SKIPPED via test.fixme() because Issue 2 is not yet fixed; the
- * spec is authored now so it can be flipped on the moment the fix lands.
+ * Ungated as of commit 8865cfd7d (cache-key + sorting fix). If this spec
+ * starts flaking, restore test.fixme() and reopen Issue 2 — do not loosen
+ * the assertion.
  */
 test.describe('Co-Pilot census stability across reloads', () => {
   test.use({ storageState: '.auth/sara.json' });
 
-  test.fixme(
-    'patient count is stable over 10 reloads (enable once Issue 2 is fixed)',
+  test(
+    'patient count is stable over 10 reloads',
     async ({ page }) => {
       const RELOADS = 10;
       const counts: number[] = [];
