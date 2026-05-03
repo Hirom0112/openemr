@@ -148,15 +148,26 @@ def test_cache_miss_runs_generator_and_writes_to_redis():
             {"redis_client": redis_client},
         ))
 
-    redis_client.get.assert_awaited_once_with("copilot:briefing:pt-001")
+    # get_patient_briefing now also probes the bundle cache key on a briefing
+    # miss (added when the bundle cache was wired into the tool). Expect both
+    # the briefing-key probe and the bundle-key probe; the briefing key is the
+    # first call.
+    assert redis_client.get.await_count == 2
+    redis_client.get.assert_any_await("copilot:briefing:pt-001")
+    redis_client.get.assert_any_await("copilot:bundle:pt-001")
     gen_mock.assert_awaited_once()
-    redis_client.setex.assert_awaited_once()
-
-    setex_args = redis_client.setex.await_args
-    assert setex_args.args[0] == "copilot:briefing:pt-001"
-    assert setex_args.args[1] == settings.briefing_cache_ttl_seconds
+    # setex is called twice on a cold miss: once to write the briefing payload,
+    # once to write the bundle payload. Find the briefing write to assert on.
+    assert redis_client.setex.await_count == 2
+    briefing_setex = next(
+        (call for call in redis_client.setex.await_args_list
+         if call.args and call.args[0] == "copilot:briefing:pt-001"),
+        None,
+    )
+    assert briefing_setex is not None, "briefing setex not found"
+    assert briefing_setex.args[1] == settings.briefing_cache_ttl_seconds
     # Third arg is JSON-serialized payload.
-    written = json.loads(setex_args.args[2])
+    written = json.loads(briefing_setex.args[2])
     assert written["metadata"]["cache"] == "miss"
 
     assert result["metadata"]["cache"] == "miss"
