@@ -157,6 +157,28 @@ export default function BriefingRenderer({ data, narrative, citations, onBrief }
         meta={freshnessMeta}
       />
 
+      {/* Executive summary — 2-3 sentence framing the rounding clinician
+          can read at a glance, like the patient_summary line in handoff
+          rows. Lives ABOVE Alerts/Sections so it's the first thing the
+          eye lands on. Sourced from the LLM's top-level `summary` field
+          which api.ts/getBriefing lifts into AgentResponse.narrative. */}
+      {narrative && (
+        <div
+          style={{
+            background: NEU.bg,
+            border: `1px solid ${NEU.border}`,
+            borderRadius: 6,
+            padding: '10px 12px',
+            margin: '8px 0 12px',
+            fontSize: 13,
+            lineHeight: 1.5,
+            color: NEU.text,
+          }}
+        >
+          <Markdown narrative={narrative} citations={citations} />
+        </div>
+      )}
+
       {/* Hard alerts — always shown first */}
       {data.alerts?.length > 0 && (
         <>
