@@ -566,6 +566,94 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
         echo $twig->render("product_registration/product_reg.js.twig", ['webroot' => $webroot]);
     }
 
+    // ── Clinical Co-Pilot prefetch (warm agent caches before the user clicks the tab) ──
+    // Skip silently when the module isn't installed or isn't configured. The
+    // session_id formula MUST match interface/modules/custom_modules/oe-module-clinical-copilot/index.php
+    // so the warmed cache lands in the same checkpointer session the iframe will open.
+    $copilotModuleDir = $GLOBALS['fileroot'] . '/interface/modules/custom_modules/oe-module-clinical-copilot';
+    if (is_dir($copilotModuleDir)) {
+        $copilotProviderId = (int) ($_SESSION['authUserID'] ?? ($_SESSION['OpenEMR']['authUserID'] ?? 0));
+        $copilotEnvUrl     = getenv('COPILOT_AGENT_API_URL');
+        $copilotGlobalUrl  = $GLOBALS['copilot_agent_api_url'] ?? null;
+        $copilotHttpHost   = (string) ($_SERVER['HTTP_HOST'] ?? '');
+        $copilotIsLocal    = $copilotHttpHost === ''
+            || str_contains($copilotHttpHost, 'localhost')
+            || str_contains($copilotHttpHost, '127.0.0.1');
+        $copilotDevMode    = getenv('COPILOT_DEV_MODE') === '1';
+        $copilotAgentUrl   = '';
+        if (is_string($copilotEnvUrl) && $copilotEnvUrl !== '') {
+            $copilotAgentUrl = $copilotEnvUrl;
+        } elseif (is_string($copilotGlobalUrl) && $copilotGlobalUrl !== '') {
+            $copilotAgentUrl = $copilotGlobalUrl;
+        } elseif ($copilotIsLocal || $copilotDevMode) {
+            $copilotAgentUrl = 'http://localhost:8400';
+        }
+        $copilotPatientIds = [];
+        if ($copilotProviderId > 0 && $copilotAgentUrl !== '') {
+            // Same query as the iframe's auto-populate path in index.php — open
+            // encounters assigned to this provider in the last 7 days.
+            $copilotEncRes = sqlStatement(
+                "SELECT DISTINCT pid
+                   FROM form_encounter
+                  WHERE provider_id = ?
+                    AND (date_end IS NULL OR date_end = '0000-00-00 00:00:00')
+                    AND date >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                  ORDER BY date ASC",
+                [$copilotProviderId]
+            );
+            while ($copilotRow = sqlFetchArray($copilotEncRes)) {
+                $copilotPatientIds[] = (string) (int) $copilotRow['pid'];
+            }
+        }
+        if ($copilotProviderId > 0 && $copilotAgentUrl !== '' && $copilotPatientIds !== []) {
+            $copilotSessionId = 'copilot-' . hash('sha256', $copilotProviderId . '|' . date('Y-m-d'));
+            $copilotPrefetchKey = 'copilot_prefetched_' . date('Y-m-d');
+            $copilotConfig = [
+                'agentApiUrl' => $copilotAgentUrl,
+                'sessionId'   => $copilotSessionId,
+                'providerId'  => (string) $copilotProviderId,
+                'patientIds'  => $copilotPatientIds,
+                'flagKey'     => $copilotPrefetchKey,
+            ];
+            $copilotConfigJson = json_encode(
+                $copilotConfig,
+                JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_THROW_ON_ERROR
+            );
+            ?>
+    <script>
+    (function () {
+        try {
+            var c = <?php echo $copilotConfigJson; ?>;
+            function fire() {
+                try {
+                    if (sessionStorage.getItem(c.flagKey) === '1') { return; }
+                    sessionStorage.setItem(c.flagKey, '1');
+                } catch (e) { /* private mode — fire once anyway */ }
+                try {
+                    fetch(c.agentApiUrl + '/agent/prefetch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            session_id: c.sessionId,
+                            provider_id: c.providerId,
+                            patient_ids: c.patientIds
+                        }),
+                        keepalive: true
+                    }).catch(function () {});
+                } catch (e) { /* silent */ }
+            }
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', fire);
+            } else {
+                fire();
+            }
+        } catch (e) { /* never break page render */ }
+    })();
+    </script>
+            <?php
+        }
+    }
+
     ?>
 </body>
 
