@@ -1,3 +1,4 @@
+import { useCallback, useState } from 'react';
 import type { Citation, HandoffData, HandoffPatient } from '../types';
 import { RED, NEU, MUTED, AMB } from '../styles/tokens';
 import { SectionHeading, ClaimRow, PatientRow, Markdown, CitationFooter } from './primitives';
@@ -21,18 +22,75 @@ function CitationsList({ citations }: { citations: Citation[] }) {
   );
 }
 
-function HandoffPatientBlock({ patient }: { patient: HandoffPatient }) {
+interface HandoffPatientBlockProps {
+  patient: HandoffPatient;
+  collapsed: boolean;
+  onToggle: (patientId: string) => void;
+}
+
+function HandoffPatientBlock({ patient, collapsed, onToggle }: HandoffPatientBlockProps) {
+  const [hovered, setHovered] = useState(false);
+
+  const headerLabel = patient.pending
+    ? 'Generating handoff…'
+    : patient.error
+    ? 'Handoff unavailable'
+    : patient.status;
+
+  const color = patient.error ? AMB : NEU;
+
+  const chevron = (
+    <span
+      style={{ marginLeft: 'auto', fontSize: 12, color: MUTED, paddingLeft: 8 }}
+      aria-hidden="true"
+    >
+      {collapsed ? '▸' : '▾'}
+    </span>
+  );
+
+  const headerButton = (
+    <button
+      type="button"
+      role="button"
+      aria-expanded={!collapsed}
+      aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${patient.name} handoff`}
+      onClick={() => onToggle(patient.patient_id)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
+      style={{
+        display: 'block',
+        width: '100%',
+        padding: 0,
+        margin: 0,
+        border: 'none',
+        background: hovered ? '#f3f4f6' : 'transparent',
+        borderRadius: 6,
+        cursor: 'pointer',
+        textAlign: 'left',
+        fontFamily: 'inherit',
+        transition: 'background 0.12s',
+      }}
+    >
+      <PatientRow
+        color={color}
+        title={patient.name}
+        subtitle={headerLabel}
+        actions={chevron}
+      />
+    </button>
+  );
+
   if (patient.pending) {
     return (
       <div style={{ marginBottom: 8 }}>
-        <PatientRow
-          color={NEU}
-          title={patient.name}
-          subtitle="Generating handoff…"
-        />
-        <div style={{ paddingLeft: 12, fontSize: 12, color: MUTED, fontStyle: 'italic' }}>
-          Working on I-PASS summary for {patient.name}…
-        </div>
+        {headerButton}
+        {!collapsed && (
+          <div style={{ paddingLeft: 12, fontSize: 12, color: MUTED, fontStyle: 'italic' }}>
+            Working on I-PASS summary for {patient.name}…
+          </div>
+        )}
       </div>
     );
   }
@@ -40,14 +98,12 @@ function HandoffPatientBlock({ patient }: { patient: HandoffPatient }) {
   if (patient.error) {
     return (
       <div style={{ marginBottom: 8 }}>
-        <PatientRow
-          color={AMB}
-          title={patient.name}
-          subtitle="Handoff unavailable"
-        />
-        <div style={{ paddingLeft: 12, fontSize: 12, color: AMB.text }}>
-          {patient.error}
-        </div>
+        {headerButton}
+        {!collapsed && (
+          <div style={{ paddingLeft: 12, fontSize: 12, color: AMB.text }}>
+            {patient.error}
+          </div>
+        )}
       </div>
     );
   }
@@ -58,45 +114,65 @@ function HandoffPatientBlock({ patient }: { patient: HandoffPatient }) {
 
   return (
     <div style={{ marginBottom: 8 }}>
-      <PatientRow
-        color={NEU}
-        title={patient.name}
-        subtitle={patient.status}
-      />
-      <div style={{ paddingLeft: 12 }}>
-        {hasActive && (
-          <>
-            <SectionHeading color={RED}>Active issues</SectionHeading>
-            {patient.active_issues.map((it, i) => (
-              <ClaimRow key={i} color={RED}>{it}</ClaimRow>
-            ))}
-          </>
-        )}
+      {headerButton}
+      {!collapsed && (
+        <div style={{ paddingLeft: 12 }}>
+          {hasActive && (
+            <>
+              <SectionHeading color={RED}>Active issues</SectionHeading>
+              {patient.active_issues.map((it, i) => (
+                <ClaimRow key={i} color={RED}>{it}</ClaimRow>
+              ))}
+            </>
+          )}
 
-        {hasPending && (
-          <>
-            <SectionHeading color={NEU}>Pending</SectionHeading>
-            {patient.pending_items.map((it, i) => (
-              <ClaimRow key={i} color={NEU}>{it}</ClaimRow>
-            ))}
-          </>
-        )}
+          {hasPending && (
+            <>
+              <SectionHeading color={NEU}>Pending</SectionHeading>
+              {patient.pending_items.map((it, i) => (
+                <ClaimRow key={i} color={NEU}>{it}</ClaimRow>
+              ))}
+            </>
+          )}
 
-        {hasEscalate && (
-          <>
-            <SectionHeading color={RED}>Escalate if</SectionHeading>
-            {patient.escalation_triggers.map((t, i) => (
-              <ClaimRow key={i} color={RED}>{t}</ClaimRow>
-            ))}
-          </>
-        )}
-      </div>
+          {hasEscalate && (
+            <>
+              <SectionHeading color={RED}>Escalate if</SectionHeading>
+              {patient.escalation_triggers.map((t, i) => (
+                <ClaimRow key={i} color={RED}>{t}</ClaimRow>
+              ))}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 export default function HandoffRenderer({ data, narrative, citations }: HandoffRendererProps) {
   const count = citations?.length ?? 0;
+  const [collapsedPatients, setCollapsedPatients] = useState<Set<string>>(new Set());
+
+  const togglePatient = useCallback((patientId: string) => {
+    setCollapsedPatients((prev) => {
+      const next = new Set(prev);
+      if (next.has(patientId)) {
+        next.delete(patientId);
+      } else {
+        next.add(patientId);
+      }
+      return next;
+    });
+  }, []);
+
+  const collapseAll = useCallback(() => {
+    if (!data?.patients?.length) return;
+    setCollapsedPatients(new Set(data.patients.map((p) => p.patient_id)));
+  }, [data]);
+
+  const expandAll = useCallback(() => {
+    setCollapsedPatients(new Set());
+  }, []);
 
   if (!data?.patients?.length) {
     return (
@@ -109,6 +185,18 @@ export default function HandoffRenderer({ data, narrative, citations }: HandoffR
     );
   }
 
+  const bulkLinkStyle: React.CSSProperties = {
+    background: 'none',
+    border: 'none',
+    padding: 0,
+    margin: 0,
+    fontSize: 11,
+    color: MUTED,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    textDecoration: 'underline',
+  };
+
   return (
     <div style={{ fontSize: 13, color: NEU.text, fontFamily: 'inherit' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -118,8 +206,23 @@ export default function HandoffRenderer({ data, narrative, citations }: HandoffR
         )}
       </div>
 
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+        <button type="button" style={bulkLinkStyle} onClick={collapseAll}>
+          Collapse all
+        </button>
+        <span style={{ fontSize: 11, color: MUTED }}>·</span>
+        <button type="button" style={bulkLinkStyle} onClick={expandAll}>
+          Expand all
+        </button>
+      </div>
+
       {data.patients.map((pt) => (
-        <HandoffPatientBlock key={pt.patient_id} patient={pt} />
+        <HandoffPatientBlock
+          key={pt.patient_id}
+          patient={pt}
+          collapsed={collapsedPatients.has(pt.patient_id)}
+          onToggle={togglePatient}
+        />
       ))}
 
       <CitationFooter count={count}>
