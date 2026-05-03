@@ -27,10 +27,13 @@ from typing import Any
 
 import anthropic
 
+import re
+
 from agent.metrics import (
     agent_checkpointer_op_duration_seconds,
     agent_checkpointer_ops_total,
     agent_dispatch_latency_seconds,
+    agent_fast_path_hits_total,
     agent_prompt_cache_hits_total,
     agent_prompt_cache_misses_total,
     agent_tool_calls_total,
@@ -580,6 +583,258 @@ def _apply_messages_cache_breakpoint(messages: list[dict[str, Any]]) -> None:
         last_block["cache_control"] = {"type": "ephemeral"}
 
 
+# ── Deterministic briefing fast path ──────────────────────────────────────────
+#
+# A small set of free-text phrasings ("brief X", "brief me on X",
+# "pre-encounter briefing for X", "give me a briefing on X", "summary of X")
+# express an unambiguous request: run get_patient_briefing for a single named
+# patient.  When we can resolve the captured reference to exactly one patient
+# from the active census, we skip the LLM planner entirely and call the
+# briefing tool directly.  Same shape as the iframe's "Brief" button — the LLM
+# is purely a safety net here.
+#
+# Gate: cold start only.  Any prior history → fall through, because the
+# user's intent might be a follow-up that depends on conversational context.
+#
+# All bail-outs are silent: any failure (no name match, multiple matches,
+# census error, briefing error) falls through to the existing LLM dispatch
+# loop without raising.
+
+# Anchored to start of trimmed message.  Capture group is the patient
+# reference; trailing ".?$" tolerates a single sentence-ending period.
+_FAST_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^brief\s+(?:me\s+on\s+)?(.+?)\.?$", re.IGNORECASE),
+    re.compile(r"^pre-?encounter\s+briefing\s+(?:for\s+)?(.+?)\.?$", re.IGNORECASE),
+    re.compile(
+        r"^give\s+me\s+(?:a\s+|the\s+)?briefing\s+(?:for\s+|on\s+)(.+?)\.?$",
+        re.IGNORECASE,
+    ),
+    # Conservative: "summary of X" without a question mark.
+    re.compile(r"^summary\s+(?:of\s+|for\s+)?(.+?)\.?$", re.IGNORECASE),
+)
+
+# Synthetic patient ID format used by the bundled test bundles
+# (synthetic_data/bundles/pt-NNN.json).  When the user references a patient
+# by ID directly, skip the census name-resolution step.
+_PATIENT_ID_RE: re.Pattern[str] = re.compile(r"^pt-\d+$", re.IGNORECASE)
+
+# Strip a leading "patient " from a captured reference so "brief patient
+# pt-001" → "pt-001".
+_LEADING_PATIENT_PREFIX_RE: re.Pattern[str] = re.compile(
+    r"^patient\s+", re.IGNORECASE
+)
+
+
+def _detect_fast_path_reference(message: str) -> str | None:
+    """Return the patient reference if ``message`` matches a fast-path pattern.
+
+    Returns ``None`` when no pattern matches, when the captured reference is
+    empty after trimming, or when the message looks like a question
+    (heuristic: contains "?") for the conservative ``summary of`` pattern.
+    """
+    trimmed = message.strip()
+    if not trimmed:
+        return None
+    for pattern in _FAST_PATH_PATTERNS:
+        match = pattern.match(trimmed)
+        if match is None:
+            continue
+        # Conservative carve-out: "summary ..." with a "?" reads as a
+        # question, not a brief request.  Fall through to the LLM.
+        if pattern.pattern.startswith("^summary") and "?" in trimmed:
+            return None
+        reference = match.group(1).strip()
+        if not reference:
+            return None
+        # "brief patient pt-001" → "pt-001"
+        reference = _LEADING_PATIENT_PREFIX_RE.sub("", reference).strip()
+        if not reference:
+            return None
+        return reference
+    return None
+
+
+def _resolve_patient_from_census(
+    reference: str,
+    census_result: dict[str, Any],
+) -> str | None:
+    """Resolve a captured patient reference against a census payload.
+
+    Returns the patient_id when the reference matches exactly one census
+    entry by case-insensitive substring on the entry's display name, or
+    None when zero or 2+ entries match.
+
+    Census payload shape comes from ``get_census_summary``: result.census
+    is a list of dicts with ``patient_id`` and ``name`` (display string).
+    """
+    entries = census_result.get("census") or census_result.get("patients") or []
+    if not isinstance(entries, list) or not entries:
+        return None
+    needle = reference.lower().strip()
+    if not needle:
+        return None
+    matches: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name") or entry.get("patient_name") or ""
+        if not isinstance(name, str):
+            continue
+        if needle in name.lower():
+            patient_id = entry.get("patient_id") or entry.get("id")
+            if isinstance(patient_id, str):
+                matches.append(patient_id)
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+async def _try_briefing_fast_path(
+    message: str,
+    session_id: str,
+    session_context: dict[str, Any],
+    history: list[dict[str, Any]],
+    t_start: float,
+) -> dict[str, Any] | None:
+    """Attempt the deterministic briefing fast path.
+
+    Returns a fully-formed response envelope on success, or None to signal
+    the caller should fall through to the LLM dispatch loop.  Never raises:
+    any internal failure short-circuits to None.
+    """
+    # Cold-start gate: only fire when this is the first turn.  Follow-up
+    # turns may depend on conversational context the LLM should weigh.
+    if history:
+        return None
+
+    reference = _detect_fast_path_reference(message)
+    if reference is None:
+        return None
+
+    # Direct synthetic-ID reference skips the census lookup.
+    if _PATIENT_ID_RE.match(reference):
+        resolved_id: str | None = reference.lower()
+    else:
+        census_tool = TOOL_REGISTRY.get("get_census_summary")
+        if census_tool is None:
+            return None
+        try:
+            census_payload = await census_tool(
+                {
+                    "provider_id": session_context.get("provider_id", "system"),
+                    "patient_ids": session_context.get("patient_ids", []) or [],
+                },
+                session_context,
+            )
+        except Exception as exc:
+            logger.info(
+                "dispatcher.fast_path_bail_census_error",
+                extra={
+                    "session_id": session_id,
+                    "error": str(exc),
+                    "reference": reference,
+                },
+            )
+            return None
+        census_result = census_payload.get("result") if isinstance(census_payload, dict) else None
+        if not isinstance(census_result, dict):
+            return None
+        resolved_id = _resolve_patient_from_census(reference, census_result)
+
+    if resolved_id is None:
+        logger.info(
+            "dispatcher.fast_path_bail_no_match",
+            extra={"session_id": session_id, "reference": reference},
+        )
+        return None
+
+    briefing_tool = TOOL_REGISTRY.get("get_patient_briefing")
+    if briefing_tool is None:
+        return None
+
+    fast_path_duration_ms = int((time.monotonic() - t_start) * 1000)
+    logger.info(
+        "dispatcher.fast_path_dispatch",
+        extra={
+            "session_id": session_id,
+            "tool": "get_patient_briefing",
+            "patient_id": resolved_id,
+            "resolved_name": reference,
+            "original_message": message[:120],
+            "duration_ms_so_far": fast_path_duration_ms,
+        },
+    )
+
+    _t_tool = time.monotonic()
+    try:
+        briefing_payload = await briefing_tool(
+            {"patient_id": resolved_id}, session_context
+        )
+    except Exception as exc:
+        logger.info(
+            "dispatcher.fast_path_bail_briefing_error",
+            extra={
+                "session_id": session_id,
+                "error": str(exc),
+                "patient_id": resolved_id,
+            },
+        )
+        return None
+
+    if not isinstance(briefing_payload, dict):
+        return None
+
+    final_data = briefing_payload.get("result") or {}
+    citations = briefing_payload.get("citations", []) or []
+    response_type = "briefing"
+    final_narrative = _structured_skip_narrative(response_type, final_data)
+    tool_duration_ms = int((time.monotonic() - _t_tool) * 1000)
+
+    # Counter + audit event mirror the LLM-path success branch.
+    agent_fast_path_hits_total.labels(tool="get_patient_briefing").inc()
+    agent_tool_calls_total.labels(tool="get_patient_briefing").inc()
+    emit_audit_event(
+        session_id=session_id,
+        provider_id=session_context.get("provider_id"),
+        tool_name="get_patient_briefing",
+        outcome="ok",
+        duration_ms=tool_duration_ms,
+        patient_id=resolved_id,
+    )
+
+    # Persist user + synthetic assistant turn so conversation history stays
+    # consistent with what the LLM path would have written: a user text turn
+    # followed by an assistant text turn carrying the placeholder narrative
+    # (mirrors the structured-skip branch in the main loop).
+    await _save_turn(session_id, session_context, "user", message)
+    await _save_turn(
+        session_id,
+        session_context,
+        "assistant",
+        [{"type": "text", "text": final_narrative}],
+    )
+
+    duration_s = time.monotonic() - t_start
+    duration_ms = int(duration_s * 1000)
+    agent_dispatch_latency_seconds.observe(duration_s)
+
+    return {
+        "type": response_type,
+        "data": final_data,
+        "narrative": final_narrative,
+        "citations": citations,
+        "metadata": {
+            "session_id": session_id,
+            "duration_ms": duration_ms,
+            "turn_count": 0,
+            "misroute_detected": False,
+            "self_corrected": False,
+            "verification_violations": [],
+            "fast_path": True,
+        },
+    }
+
+
 # ── Main dispatcher ───────────────────────────────────────────────────────────
 
 async def dispatch(
@@ -620,6 +875,29 @@ async def dispatch(
 
     # Load conversation history
     history = await _load_history(session_id, session_context)
+
+    # Deterministic briefing fast path — short-circuits the LLM planner for
+    # cold-start "brief X" / "summary of X" phrasings that resolve to a
+    # single census patient.  Bails to the LLM path on any failure.
+    fast_path_response = await _try_briefing_fast_path(
+        message=message,
+        session_id=session_id,
+        session_context=session_context,
+        history=history,
+        t_start=t_start,
+    )
+    if fast_path_response is not None:
+        _finalize_span(
+            dispatch_span,
+            error=False,
+            output={
+                "type": fast_path_response["type"],
+                "duration_ms": fast_path_response["metadata"]["duration_ms"],
+            },
+            metadata={"fast_path": True},
+        )
+        return fast_path_response
+
     await _save_turn(session_id, session_context, "user", message)
 
     messages = _history_to_messages(history)
