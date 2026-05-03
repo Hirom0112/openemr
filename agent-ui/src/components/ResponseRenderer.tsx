@@ -21,9 +21,13 @@ interface ResponseRendererProps {
   onHandoff?: (patientIds: string[], patientNames: Record<string, string>) => void;
   handoffInFlight?: boolean;
   providerName?: string;
+  /** Patient name surfaced by the dispatcher (response.metadata.patient_name).
+   *  Used by free-text renderers (query_answer, medication_safety) to render a
+   *  prominent banner so the physician can confirm patient identity at a glance. */
+  patientName?: string;
 }
 
-export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff, handoffInFlight, providerName }: ResponseRendererProps) {
+export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff, handoffInFlight, providerName, patientName }: ResponseRendererProps) {
   const { type, data, narrative, citations } = response;
 
   if (type === 'error') {
@@ -63,6 +67,7 @@ export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff,
           data={data as QueryAnswerData}
           narrative={narrative}
           citations={citations}
+          patientName={patientName}
         />
       );
     case 'medication_safety':
@@ -71,6 +76,7 @@ export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff,
           data={data as MedicationSafetyData}
           narrative={narrative}
           citations={citations}
+          patientName={patientName}
         />
       );
     case 'handoff':

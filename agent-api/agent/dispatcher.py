@@ -1076,20 +1076,26 @@ async def _try_briefing_fast_path(
     duration_ms = int(duration_s * 1000)
     agent_dispatch_latency_seconds.observe(duration_s)
 
+    fast_path_metadata: dict[str, Any] = {
+        "session_id": session_id,
+        "duration_ms": duration_ms,
+        "turn_count": 0,
+        "misroute_detected": False,
+        "self_corrected": False,
+        "verification_violations": [],
+        "fast_path": True,
+        "patient_id": resolved_id,
+    }
+    _fp_name = final_data.get("name") if isinstance(final_data, dict) else None
+    if isinstance(_fp_name, str) and _fp_name:
+        fast_path_metadata["patient_name"] = _fp_name
+
     return {
         "type": response_type,
         "data": final_data,
         "narrative": final_narrative,
         "citations": citations,
-        "metadata": {
-            "session_id": session_id,
-            "duration_ms": duration_ms,
-            "turn_count": 0,
-            "misroute_detected": False,
-            "self_corrected": False,
-            "verification_violations": [],
-            "fast_path": True,
-        },
+        "metadata": fast_path_metadata,
     }
 
 
@@ -1176,6 +1182,15 @@ async def dispatch(
     # on any subsequent tool success so a "failed then recovered" dispatch
     # returns a clean envelope.
     last_tool_failure_class: ToolFailureClass | None = None
+    # Track the most recent patient_id any tool call referenced during this
+    # dispatch so the response envelope can carry it. The UI uses this to
+    # render "Verify in Chart ↗" on free-text responses (medication safety,
+    # query answers) where response.data has no patient_id field.
+    last_tool_patient_id: str | None = None
+    # Track the most recent patient name surfaced by a successful tool call
+    # so the UI can render a prominent patient banner on free-text answers
+    # (e.g. medication safety, query answers) after pronoun resolution.
+    last_tool_patient_name: str | None = None
 
     try:
         while turn_count < MAX_TOOL_TURNS:
@@ -1349,6 +1364,16 @@ async def dispatch(
                             all_citations.extend(tool_result.get("citations", []))
                             result_data = tool_result.get("result", {})
                             tool_result_content = json.dumps(result_data)
+
+                            # Track the patient context established by this
+                            # successful tool call so the response envelope
+                            # can surface it for the UI banner / chart button.
+                            if tool_input.get("patient_id"):
+                                last_tool_patient_id = tool_input["patient_id"]
+                            if isinstance(result_data, dict):
+                                _name = result_data.get("name") or result_data.get("patient_name")
+                                if isinstance(_name, str) and _name:
+                                    last_tool_patient_name = _name
 
                             # Capture structured data for response envelope.
                             # First tool always seeds the envelope.  A later
@@ -1579,6 +1604,14 @@ async def dispatch(
             metadata["failure_class"] = last_tool_failure_class.value
             metadata["error_class"] = error_class
             metadata["retry_suggested"] = _RETRY_BY_ERROR_CLASS.get(error_class, False)
+
+        # Surface patient identity for the UI: lets ChatSurface render the
+        # "Verify in Chart" button on free-text responses whose `data` has
+        # no patient_id, and lets renderers show a prominent patient banner.
+        if last_tool_patient_id:
+            metadata["patient_id"] = last_tool_patient_id
+        if last_tool_patient_name:
+            metadata["patient_name"] = last_tool_patient_name
 
         return {
             "type": response_type,

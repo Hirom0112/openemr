@@ -6,6 +6,26 @@ interface QueryAnswerRendererProps {
   data: QueryAnswerData;
   narrative: string;
   citations: Citation[];
+  /** Patient name from response.metadata.patient_name. The query_answer data
+   *  shape carries no patient identity, so we accept it as a prop and render
+   *  a prominent banner above the answer when present. */
+  patientName?: string;
+}
+
+function PatientBanner({ name }: { name: string }) {
+  return (
+    <div
+      style={{
+        fontSize: 16,
+        fontWeight: 600,
+        color: NEU.text,
+        marginTop: 2,
+        marginBottom: 8,
+      }}
+    >
+      {name}
+    </div>
+  );
 }
 
 function CitationsList({ citations }: { citations: Citation[] }) {
@@ -21,7 +41,7 @@ function CitationsList({ citations }: { citations: Citation[] }) {
   );
 }
 
-export default function QueryAnswerRenderer({ data, narrative, citations }: QueryAnswerRendererProps) {
+export default function QueryAnswerRenderer({ data, narrative, citations, patientName }: QueryAnswerRendererProps) {
   const text = narrative || data.answer || '';
   const count = citations?.length ?? 0;
 
@@ -33,6 +53,7 @@ export default function QueryAnswerRenderer({ data, narrative, citations }: Quer
     return (
       <>
         <Header title="Query answer" subtitle={data.searched} pill={windowPill} />
+        {patientName && <PatientBanner name={patientName} />}
         <SectionHeading color={NEU}>No results found</SectionHeading>
         <Markdown narrative={text} citations={citations} />
         <CitationFooter count={count}>
@@ -45,6 +66,7 @@ export default function QueryAnswerRenderer({ data, narrative, citations }: Quer
   return (
     <>
       <Header title="Query answer" subtitle={data.searched} pill={windowPill} />
+      {patientName && <PatientBanner name={patientName} />}
       <Markdown narrative={text} citations={citations} />
       <CitationFooter count={count}>
         <CitationsList citations={citations} />
