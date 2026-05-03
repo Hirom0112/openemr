@@ -187,7 +187,16 @@ async def test_structured_response_chains_when_intent_mismatches() -> None:
     fake_census = AsyncMock(return_value={"result": census_payload, "citations": []})
     fake_briefing = AsyncMock(return_value={"result": briefing_payload, "citations": []})
 
-    with patch.object(dispatcher._anthropic.messages, "create", fake_create), \
+    # Seed prior history so the deterministic briefing fast path bows out
+    # (cold-start gate) and the LLM dispatch loop runs.  This test still
+    # protects the resolution-step → final-answer chaining behavior in the
+    # planner; the fast path is exercised separately in
+    # ``tests/test_dispatcher_fast_path.py``.
+    async def _fake_load(session_id: str, ctx: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"role": "user", "content": "earlier turn"}]
+
+    with patch.object(dispatcher, "_load_history", _fake_load), \
+         patch.object(dispatcher._anthropic.messages, "create", fake_create), \
          patch.dict(
              dispatcher.TOOL_REGISTRY,
              {

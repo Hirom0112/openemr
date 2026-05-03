@@ -25,6 +25,17 @@ agent_tool_misroute_total = Counter(
     "Total detected tool misroutes",
 )
 
+# ── Deterministic fast-path counter ──────────────────────────────────────────
+# Increments each time the dispatcher short-circuits the LLM planner loop and
+# calls a tool directly based on a deterministic free-text pattern match
+# (e.g. "brief Marcus Webb").  Labelled by which tool was invoked so we can
+# compare fast-path vs LLM-path traffic per tool.
+agent_fast_path_hits_total = Counter(
+    "agent_fast_path_hits_total",
+    "Dispatcher deterministic fast-path hits, labelled by tool invoked",
+    ["tool"],
+)
+
 # ── Anthropic prompt-cache token accounting ──────────────────────────────────
 # These count *input tokens* served from / created in the Anthropic prompt
 # cache, not Redis hit/miss counts. Renamed in 2026-05 from
