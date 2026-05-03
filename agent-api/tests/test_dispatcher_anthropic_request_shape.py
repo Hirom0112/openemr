@@ -276,8 +276,12 @@ async def test_cache_control_does_not_overflow_in_tool_loop() -> None:
             {"result": {"answer": "a"}, "citations": []},
             {"result": {"answer": "b"}, "citations": []},
         ]
+        # Use an intent that does NOT match the query_answer structured-skip
+        # gate (no "what was" / "potassium" / "trend" / etc.), so the loop
+        # actually runs multiple iterations and we can assert cache_control
+        # accounting across them.
         await dispatch(
-            message="what was the potassium?",
+            message="run that lookup",
             session_id="sess-cc-loop",
             session_context={"provider_id": "prov-1", "patient_ids": ["pt-001"]},
         )

@@ -1,9 +1,11 @@
 """Tests for the structured-response framing-skip shortcut in dispatcher.dispatch.
 
 Verifies that for every structured-renderer response type (census, briefing,
-medication_safety, handoff) the dispatcher makes exactly ONE Anthropic call
-(the planner) and skips the second/framing call.  Free-text response types
-(text, query_answer) still incur two Anthropic calls.
+medication_safety, handoff, query_answer) the dispatcher makes exactly ONE
+Anthropic call (the planner) and skips the second/framing call when the
+user's intent matches the response type.  Free-text ``text`` still incurs
+two Anthropic calls.  ``query_answer`` falls back to two calls when the
+user's intent does not look like a direct records lookup.
 
 This protects the ~1.5–2 s per-turn latency win documented in
 agent/dispatcher.py:_STRUCTURED_RESPONSE_TYPES.
@@ -86,6 +88,7 @@ _INTENT_MATCHING_MESSAGE: dict[str, str] = {
     "briefing": "brief Marcus Webb",
     "medication_safety": "any allergies for him",
     "handoff": "generate the sign-out for my list",
+    "query_answer": "what was the last potassium",
 }
 
 
@@ -99,6 +102,8 @@ def _structured_payload(response_type: str) -> dict[str, Any]:
         return {"patient_id": "p1", "sections": []}
     if response_type == "medication_safety":
         return {"patient_id": "p1", "interactions": []}
+    if response_type == "query_answer":
+        return {"found": True, "answer": "Last potassium 4.2 mEq/L on 2026-04-30."}
     return {"answer": "ok"}
 
 
@@ -136,10 +141,14 @@ async def test_structured_response_skips_framing_call(response_type: str) -> Non
 
 @pytest.mark.hard_failure
 @pytest.mark.asyncio
-async def test_query_answer_still_makes_framing_call() -> None:
-    """Free-text query_answer must NOT use the shortcut — needs the framing pass."""
+async def test_query_answer_falls_through_when_intent_mismatches() -> None:
+    """When the model dispatches query_patient_records but the user's message
+    doesn't read like a direct records lookup, the structured-skip gate must
+    NOT fire and the dispatcher must run the framing turn (so the LLM can
+    re-frame or chain).
+    """
     tool_name = _TOOL_FOR_RESPONSE_TYPE["query_answer"]
-    payload = {"answer": "potassium was 4.2"}
+    payload = {"found": True, "answer": "potassium was 4.2"}
 
     fake_create = AsyncMock(side_effect=[
         _planner_response(tool_name),
@@ -147,20 +156,124 @@ async def test_query_answer_still_makes_framing_call() -> None:
     ])
     fake_tool = AsyncMock(return_value={"result": payload, "citations": []})
 
+    # "do the thing" matches none of the query_answer intent hints, so the
+    # framing turn must still run.
     with patch.object(dispatcher._anthropic.messages, "create", fake_create), \
          patch.dict(dispatcher.TOOL_REGISTRY, {tool_name: fake_tool}, clear=False):
         result = await dispatch(
-            message="what was the potassium?",
-            session_id="sess-test-qa",
+            message="do the thing",
+            session_id="sess-test-qa-mismatch",
             session_context={"provider_id": "prov-1", "patient_ids": []},
         )
 
     assert fake_create.await_count == 2, (
-        "query_answer must continue to make TWO Anthropic calls (planner + framing); "
+        "query_answer with intent-mismatch must still make planner + framing; "
         f"got {fake_create.await_count}."
     )
     assert result["type"] == "query_answer"
     assert result["narrative"] == "Potassium was 4.2 mEq/L."
+
+
+@pytest.mark.hard_failure
+@pytest.mark.asyncio
+async def test_query_answer_skip_enriches_history_with_patient_context() -> None:
+    """When query_answer skips framing, the placeholder narrative persisted to
+    history must include the patient name + answer snippet so follow-up turns
+    ("what about her potassium?") can resolve the pronoun.
+    """
+    tool_name = _TOOL_FOR_RESPONSE_TYPE["query_answer"]
+    payload = {
+        "found": True,
+        "answer": "Last potassium was 4.2 mEq/L on 2026-04-30.",
+        "name": "Sara Chen",
+        "patient_id": "pt-007",
+    }
+
+    fake_create = AsyncMock(side_effect=[
+        _planner_response(tool_name, {"patient_id": "pt-007"}),
+    ])
+    fake_tool = AsyncMock(return_value={"result": payload, "citations": []})
+
+    saved: list[tuple[str, Any]] = []
+
+    async def _capture_save(session_id: str, ctx: dict[str, Any], role: str, content: Any) -> None:
+        saved.append((role, content))
+
+    with patch.object(dispatcher._anthropic.messages, "create", fake_create), \
+         patch.object(dispatcher, "_save_turn", _capture_save), \
+         patch.dict(dispatcher.TOOL_REGISTRY, {tool_name: fake_tool}, clear=False):
+        result = await dispatch(
+            message="what was the last potassium",
+            session_id="sess-test-qa-history",
+            session_context={"provider_id": "prov-1", "patient_ids": []},
+        )
+
+    assert fake_create.await_count == 1
+    assert result["type"] == "query_answer"
+
+    # Pull out the assistant text block persisted by the structured-skip path.
+    assistant_texts = [
+        block.get("text")
+        for role, content in saved
+        if role == "assistant" and isinstance(content, list)
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+    assert assistant_texts, "structured-skip must persist an assistant text block"
+    placeholder = assistant_texts[-1]
+    assert isinstance(placeholder, str) and placeholder
+    # Must carry the patient name so pronoun resolution has context.
+    assert "Sara Chen" in placeholder, placeholder
+    # Must carry a fragment of the answer so the LLM can recall the prior fact.
+    assert "potassium" in placeholder.lower(), placeholder
+    assert "4.2" in placeholder, placeholder
+
+    # The returned envelope's narrative must match the persisted placeholder.
+    assert result["narrative"] == placeholder
+
+
+@pytest.mark.hard_failure
+@pytest.mark.asyncio
+async def test_census_chains_to_query_answer_when_intent_mismatches_census() -> None:
+    """Census fired as a resolution step before query_patient_records: the
+    intent-mismatch gate on census must NOT fire (so the loop continues),
+    and the final response_type must be query_answer.
+    """
+    census_payload = {"patients": [{"patient_id": "pt-007", "name": "Sara Chen"}]}
+    qa_payload = {"found": True, "answer": "Potassium 4.2 mEq/L."}
+
+    fake_create = AsyncMock(side_effect=[
+        _planner_response("get_census_summary", {"patient_ids": []}),
+        _planner_response("query_patient_records", {"patient_id": "pt-007", "question": "potassium"}),
+    ])
+    fake_census = AsyncMock(return_value={"result": census_payload, "citations": []})
+    fake_qa = AsyncMock(return_value={"result": qa_payload, "citations": []})
+
+    async def _fake_load(session_id: str, ctx: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"role": "user", "content": "earlier turn"}]
+
+    with patch.object(dispatcher, "_load_history", _fake_load), \
+         patch.object(dispatcher._anthropic.messages, "create", fake_create), \
+         patch.dict(
+             dispatcher.TOOL_REGISTRY,
+             {
+                 "get_census_summary": fake_census,
+                 "query_patient_records": fake_qa,
+             },
+             clear=False,
+         ):
+        result = await dispatch(
+            message="what was Sara Chen's last potassium",
+            session_id="sess-chain-qa",
+            session_context={"provider_id": "prov-1", "patient_ids": []},
+        )
+
+    # Two planner calls: dispatcher did NOT skip after the census resolution.
+    assert fake_create.await_count == 2
+    assert fake_census.await_count == 1
+    assert fake_qa.await_count == 1
+    assert result["type"] == "query_answer"
+    assert result["data"] == qa_payload
 
 
 @pytest.mark.hard_failure
@@ -249,6 +362,14 @@ def test_intent_match_helper() -> None:
     # Handoff matches
     assert _user_intent_matches_response("generate the sign-out", "handoff")
     assert _user_intent_matches_response("end of rounds handoff", "handoff")
+
+    # Query answer matches (per latency-bench keyword set)
+    assert _user_intent_matches_response("what was the last potassium", "query_answer")
+    assert _user_intent_matches_response("creatinine trend over the last week", "query_answer")
+    assert _user_intent_matches_response("echo show any wall motion abnormality", "query_answer")
+    assert _user_intent_matches_response("what is the current sodium", "query_answer")
+    # Mismatch: pure briefing intent should not match query_answer.
+    assert not _user_intent_matches_response("brief Marcus Webb", "query_answer")
 
     # Negative cases — intent does NOT match the structured response_type.
     # "Brief Marcus" does not match census even though census might fire as a
