@@ -137,10 +137,18 @@ class CensusBuildResult:
     ``dropped_ids`` lists every patient ID whose FHIR fetch failed even
     after retry — surfaced in the tool response so the frontend can show
     a stable count instead of silently shrinking.
+    ``generated_at`` is the ISO-8601 UTC timestamp captured the moment
+    the census was built (or, on cache hits, the moment the cached value
+    was originally built). The frontend renders this as "Census as of
+    HH:MM" so the freshness indicator reflects ACTUAL data age, not
+    wall-clock time. Without this, a 15-min cache hit would display the
+    current time and silently disagree with the briefing's data-as-of
+    line by the cache age.
     """
 
     verified: list[CensusEntry]
     dropped_ids: list[str]
+    generated_at: str | None = None
 
 
 async def _retry_fhir_call(
@@ -266,6 +274,7 @@ async def build_census(
     redis_client: aioredis.Redis | None = None,
     cache_key: str | None = None,
     provider_id: str | None = None,
+    force_refresh: bool = False,
 ) -> CensusBuildResult:
     """Return a census ranked by triage level (1 = most urgent).
 
@@ -275,8 +284,12 @@ async def build_census(
     If redis_client and cache_key are provided, results are cached for
     ``settings.census_cache_ttl_seconds`` and served from cache on subsequent
     calls.
+
+    When ``force_refresh`` is True the cache READ is skipped (cache write
+    still happens so subsequent non-forced reads benefit). Mirrors the
+    briefing force_refresh path; wired through from the UI Refresh button.
     """
-    if redis_client and cache_key:
+    if redis_client and cache_key and not force_refresh:
         try:
             cached = await redis_client.get(cache_key)
         except Exception as exc:
@@ -286,10 +299,27 @@ async def build_census(
             logger.debug("Census served from cache", extra={"cache_key": cache_key})
             agent_data_cache_hits_total.labels(cache="census").inc()
             raw = json.loads(cached)
+            # Legacy cached payloads (pre-generated_at) are stored as a bare
+            # list of entry dicts. Newer payloads are wrapped:
+            # {"generated_at": <iso>, "entries": [...]}. Detect both shapes
+            # so a cache populated by the previous deploy still deserialises
+            # and the UI shows "Census · Refresh" (no timestamp) instead of
+            # crashing.
+            if isinstance(raw, dict) and "entries" in raw:
+                entries_raw = raw.get("entries", [])
+                generated_at = raw.get("generated_at")
+            else:
+                entries_raw = raw
+                generated_at = None
             return CensusBuildResult(
-                verified=[CensusEntry(**row) for row in raw],
+                verified=[CensusEntry(**row) for row in entries_raw],
                 dropped_ids=[],
+                generated_at=generated_at,
             )
+        agent_data_cache_misses_total.labels(cache="census").inc()
+    elif redis_client and cache_key and force_refresh:
+        # Count the bypass as a miss for cache-effectiveness telemetry
+        # (otherwise the metric would silently undercount fresh fetches).
         agent_data_cache_misses_total.labels(cache="census").inc()
 
     if not patient_ids:
@@ -334,14 +364,23 @@ async def build_census(
         entries.append(entry)
     entries.sort(key=lambda e: (e.triage_level, e.name))
 
+    # Stamp the moment of generation so the UI freshness indicator reflects
+    # ACTUAL data age. This MUST go into the cached payload so a subsequent
+    # cache HIT returns the original generation time — not the cache-read
+    # time — otherwise the field is meaningless for staleness coloring.
+    generated_at = datetime.now(timezone.utc).isoformat()
+
     if redis_client and cache_key:
         try:
             await redis_client.setex(
                 cache_key,
                 settings.census_cache_ttl_seconds,
-                json.dumps([asdict(e) for e in entries]),
+                json.dumps({
+                    "generated_at": generated_at,
+                    "entries": [asdict(e) for e in entries],
+                }),
             )
         except Exception as exc:
             logger.warning("Census cache write failed", extra={"cache_key": cache_key, "error": str(exc)})
 
-    return CensusBuildResult(verified=entries, dropped_ids=dropped_ids)
+    return CensusBuildResult(verified=entries, dropped_ids=dropped_ids, generated_at=generated_at)

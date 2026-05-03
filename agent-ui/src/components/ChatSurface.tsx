@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
-import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff } from '../api';
+import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff, refreshCensus } from '../api';
 import type { HandoffSummaryPayload } from '../api';
 import type { AgentResponse, CensusPatient, ErrorClass, HandoffData, HandoffPatient } from '../types';
 import ResponseRenderer from './ResponseRenderer';
@@ -773,6 +773,71 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     handoffStreamRef.current = { cancel, bubbleId };
   }, [sessionId]);
 
+  // Force-refresh the census via /triage/census with force_refresh=true.
+  // Bypasses the 5-min Redis cache and gives the user a brand-new
+  // generated_at. Wired to the Refresh button in CensusRenderer.
+  const dispatchCensusForceRefresh = useCallback(async () => {
+    forceScrollOnNextMessage.current = true;
+    setMessages((prev) => [
+      ...prev,
+      { id: `user-${Date.now()}`, role: 'user', content: 'Refresh census' },
+    ]);
+    setLoading(true);
+    const submitT0 = performance.now();
+    try {
+      const meta = await refreshCensus(patientIds, sessionId, (requestId) => {
+        postClientTiming({
+          action: 'chat_submit_to_first_byte',
+          duration_ms: Math.round(performance.now() - submitT0),
+          request_id: requestId,
+          session_id: sessionId,
+          extra: { action: 'census_refresh_first_byte' },
+        });
+      });
+      postClientTiming({
+        action: 'chat_submit_to_done',
+        duration_ms: Math.round(performance.now() - submitT0),
+        request_id: meta.requestId,
+        session_id: sessionId,
+        extra: { action: 'census_refresh_done' },
+      });
+      // Update the cached census snapshot used by handoff ordering.
+      const data = meta.response.data as { census?: CensusPatient[] };
+      if (data?.census?.length) {
+        const lines = data.census.map((p) => `  - ${p.name}: ${p.patient_id}`).join('\n');
+        censusContext.current = `## Census patient name → ID mapping\n${lines}`;
+        lastCensusRef.current = data.census;
+      }
+      forceScrollOnNextMessage.current = true;
+      setMessages((prev) => [
+        ...prev,
+        { id: `assistant-${Date.now()}`, role: 'assistant', response: meta.response },
+      ]);
+    } catch {
+      forceScrollOnNextMessage.current = true;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `error-${Date.now()}`,
+          role: 'assistant',
+          response: {
+            type: 'error',
+            data: null,
+            narrative: 'Census refresh failed — try again or view the chart directly.',
+            citations: [],
+            metadata: {
+              error_class: 'transient',
+              retry_suggested: true,
+              failure_class: 'network',
+            },
+          },
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }, [sessionId, patientIds]);
+
   const handleSend = useCallback(() => {
     const text = inputText.trim();
     if (!text || loading) return;
@@ -946,6 +1011,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                           onHandoff={(ids, names) => dispatchHandoffStreamDirect(ids, names)}
                           handoffInFlight={handoffStreaming}
                           providerName={displayName}
+                          onRefreshCensus={() => { void dispatchCensusForceRefresh(); }}
                         />
                       ) : (
                         <span style={{ color: '#9ca3af' }}>…</span>

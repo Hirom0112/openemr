@@ -445,6 +445,43 @@ export async function fetchCensus(patientIds: string[], sessionId: string) {
   );
 }
 
+/**
+ * Direct-call census refresh — bypasses the dispatcher and forces the census
+ * tool to skip its 5-min Redis cache. Returns the same CensusData shape the
+ * dispatcher path produces so the renderer can swap the bubble in place.
+ *
+ * Wired to the Refresh button in CensusRenderer.
+ */
+export interface RefreshCensusResult {
+  response: AgentResponse;
+  requestId: string;
+}
+
+export async function refreshCensus(
+  patientIds: string[],
+  sessionId: string,
+  onFirstByte?: (requestId: string) => void,
+): Promise<RefreshCensusResult> {
+  const result = await postWithMeta<import('./types').CensusData>(
+    '/triage/census',
+    {
+      patient_ids: patientIds,
+      session_id: sessionId,
+      provider_id: String(cfg().providerId),
+      force_refresh: true,
+    },
+    90_000,
+    onFirstByte,
+  );
+  const response: AgentResponse = {
+    type: 'census',
+    data: result.data,
+    narrative: '',
+    citations: [],
+  };
+  return { response, requestId: result.requestId };
+}
+
 export async function sendQuery(sessionId: string, patientId: string, query: string) {
   return post<{ answer: string; route: unknown; turn: number }>(
     `/session/${sessionId}/query`,

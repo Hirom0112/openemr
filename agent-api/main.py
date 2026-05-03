@@ -280,6 +280,12 @@ async def diag_fhir() -> dict:
 class CensusRequest(_CoerceModel):
     patient_ids: list[str]
     session_id: str | None = None
+    provider_id: str | None = None
+    # When the user clicks Refresh in the census header we set
+    # force_refresh=True so the census tool bypasses the Redis cache and
+    # produces a new generated_at timestamp. Default False keeps non-forced
+    # reads on the warm path (the dispatcher's fast path also benefits).
+    force_refresh: bool = False
 
 
 @app.post("/triage/census")
@@ -288,7 +294,11 @@ async def triage_census(body: CensusRequest) -> dict:
         raise HTTPException(status_code=400, detail="patient_ids must not be empty")
     try:
         tool_result = await get_census_summary(
-            {"provider_id": "system", "patient_ids": body.patient_ids},
+            {
+                "provider_id": body.provider_id or "system",
+                "patient_ids": body.patient_ids,
+                "force_refresh": body.force_refresh,
+            },
             session_context=_session_ctx(body.session_id),
         )
         result = tool_result["result"]

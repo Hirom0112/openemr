@@ -96,6 +96,13 @@ export interface CensusData {
   requested?: number;
   dropped?: number;
   dropped_ids?: string[];
+  /**
+   * ISO-8601 UTC timestamp captured the moment the backend BUILT the census
+   * (not when it served the cached copy). Optional because legacy cached
+   * payloads may lack it — UI falls back to "Census · Refresh" without a
+   * time when missing.
+   */
+  generated_at?: string;
 }
 
 export interface ClinicalClaim {

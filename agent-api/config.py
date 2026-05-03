@@ -35,7 +35,12 @@ class Settings(BaseSettings):
     # and is therefore self-invalidating.
     bundle_cache_ttl_seconds: int = 7200       # 2 hours
     briefing_cache_ttl_seconds: int = 1800     # 30 minutes
-    census_cache_ttl_seconds: int = 900        # 15 minutes
+    # Census drives every other surface (briefings warm from it, handoff
+    # iterates over it), so worst-case staleness here propagates everywhere.
+    # 5 minutes bounds that without making cold loads constant — the previous
+    # 15-min TTL caused a visible 17-min mismatch between the census header
+    # ("now") and the briefing's "Data as of" line.
+    census_cache_ttl_seconds: int = 300        # 5 minutes
     explanation_cache_ttl_seconds: int = 86400  # 24 hours
 
     # SQLite fallback checkpointer

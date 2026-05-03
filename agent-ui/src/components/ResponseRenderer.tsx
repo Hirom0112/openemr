@@ -21,13 +21,15 @@ interface ResponseRendererProps {
   onHandoff?: (patientIds: string[], patientNames: Record<string, string>) => void;
   handoffInFlight?: boolean;
   providerName?: string;
+  /** Refresh the census (force_refresh=true). Wired to the Refresh button in CensusRenderer. */
+  onRefreshCensus?: () => void;
   /** Patient name surfaced by the dispatcher (response.metadata.patient_name).
    *  Used by free-text renderers (query_answer, medication_safety) to render a
    *  prominent banner so the physician can confirm patient identity at a glance. */
   patientName?: string;
 }
 
-export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff, handoffInFlight, providerName, patientName }: ResponseRendererProps) {
+export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff, handoffInFlight, providerName, patientName, onRefreshCensus }: ResponseRendererProps) {
   const { type, data, narrative, citations } = response;
 
   if (type === 'error') {
@@ -50,6 +52,7 @@ export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff,
           onHandoff={onHandoff}
           handoffInFlight={handoffInFlight}
           providerName={providerName}
+          onRefresh={onRefreshCensus}
         />
       );
     case 'briefing':

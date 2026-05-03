@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { CensusData, CensusPatient, Citation } from '../types';
 import { resolvePatientPid } from '../utils/citations';
 import DisclaimerIcon from './DisclaimerIcon';
@@ -64,10 +64,12 @@ interface CensusRendererProps {
   onHandoff?: (patientIds: string[], patientNames: Record<string, string>) => void;
   handoffInFlight?: boolean;
   providerName?: string;
-}
-
-function formatTime(d: Date): string {
-  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  /**
+   * Called when the user clicks the Refresh button next to the census
+   * timestamp. Should re-issue the census request with force_refresh=true so
+   * the backend bypasses its Redis cache.
+   */
+  onRefresh?: () => void;
 }
 
 function extractTrigger(explanation: string): string {
@@ -160,11 +162,64 @@ function LabSeverityBadge({ level }: { level: number }) {
   return <Pill color={col} label={label} />;
 }
 
-export default function CensusRenderer({ data, citations, onBrief, onMeds, onHandoff, handoffInFlight, providerName }: CensusRendererProps) {
+export default function CensusRenderer({ data, citations, onBrief, onMeds, onHandoff, handoffInFlight, providerName, onRefresh }: CensusRendererProps) {
   const [labExpanded, setLabExpanded] = useState(false);
 
   const census = data?.census ?? [];
-  const now = new Date();
+
+  // Freshness indicator. Mirrors BriefingRenderer's pattern but with tighter
+  // thresholds because census drives every other surface — a stale census
+  // means stale briefings, stale handoffs, stale triage. Tightening to 5/15
+  // matches the new census_cache_ttl_seconds (300s).
+  const STALE_AMBER_MS = 5 * 60 * 1000;   // >5 min  → amber
+  const STALE_RED_MS = 15 * 60 * 1000;    // >15 min → red
+
+  // Pending state on the Refresh button. Cleared when a fresh response
+  // arrives — detected by generated_at flipping to a new value.
+  const [refreshingFrom, setRefreshingFrom] = useState<string | null>(null);
+  const [refreshHovered, setRefreshHovered] = useState(false);
+  useEffect(() => {
+    if (refreshingFrom !== null && data?.generated_at && data.generated_at !== refreshingFrom) {
+      setRefreshingFrom(null);
+    }
+  }, [data?.generated_at, refreshingFrom]);
+
+  const generatedDate = data?.generated_at ? new Date(data.generated_at) : null;
+  const generatedValid = generatedDate && !Number.isNaN(generatedDate.getTime());
+  const ageMs = generatedValid ? Date.now() - generatedDate.getTime() : 0;
+  const stalenessColor =
+    !generatedValid ? MUTED
+      : ageMs > STALE_RED_MS ? RED.text
+      : ageMs > STALE_AMBER_MS ? AMB.text
+      : MUTED;
+  const generatedTimeShort = generatedValid
+    ? generatedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : undefined;
+  const generatedTooltip = generatedValid
+    ? `Census generated ${generatedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} on ${generatedDate.toISOString().slice(0, 10)}`
+    : undefined;
+
+  const isRefreshing = refreshingFrom !== null;
+  const canRefresh = !!onRefresh && !isRefreshing;
+  const handleRefresh = () => {
+    if (!canRefresh || !onRefresh) return;
+    // Capture the current generated_at so the effect above can detect when a
+    // new value arrives. Empty string is fine — any real new timestamp differs.
+    setRefreshingFrom(data?.generated_at ?? '');
+    onRefresh();
+  };
+  const refreshBtnStyle: React.CSSProperties = {
+    background: refreshHovered && canRefresh ? '#f3f4f6' : 'transparent',
+    border: 'none',
+    padding: '0 4px',
+    margin: 0,
+    fontFamily: 'inherit',
+    fontSize: 11,
+    color: canRefresh ? MUTED : '#9ca3af',
+    cursor: canRefresh ? 'pointer' : 'not-allowed',
+    borderRadius: 4,
+    lineHeight: 'inherit',
+  };
 
   const immediate = census.filter(p => IMMEDIATE_LEVELS.has(p.triage_level));
   const criticalLab = census.filter(p => p.triage_level === CRITICAL_LAB_LEVEL);
@@ -198,7 +253,32 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
           <div style={{ fontSize: 11, color: NEU.secondary, marginTop: 1 }}>
             {census.length} patient{census.length !== 1 ? 's' : ''}
             {providerName ? ` · ${providerName}` : ''}
-            {' · '}{formatTime(now)}
+            {' · '}
+            {generatedTimeShort ? (
+              <span style={{ color: stalenessColor }}>
+                <span title={generatedTooltip}>Census as of {generatedTimeShort}</span>
+              </span>
+            ) : (
+              <span style={{ color: MUTED }}>Census</span>
+            )}
+            {onRefresh ? (
+              <>
+                <span style={{ color: MUTED }}>{'  ·  '}</span>
+                <button
+                  type="button"
+                  onClick={handleRefresh}
+                  disabled={!canRefresh}
+                  onMouseEnter={() => setRefreshHovered(true)}
+                  onMouseLeave={() => setRefreshHovered(false)}
+                  onFocus={() => setRefreshHovered(true)}
+                  onBlur={() => setRefreshHovered(false)}
+                  aria-label="Refresh census"
+                  style={refreshBtnStyle}
+                >
+                  {isRefreshing ? 'Refreshing…' : 'Refresh'}
+                </button>
+              </>
+            ) : null}
           </div>
         </div>
         <LivePill />
