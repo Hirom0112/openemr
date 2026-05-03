@@ -320,7 +320,13 @@ class FHIRClient:
             {"patient": fhir_id, "code": "81638-3", "_count": "5"},   # Code status — not in vital-signs or lab category
         ]
         other_resources = [
-            ("MedicationRequest", {"patient": fhir_id, "status": "active"}),
+            # Don't filter MedicationRequest by status=active either: same
+            # OpenEMR FHIR-search bug as the clinical-status filter on
+            # Condition (see comment below). The fresh fetch returns 0
+            # MedicationRequest entries even when the resource carries
+            # status="active". Fetch all and let downstream consumers
+            # (medication safety tool, query slice) filter client-side.
+            ("MedicationRequest", {"patient": fhir_id}),
             # Don't filter by clinical-status here: OpenEMR's FHIR search parameter
             # for clinical-status returns 0 results even when the resource carries
             # clinicalStatus.coding[0].code = "active". Fetch all conditions and
