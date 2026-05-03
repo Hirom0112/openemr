@@ -165,18 +165,44 @@ export default function HandoffRenderer({ data, narrative, citations }: HandoffR
 
   const patients = data?.patients;
 
-  // Default behavior: every patient renders EXPANDED. The earlier
-  // collapse-by-default + auto-expand-on-data approach made cards LOOK
-  // like the stream was broken — patients appeared as collapsed name
-  // rows and stayed that way until the auto-expand fired (or didn't,
-  // for any patient whose chunk landed atypically). Just render
-  // expanded; the user can manually collapse via the chevron, and the
-  // bulk Collapse all / Expand all controls still work.
+  // Cascade auto-expand: every patient defaults to COLLAPSED on first
+  // sighting. A patient auto-expands only when (a) its own data is ready
+  // AND (b) every patient ABOVE it in the list is also ready. So if
+  // Linda's chunk lands before Marcus's, Linda's card stays collapsed
+  // until Marcus also lands — then both expand in order. No chunk
+  // buffering needed; the cascade lives in the renderer.
+  //
+  // Manual user toggles win — anything in userTouchedIdsRef is left
+  // alone forever.
   useEffect(() => {
     if (!patients?.length) return;
-    for (const p of patients) {
-      seenPatientsRef.current.add(p.patient_id);
-    }
+    setCollapsedPatients((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      let allPriorReady = true;
+      for (const p of patients) {
+        const id = p.patient_id;
+        if (!seenPatientsRef.current.has(id)) {
+          seenPatientsRef.current.add(id);
+          if (!userTouchedIdsRef.current.has(id)) {
+            if (!next.has(id)) {
+              next.add(id);
+              changed = true;
+            }
+          }
+        }
+        const ready = isDataReady(p);
+        const shouldExpand = ready && allPriorReady && !userTouchedIdsRef.current.has(id);
+        if (shouldExpand && next.has(id)) {
+          next.delete(id);
+          changed = true;
+        }
+        if (!ready) {
+          allPriorReady = false;
+        }
+      }
+      return changed ? next : prev;
+    });
   }, [patients]);
 
   const togglePatient = useCallback((patientId: string) => {
