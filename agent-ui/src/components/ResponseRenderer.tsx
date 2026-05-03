@@ -16,7 +16,7 @@ import { cardStyle, RED } from '../styles/tokens';
 
 interface ResponseRendererProps {
   response: AgentResponse;
-  onBrief?: (patientName: string, patientId?: string) => void;
+  onBrief?: (patientName: string, patientId?: string, options?: { forceRefresh?: boolean }) => void;
   onMeds?: (patientName: string, patientId?: string) => void;
   onHandoff?: (patientIds: string[], patientNames: Record<string, string>) => void;
   handoffInFlight?: boolean;

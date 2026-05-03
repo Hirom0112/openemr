@@ -17,7 +17,7 @@ interface BriefingRendererProps {
   data: BriefingSection;
   narrative: string;
   citations: Citation[];
-  onBrief?: (patientName: string, patientId?: string) => void;
+  onBrief?: (patientName: string, patientId?: string, options?: { forceRefresh?: boolean }) => void;
 }
 
 function CitationsList({ citations }: { citations: Citation[] }) {
@@ -116,7 +116,7 @@ export default function BriefingRenderer({ data, narrative, citations, onBrief }
   const handleRefresh = () => {
     if (!canRefresh || !onBrief) return;
     setRefreshingFrom(data.generated_at ?? '');
-    onBrief(data.name, data.patient_id);
+    onBrief(data.name, data.patient_id, { forceRefresh: true });
   };
   const refreshBtnStyle: React.CSSProperties = {
     background: hovered && canRefresh ? '#f3f4f6' : 'transparent',

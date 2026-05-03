@@ -303,12 +303,22 @@ async def triage_census(body: CensusRequest) -> dict:
 
 # ── UC-2 Pre-Encounter Briefing ───────────────────────────────────────────────  LEGACY — retire after Phase 13 cutover
 
+class BriefingRequest(BaseModel):
+    # Optional body — old clients may POST {} or no body. When the user clicks
+    # the in-UI Refresh button we set force_refresh=True so the briefing tool
+    # bypasses both Redis caches (briefing + bundle) and produces a new
+    # generated_at timestamp. Default False keeps non-forced reads on the warm
+    # path.
+    force_refresh: bool = False
+
+
 @app.post("/briefing/{patient_id}", response_model=BriefingResponse)
-async def briefing(patient_id: str) -> BriefingResponse:
+async def briefing(patient_id: str, body: BriefingRequest | None = None) -> BriefingResponse:
     _t0 = time.perf_counter()
+    force_refresh = bool(body.force_refresh) if body is not None else False
     try:
         tool_result = await get_patient_briefing(
-            {"patient_id": patient_id, "provider_id": "system"},
+            {"patient_id": patient_id, "provider_id": "system", "force_refresh": force_refresh},
             session_context=_session_ctx(),
         )
         BRIEFING_DURATION.observe(time.perf_counter() - _t0)
