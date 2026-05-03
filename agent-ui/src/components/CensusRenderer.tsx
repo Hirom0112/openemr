@@ -386,7 +386,6 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
           { label: 'Critical lab', count: criticalLab.length, color: RED },
           { label: 'Critical vital', count: criticalVital.length, color: AMB },
           { label: 'Severe pain', count: severePain.length, color: AMB },
-          { label: 'Code unverified', count: codeStatus.length, color: RED },
           { label: 'Abnormal lab', count: abnormalLab.length, color: AMB },
           { label: 'Stable', count: stableChronic.length, color: NEU },
           ...(routine.length > 0 ? [{ label: 'Routine', count: routine.length, color: NEU }] : []),
