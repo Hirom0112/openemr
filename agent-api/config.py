@@ -77,11 +77,18 @@ class Settings(BaseSettings):
     legacy_endpoints_enabled: bool = True
 
     # Cascading-fresh prefetch gate. When True, the OpenEMR landing-page
-    # prefetch may force-refresh census + bundles + briefings + medication
-    # safety on every login. Burns Anthropic + FHIR cost on every login —
-    # safe for single-user demo, gate behind this flag for real deployments.
-    # Override via ``PREFETCH_FORCE_REFRESH_ON_LOGIN=1``.
-    prefetch_force_refresh_on_login: bool = False
+    # prefetch force-refreshes census + bundles + briefings + medication
+    # safety on every login — so when the physician clicks Brief / Meds
+    # later, they read truly fresh data, not whatever was cached from the
+    # previous shift. Cost: ~$0.15 per login for a 10-patient census
+    # (full breakdown in ARCHITECTURE.md §7.1.1).
+    #
+    # DEFAULT: True (clinical correctness wins for the current single-
+    # provider demo + pilot scope). Set to False for cost-sensitive
+    # deployments and rely on TTL-based cache reuse + explicit Refresh
+    # button + a shift-aware warming cron instead.
+    # Override via ``PREFETCH_FORCE_REFRESH_ON_LOGIN=0`` to disable.
+    prefetch_force_refresh_on_login: bool = True
 
     @property
     def resolved_fhir_token_url(self) -> str:
