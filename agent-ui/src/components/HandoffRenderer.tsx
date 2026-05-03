@@ -28,6 +28,44 @@ interface HandoffPatientBlockProps {
   onToggle: (patientId: string) => void;
 }
 
+// Cycling progress stages shown under each pending patient. Mirrors the
+// chat-level ThinkingIndicator pattern but per-patient and per-stage.
+// Each stage shows for ~1200ms; the final stage holds until the chunk
+// arrives. Total elapsed ~3.6s before the user sees "Generating handoff…",
+// matching the typical per-patient backend time when bundle is warm.
+const PENDING_STAGES: readonly string[] = [
+  'Pulling chart…',
+  'Reviewing recent labs…',
+  'Generating handoff…',
+];
+const PENDING_STAGE_INTERVAL_MS = 1200;
+
+// When the cascade auto-expand needs to open multiple patient cards in
+// the same render tick (cache-hit case where chunks arrive within ms of
+// each other), space them by this many ms so the user perceives the
+// expansion as a smooth wave rather than a synchronous flip.
+const EXPAND_STAGGER_MS = 300;
+
+function PendingPatientStatus({ patientName }: { patientName: string }) {
+  const [stageIdx, setStageIdx] = useState(0);
+  useEffect(() => {
+    setStageIdx(0);
+    const id = window.setInterval(() => {
+      setStageIdx((cur) => (cur < PENDING_STAGES.length - 1 ? cur + 1 : cur));
+    }, PENDING_STAGE_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, []);
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{ paddingLeft: 12, fontSize: 12, color: MUTED, fontStyle: 'italic' }}
+    >
+      {PENDING_STAGES[stageIdx]} ({patientName})
+    </div>
+  );
+}
+
 function HandoffPatientBlock({ patient, collapsed, onToggle }: HandoffPatientBlockProps) {
   const [hovered, setHovered] = useState(false);
 
@@ -86,11 +124,7 @@ function HandoffPatientBlock({ patient, collapsed, onToggle }: HandoffPatientBlo
     return (
       <div style={{ marginBottom: 8 }}>
         {headerButton}
-        {!collapsed && (
-          <div style={{ paddingLeft: 12, fontSize: 12, color: MUTED, fontStyle: 'italic' }}>
-            Working on I-PASS summary for {patient.name}…
-          </div>
-        )}
+        {!collapsed && <PendingPatientStatus patientName={patient.name} />}
       </div>
     );
   }
@@ -165,21 +199,26 @@ export default function HandoffRenderer({ data, narrative, citations }: HandoffR
 
   const patients = data?.patients;
 
-  // Cascade auto-expand: every patient defaults to COLLAPSED on first
-  // sighting. A patient auto-expands only when (a) its own data is ready
-  // AND (b) every patient ABOVE it in the list is also ready. So if
-  // Linda's chunk lands before Marcus's, Linda's card stays collapsed
-  // until Marcus also lands — then both expand in order. No chunk
-  // buffering needed; the cascade lives in the renderer.
+  // Cascade auto-expand with stagger: every patient defaults to COLLAPSED
+  // on first sighting. A patient auto-expands only when (a) its own data
+  // is ready AND (b) every patient ABOVE it in the list is also ready.
+  //
+  // When multiple patients become ready in the same effect tick (e.g. a
+  // cache hit returns 5 chunks in <300ms), we stagger their expansions
+  // by EXPAND_STAGGER_MS so the user sees a smooth top-to-bottom cascade
+  // rather than a single batched flip. Already-expanded-pre-stagger
+  // patients are skipped — only NEW expansions get the delay.
   //
   // Manual user toggles win — anything in userTouchedIdsRef is left
   // alone forever.
   useEffect(() => {
     if (!patients?.length) return;
+    const expandedTimers: number[] = [];
     setCollapsedPatients((prev) => {
       const next = new Set(prev);
       let changed = false;
       let allPriorReady = true;
+      const toExpand: string[] = [];
       for (const p of patients) {
         const id = p.patient_id;
         if (!seenPatientsRef.current.has(id)) {
@@ -194,15 +233,37 @@ export default function HandoffRenderer({ data, narrative, citations }: HandoffR
         const ready = isDataReady(p);
         const shouldExpand = ready && allPriorReady && !userTouchedIdsRef.current.has(id);
         if (shouldExpand && next.has(id)) {
-          next.delete(id);
-          changed = true;
+          toExpand.push(id);
         }
         if (!ready) {
           allPriorReady = false;
         }
       }
+      // Schedule staggered expansions. The first one fires immediately to
+      // keep responsiveness; each subsequent one fires EXPAND_STAGGER_MS
+      // after the previous so the cascade reads as a deliberate animation
+      // rather than a synchronous batch update.
+      toExpand.forEach((id, idx) => {
+        const fire = (): void => {
+          setCollapsedPatients((cur) => {
+            if (!cur.has(id)) return cur;
+            const updated = new Set(cur);
+            updated.delete(id);
+            return updated;
+          });
+        };
+        if (idx === 0) {
+          fire();
+        } else {
+          const t = window.setTimeout(fire, idx * EXPAND_STAGGER_MS);
+          expandedTimers.push(t);
+        }
+      });
       return changed ? next : prev;
     });
+    return () => {
+      for (const t of expandedTimers) window.clearTimeout(t);
+    };
   }, [patients]);
 
   const togglePatient = useCallback((patientId: string) => {
