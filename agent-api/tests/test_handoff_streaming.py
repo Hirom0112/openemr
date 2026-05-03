@@ -187,3 +187,50 @@ def test_sse_endpoint_emits_chunks_and_done(tmp_path: Path) -> None:
     assert done_payload["succeeded"] == 2
     assert done_payload["failed"] == 1
     assert "duration_ms" in done_payload
+
+
+@pytest.mark.hard_failure
+def test_sse_frame_format_is_well_formed() -> None:
+    """Every emitted frame must end with the SSE-required blank line (``\\n\\n``).
+
+    Regression guard for the most common SSE bug: ``data: {...}\\n`` (single
+    newline) does not trigger the EventSource / fetch-stream parser on the
+    client. The frame separator MUST be ``\\n\\n``. We assert at the byte
+    level rather than parsing back into events, so a future change to
+    ``_sse_format`` that drops a newline fails loudly.
+    """
+
+    from fastapi.testclient import TestClient
+
+    async def _fake_generate_one(pid: str, *_a: Any, **_kw: Any) -> HandoffSummary:
+        await asyncio.sleep(0.005)
+        return _summary(pid)
+
+    async def _noop_init(self: Any) -> None:
+        return None
+
+    with patch("handoff.generator._generate_one", side_effect=_fake_generate_one), \
+         patch("handoff.generator.anthropic.AsyncAnthropic", MagicMock()), \
+         patch("checkpointer.sqlite_saver.SqliteSaver.init", _noop_init):
+        from main import app
+
+        with TestClient(app) as client:
+            resp = client.post(
+                "/handoff/generate/stream",
+                json={"patient_ids": ["A", "B", "C"]},
+            )
+            assert resp.status_code == 200
+            text = resp.text
+
+    # Stream must end with a blank-line terminator on the final frame too.
+    assert text.endswith("\n\n"), "final SSE frame missing terminating blank line"
+    # Each non-trailing frame must contain exactly one event line and one data
+    # line, with no orphan ``data:`` fragments outside a frame.
+    frames = [f for f in text.split("\n\n") if f]
+    assert len(frames) >= 4  # 3 chunks + 1 done
+    for frame in frames:
+        lines = frame.split("\n")
+        assert any(line.startswith("event: ") for line in lines), \
+            f"frame missing event line: {frame!r}"
+        assert any(line.startswith("data: ") for line in lines), \
+            f"frame missing data line: {frame!r}"
