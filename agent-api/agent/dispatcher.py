@@ -551,19 +551,26 @@ def _build_system_blocks(session_context: dict[str, Any]) -> list[dict[str, Any]
 
 # ── History → messages ────────────────────────────────────────────────────────
 
-_ALLOWED_TEXT_KEYS = {"type", "text", "cache_control"}
-_ALLOWED_TOOL_USE_KEYS = {"type", "id", "name", "input", "cache_control"}
-_ALLOWED_TOOL_RESULT_KEYS = {"type", "tool_use_id", "content", "is_error", "cache_control"}
+# Note: cache_control intentionally excluded from these allow-lists — loaded
+# historical blocks must NOT carry cache_control because the dispatcher
+# applies its own breakpoint to the latest assistant message each turn, and
+# Anthropic caps cache_control at 4 blocks total (3 system + 1 prefix).
+# Preserving stale cache_control from history pushes us over the limit.
+_ALLOWED_TEXT_KEYS = {"type", "text"}
+_ALLOWED_TOOL_USE_KEYS = {"type", "id", "name", "input"}
+_ALLOWED_TOOL_RESULT_KEYS = {"type", "tool_use_id", "content", "is_error"}
 
 
 def _sanitize_block_for_anthropic(block: dict[str, Any]) -> dict[str, Any]:
-    """Strip non-standard fields from a content block before sending to API.
+    """Strip non-standard fields and stale cache_control from a content block.
 
     Older saved sessions and intermediate refactors stored extra metadata on
     blocks (e.g. ``caller={"type":"direct"}`` from a fast-path tag). Anthropic
     rejects unknown fields with HTTP 400, which surfaces as
     "An unexpected error occurred" to the physician. Whitelist the keys
     Anthropic actually accepts per block type.
+
+    Also strips ``cache_control`` — see allow-list comment above.
     """
     btype = block.get("type")
     if btype == "text":
