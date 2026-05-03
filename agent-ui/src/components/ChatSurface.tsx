@@ -1128,6 +1128,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                     ) : msg.response ? (
                       <ResponseRenderer
                         response={msg.response}
+                        sessionId={sessionId}
                         patientName={
                           typeof msg.response.metadata?.patient_name === 'string'
                             ? (msg.response.metadata.patient_name as string)

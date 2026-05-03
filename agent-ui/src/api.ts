@@ -109,6 +109,29 @@ export interface PrefetchOptions {
   forceRefresh?: boolean;
 }
 
+export type WarmStatus = 'pending' | 'warming' | 'warmed' | 'failed';
+
+export interface PrefetchStatusResult {
+  patients: Record<string, WarmStatus>;
+}
+
+/**
+ * Poll-friendly status of the per-patient login warm. Empty result
+ * means "no warm in progress" (or Redis unavailable) — callers should
+ * treat that as "already warmed" so the UI never gets stuck.
+ */
+export async function getPrefetchStatus(sessionId: string): Promise<PrefetchStatusResult> {
+  try {
+    const url = `${cfg().agentApiUrl}/agent/prefetch/status?session_id=${encodeURIComponent(sessionId)}`;
+    const res = await fetch(url, { method: 'GET' });
+    if (!res.ok) return { patients: {} };
+    const data = (await res.json()) as { patients?: Record<string, string> };
+    return { patients: (data.patients ?? {}) as Record<string, WarmStatus> };
+  } catch {
+    return { patients: {} };
+  }
+}
+
 export async function prefetchPatientData(
   sessionId: string,
   patientIds: string[],

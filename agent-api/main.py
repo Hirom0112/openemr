@@ -668,6 +668,29 @@ class PrefetchRequest(_CoerceModel):
     force_refresh: bool = False
 
 
+@app.get("/agent/prefetch/status")
+async def agent_prefetch_status(session_id: str) -> dict:
+    """Return per-patient warm status for the UI's ⚡/⏳ pills.
+
+    Best-effort read from the Redis hash populated by ``_warm_one``.
+    Empty result (no key, or Redis unavailable) means "no warm in
+    progress for this session" — the UI treats every patient as
+    "warmed" in that case so it doesn't get stuck showing pending
+    pills forever.
+    """
+    if _redis is None:
+        return {"session_id": session_id, "patients": {}}
+    try:
+        raw = await _redis.hgetall(f"copilot:warm-status:{session_id}")
+    except Exception as exc:
+        logger.warning(
+            "warm_status_read_failed",
+            extra={"session_id": session_id, "error": str(exc)},
+        )
+        return {"session_id": session_id, "patients": {}}
+    return {"session_id": session_id, "patients": raw or {}}
+
+
 @app.post("/agent/prefetch")
 async def agent_prefetch(request: PrefetchRequest) -> dict:
     """Signal that the React panel has mounted and FHIR pre-fetch should begin.
@@ -692,6 +715,22 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
             "force_refresh_effective": effective_force_refresh,
         },
     )
+
+    # Eagerly seed "pending" status for every requested patient BEFORE the
+    # background warm task even starts census-build. Without this the UI's
+    # first poll (~1-2s in) sees an empty hash and renders no pills until
+    # census finishes ~3-5s later — looks like the warm never started.
+    if _redis is not None and request.patient_ids:
+        warm_status_key_eager = f"copilot:warm-status:{request.session_id}"
+        try:
+            mapping = {pid: "pending" for pid in request.patient_ids}
+            await _redis.hset(warm_status_key_eager, mapping=mapping)
+            await _redis.expire(warm_status_key_eager, 300)
+        except Exception as exc:
+            logger.warning(
+                "warm_status_eager_seed_failed",
+                extra={"session_id": request.session_id, "error": str(exc)},
+            )
 
     async def _warm() -> None:
         t_start = time.monotonic()
@@ -759,8 +798,30 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
         # FHIR layer staying within its tolerance.
         sem = asyncio.Semaphore(6)
 
+        # Track per-patient warm status in Redis under a session hash so
+        # the UI can show ⚡/⏳ pills next to each census row. Best-effort:
+        # any Redis failure here is logged but never blocks the warm.
+        warm_status_key = f"copilot:warm-status:{request.session_id}"
+
+        async def _record_warm_status(pid: str, status: str) -> None:
+            if _redis is None:
+                return
+            try:
+                await _redis.hset(warm_status_key, pid, status)
+                # 5-min TTL — long enough to span the warm window plus a
+                # few clicks, short enough to self-clean if the user
+                # navigates away.
+                await _redis.expire(warm_status_key, 300)
+            except Exception as exc:
+                logger.warning(
+                    "warm_status_record_failed",
+                    extra={"patient_id": pid, "status": status, "error": str(exc)},
+                )
+
         async def _warm_one(pid: str, triage_rank: int | None, warmup_order: int) -> None:
+            await _record_warm_status(pid, "pending")
             async with sem:
+                await _record_warm_status(pid, "warming")
                 t_warm_start = time.monotonic()
                 # Bundle first — both downstream warmers read it from Redis.
                 await warm_bundle_for_patient(
@@ -768,7 +829,7 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
                 )
                 # Briefing and medication safety can run concurrently once
                 # the bundle is in Redis: neither writes the bundle key.
-                await asyncio.gather(
+                results = await asyncio.gather(
                     warm_briefing_for_patient(
                         _redis, pid, langfuse=_langfuse,
                         force_refresh=effective_force_refresh,
@@ -779,6 +840,8 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
                     ),
                     return_exceptions=True,
                 )
+                final_status = "warmed" if not any(isinstance(r, Exception) for r in results) else "failed"
+                await _record_warm_status(pid, final_status)
                 # Per-patient observability: one structured event per warmup so
                 # we can verify ordering (highest-priority patient warms first)
                 # and per-patient latency from the log stream alone. Pairs with
@@ -818,6 +881,13 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
                 ),
                 key=lambda pair: (pair[1] is None, pair[1] if pair[1] is not None else 0),
             )
+
+        # Seed "pending" for every patient BEFORE create_task so the UI's
+        # status poll can show queued pills the moment it fires (otherwise
+        # the first poll sees an empty hash and renders no pills until
+        # the first task gets a worker slot, ~hundreds of ms later).
+        for pid, _ in ranked_fanout:
+            await _record_warm_status(pid, "pending")
 
         warm_tasks = [
             asyncio.create_task(_warm_one(pid, rank, idx))
