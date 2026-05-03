@@ -276,6 +276,78 @@ _TOOL_INTENT_HINTS: dict[str, list[str]] = {
 }
 
 
+# Keyword sets that signal the user's natural-language intent matches a given
+# structured response_type.  Used to gate the structured-skip optimization:
+# we only skip the framing turn when the response we're about to return
+# matches what the user actually asked for.  When the model called a
+# structured tool as a *resolution step* (e.g. census to look up a name
+# before issuing a briefing), none of these will match and the dispatcher
+# loop continues so the model can chain to the actually-requested tool.
+#
+# Style mirrors ``_TOOL_INTENT_HINTS`` above — simple substring heuristics on
+# the lower-cased original user message.
+_RESPONSE_TYPE_INTENT_HINTS: dict[str, list[str]] = {
+    "census": [
+        "census",
+        "triage",
+        "morning rounds",
+        "rounds",
+        "priority list",
+        "show me the list",
+        "go",
+    ],
+    "briefing": [
+        "brief",
+        "pre-encounter",
+        "tell me about",
+        "what's going on",
+        "what happened",
+        "summary of",
+        "summarize",
+        "give me the patient",
+        "patient in bed",
+    ],
+    "medication_safety": [
+        "med safety",
+        "medication safety",
+        "allergy",
+        "allergies",
+        "interaction",
+        "drug safety",
+        "contraindication",
+        "concerns with",
+        "concerns about",
+        "any concerns",
+        "is x safe",
+        "check medication",
+    ],
+    "handoff": [
+        "handoff",
+        "sign-out",
+        "signout",
+        "sign out",
+        "end of rounds",
+        "end-of-rounds",
+        "shift end",
+    ],
+}
+
+
+def _user_intent_matches_response(message: str, response_type: str) -> bool:
+    """Return True iff the user's original message reads like a request for
+    the given structured response_type.
+
+    When False, the model likely called a structured tool as a name/bed
+    resolution step rather than as the final answer — the dispatcher loop
+    should continue so the model can chain to the actually-requested tool.
+    """
+    hints = _RESPONSE_TYPE_INTENT_HINTS.get(response_type)
+    if not hints:
+        return False
+    msg_lower = message.lower()
+    return any(h in msg_lower for h in hints)
+
+
 def _detect_misroute(message: str, tool_called: str) -> bool:
     msg_lower = message.lower()
     for tool_name, hints in _TOOL_INTENT_HINTS.items():
@@ -742,10 +814,22 @@ async def dispatch(
                             result_data = tool_result.get("result", {})
                             tool_result_content = json.dumps(result_data)
 
-                            # Capture structured data for response envelope
+                            # Capture structured data for response envelope.
+                            # First tool always seeds the envelope.  A later
+                            # tool overrides only when the user's intent
+                            # matches the later tool's response_type — i.e.
+                            # the earlier tool was a resolution step and the
+                            # later tool is the actual answer.
+                            inferred_type = _infer_response_type(tool_name)
                             if final_data is None:
                                 final_data = result_data
-                                response_type = _infer_response_type(tool_name)
+                                response_type = inferred_type
+                            elif (
+                                inferred_type in _STRUCTURED_RESPONSE_TYPES
+                                and _user_intent_matches_response(message, inferred_type)
+                            ):
+                                final_data = result_data
+                                response_type = inferred_type
 
                             if tool_span is not None:
                                 tool_span.end(output=result_data)
@@ -824,9 +908,18 @@ async def dispatch(
                 # narrative — skip the second (framing) Anthropic call to save
                 # ~1.5–2 s of latency per turn.  Free-text types (`text`,
                 # `query_answer`) still fall through to the framing turn.
+                #
+                # Two-condition gate: (1) the response_type is structured AND
+                # (2) the user's original intent matches that response_type.
+                # The intent check prevents skipping when a structured tool
+                # was called as a *resolution step* (e.g. "Brief Marcus Webb"
+                # → census lookup → briefing).  Without it, the dispatcher
+                # would return the resolution-step census as the final answer
+                # and never let the model chain to the requested briefing.
                 if (
                     response_type in _STRUCTURED_RESPONSE_TYPES
                     and final_data is not None
+                    and _user_intent_matches_response(message, response_type)
                 ):
                     final_narrative = _structured_skip_narrative(response_type, final_data)
                     # No framing call will run, so persist a synthetic assistant
