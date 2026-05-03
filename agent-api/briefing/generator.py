@@ -41,6 +41,7 @@ Rules you must follow without exception:
 5. Mark any critical value older than 30 minutes as potentially stale.
 6. Use the produce_briefing tool to return your response.
 7. Do not include clinical recommendations, treatment suggestions, or medication changes.
+8. Observations about a section being blank, absent, or undocumented (e.g. "allergy section is blank", "code status not documented", "no allergy entries on file") belong in the "alerts" array, NOT inside sections[*].claims. Claims are reserved for clinical facts derived from a specific FHIR resource entry; meta-observations about the absence of data are alerts.
 
 Sections requirement (do not skip):
 - The "sections" array is mandatory and must be populated whenever any of the following are present in the input: active_conditions, active_medications, recent_vitals, recent_labs, allergies. Do not return only an "alerts" array.
