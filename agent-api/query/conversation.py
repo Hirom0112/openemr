@@ -138,7 +138,14 @@ class ConversationHandler:
         if not fhir_records:
             answer_text = _empty_records_narrative(query_route.resource)
         else:
-            fhir_context = json.dumps(fhir_records[:30], indent=2)  # cap at 30 records per turn
+            # Unwrap bundle entries: records_override comes from bundle slicing
+            # where each entry is {"fullUrl": "...", "resource": {...}}. The
+            # LLM needs the actual FHIR resource at the top level — passing
+            # the wrapper confuses it (it sees {fullUrl, resource} and can't
+            # extract clinical fields, then says "unable to retrieve"). Same
+            # unwrap pattern as agent/tools/__init__.py for medications/labs.
+            unwrapped = [r.get("resource", r) if isinstance(r, dict) else r for r in fhir_records[:30]]
+            fhir_context = json.dumps(unwrapped, indent=2)  # cap at 30 records per turn
             user_content = (
                 f"<patient_data>\n"
                 f"FHIR {query_route.resource} records (patient {patient_id}):\n"
