@@ -327,8 +327,25 @@ async def _set_cached_medication_safety(
     patient_id: str,
     payload: dict[str, Any],
 ) -> None:
-    """Write the medication-safety payload to Redis. Non-fatal on failure."""
+    """Write the medication-safety payload to Redis. Non-fatal on failure.
+
+    Skips the write when the payload looks like a transient-empty bundle
+    snapshot (no meds AND no allergies). FHIR fanouts under load
+    occasionally return partial bundles where MedicationRequest /
+    AllergyIntolerance searches yield zero results — caching that for the
+    full TTL strands the patient with a "no flags" answer until the next
+    bundle fingerprint flip. The brief skip here trades a re-compute on
+    next call for guaranteed correctness on the recovery path.
+    """
     if redis_client is None:
+        return
+    meds = payload.get("current_medications") or []
+    allergies = payload.get("allergies") or []
+    if not meds and not allergies:
+        logger.info(
+            "medication_safety_cache_write_skipped_empty_bundle",
+            extra={"patient_id": patient_id},
+        )
         return
     try:
         await redis_client.setex(
