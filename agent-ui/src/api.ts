@@ -171,11 +171,12 @@ export async function getBriefing(
   patientId: string,
   sessionId: string,
   onFirstByte?: (requestId: string) => void,
+  forceRefresh?: boolean,
 ): Promise<GetBriefingResult> {
   const t0 = performance.now();
   const result = await postWithMeta<import('./types').BriefingSection>(
     `/briefing/${patientId}`,
-    {},
+    forceRefresh ? { force_refresh: true } : {},
     90_000,
     onFirstByte,
   );

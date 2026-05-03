@@ -422,33 +422,42 @@ async def get_patient_briefing(
 ) -> dict[str, Any]:
     t0 = time.monotonic()
     patient_id: str = input["patient_id"]
+    force_refresh: bool = bool(input.get("force_refresh", False))
     langfuse = session_context.get("langfuse")
     redis_client: aioredis.Redis | None = session_context.get("redis_client")
 
     # Briefings are deterministic given the bundle and are expensive (1-2 LLM calls
     # plus 8 FHIR searches). Serve from Redis when available; first call after a
     # bundle change naturally regenerates because the bundle cache turns over too.
-    cached = await _get_cached_briefing(redis_client, patient_id)
-    if cached is not None:
-        cached.setdefault("metadata", {})["cache"] = "hit"
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        cached["metadata"]["duration_ms"] = duration_ms
-        log_tool_outcome(
-            tool_name="get_patient_briefing",
-            duration_ms=duration_ms,
-            cache="hit",
-            session_id=session_context.get("session_id"),
-            patient_id=patient_id,
-        )
-        return cached
+    # When the user explicitly clicks Refresh (force_refresh=True), bypass both
+    # caches so they get a brand-new generated_at timestamp.
+    if not force_refresh:
+        cached = await _get_cached_briefing(redis_client, patient_id)
+        if cached is not None:
+            cached.setdefault("metadata", {})["cache"] = "hit"
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            cached["metadata"]["duration_ms"] = duration_ms
+            log_tool_outcome(
+                tool_name="get_patient_briefing",
+                duration_ms=duration_ms,
+                cache="hit",
+                session_id=session_context.get("session_id"),
+                patient_id=patient_id,
+            )
+            return cached
 
     patient = await fhir_client.get_patient(patient_id)
 
-    bundle: dict[str, Any] | None = await _get_cached_bundle(redis_client, patient_id)
-    bundle_cache_state: CacheState = "hit" if bundle is not None else "miss"
-    if bundle is None:
+    if force_refresh:
         bundle = await fhir_client.get_bundle_for_patient(patient_id)
+        bundle_cache_state: CacheState = "miss"
         await _set_cached_bundle(redis_client, patient_id, bundle)
+    else:
+        bundle = await _get_cached_bundle(redis_client, patient_id)
+        bundle_cache_state = "hit" if bundle is not None else "miss"
+        if bundle is None:
+            bundle = await fhir_client.get_bundle_for_patient(patient_id)
+            await _set_cached_bundle(redis_client, patient_id, bundle)
 
     ctx = build_briefing_context(patient, bundle)
     raw_briefing = await generate_briefing(ctx, langfuse=langfuse)
@@ -471,6 +480,8 @@ async def get_patient_briefing(
         ),
     }
     payload["metadata"]["cache"] = "miss"
+    if force_refresh:
+        payload["metadata"]["forced_refresh"] = True
 
     await _set_cached_briefing(redis_client, patient_id, payload)
 

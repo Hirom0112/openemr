@@ -387,10 +387,19 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     }
   }, [sessionId]);
 
-  const dispatchBriefDirect = useCallback(async (name: string, patientId: string) => {
+  const dispatchBriefDirect = useCallback(async (
+    name: string,
+    patientId: string,
+    options?: { forceRefresh?: boolean },
+  ) => {
+    const forceRefresh = options?.forceRefresh === true;
     setMessages((prev) => [
       ...prev,
-      { id: `user-${Date.now()}`, role: 'user', content: `Brief ${name}` },
+      {
+        id: `user-${Date.now()}`,
+        role: 'user',
+        content: forceRefresh ? `Refresh ${name}` : `Brief ${name}`,
+      },
     ]);
 
     setLoading(true);
@@ -404,7 +413,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           session_id: sessionId,
           extra: { action: 'brief_direct_first_byte', patient_id: patientId },
         });
-      });
+      }, forceRefresh);
       postClientTiming({
         action: 'chat_submit_to_done',
         duration_ms: Math.round(performance.now() - submitT0),
@@ -704,9 +713,9 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                       ) : msg.response ? (
                         <ResponseRenderer
                           response={msg.response}
-                          onBrief={(name, patientId) => {
+                          onBrief={(name, patientId, options) => {
                             if (patientId) {
-                              void dispatchBriefDirect(name, patientId);
+                              void dispatchBriefDirect(name, patientId, options);
                             } else {
                               void dispatchMessage(`Brief ${name}`);
                             }
