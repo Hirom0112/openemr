@@ -345,6 +345,10 @@ async def get_census_summary(
     t0 = time.monotonic()
     provider_id: str = input["provider_id"]
     patient_ids: list[str] = input["patient_ids"]
+    # Surfaced from the UI Refresh button via /triage/census. The dispatcher
+    # path leaves this absent (default False) so LLM-driven census calls keep
+    # using the warm cache.
+    force_refresh: bool = bool(input.get("force_refresh", False))
 
     redis_client: aioredis.Redis | None = session_context.get("redis_client")
     langfuse = session_context.get("langfuse")
@@ -357,6 +361,7 @@ async def get_census_summary(
             redis_client=redis_client,
             cache_key=cache_key,
             provider_id=provider_id,
+            force_refresh=force_refresh,
         )
     except Exception as exc:
         # Auto-discovery (empty patient_ids) issues a bulk Patient query that
@@ -384,6 +389,7 @@ async def get_census_summary(
                 redis_client=redis_client,
                 cache_key=cache_key,
                 provider_id=provider_id,
+                force_refresh=force_refresh,
             )
             patient_ids = session_patient_ids
         else:
@@ -449,6 +455,10 @@ async def get_census_summary(
             "requested": len(patient_ids),
             "dropped": len(dropped_ids),
             "dropped_ids": dropped_ids,
+            # Frontend uses this for the freshness indicator. On cache hits
+            # this is the ORIGINAL build time, not the cache-read time —
+            # so 'Census as of HH:MM' matches the briefing's data-as-of line.
+            "generated_at": census_result.generated_at,
         },
         "citations": citations,
         "metadata": _empty_metadata("get_census_summary", None, duration_ms, ["Patient", "Observation", "Condition"]),
