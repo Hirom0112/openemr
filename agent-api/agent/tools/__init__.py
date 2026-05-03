@@ -299,11 +299,19 @@ async def _redis_exists(redis_client: aioredis.Redis | None, key: str) -> bool:
 async def warm_bundle_for_patient(
     redis_client: aioredis.Redis | None,
     patient_id: str,
+    *,
+    force_refresh: bool = False,
 ) -> None:
-    """Fire-and-forget bundle warmer. Skips if the key already exists."""
+    """Fire-and-forget bundle warmer.
+
+    Skips if the key already exists *unless* ``force_refresh`` is True, in
+    which case the FHIR fetch always runs and overwrites the cached entry
+    (also bumping its fingerprint so any briefing keyed on the previous
+    fingerprint will treat itself as stale on the next read).
+    """
     if redis_client is None:
         return
-    if await _redis_exists(redis_client, _bundle_cache_key(patient_id)):
+    if not force_refresh and await _redis_exists(redis_client, _bundle_cache_key(patient_id)):
         return
     try:
         bundle = await fhir_client.get_bundle_for_patient(patient_id)
@@ -317,23 +325,67 @@ async def warm_briefing_for_patient(
     redis_client: aioredis.Redis | None,
     patient_id: str,
     langfuse: Any | None = None,
+    *,
+    force_refresh: bool = False,
 ) -> None:
-    """Fire-and-forget briefing warmer. Skips if the key already exists.
+    """Fire-and-forget briefing warmer.
+
+    Skips if the key already exists *unless* ``force_refresh`` is True, in
+    which case ``get_patient_briefing`` is invoked with ``force_refresh=True``
+    so both the briefing and its underlying bundle are regenerated.
 
     Reuses the same path as the dispatcher tool so we never duplicate the
     Anthropic / FHIR call surface.
     """
     if redis_client is None:
         return
-    if await _redis_exists(redis_client, _briefing_cache_key(patient_id)):
+    if not force_refresh and await _redis_exists(redis_client, _briefing_cache_key(patient_id)):
         return
     try:
         await get_patient_briefing(
-            {"patient_id": patient_id},
+            {"patient_id": patient_id, "force_refresh": force_refresh},
             {"redis_client": redis_client, "langfuse": langfuse},
         )
     except Exception as exc:
         logger.warning("Briefing warm fetch failed", extra={"patient_id": patient_id, "error": str(exc)})
+
+
+async def warm_medication_safety_for_patient(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+    langfuse: Any | None = None,
+    *,
+    force_refresh: bool = False,
+) -> None:
+    """Fire-and-forget medication-safety warmer.
+
+    The medication-safety tool itself does not currently maintain its own
+    Redis cache — its expensive inputs are the FHIR bundle (which IS cached)
+    and a single short LLM summarization call. Running the tool here ensures
+    the bundle is freshly populated for the patient and exercises the same
+    code path the UI hits, so the first user-facing click pays only the LLM
+    cost (~1-2s) instead of the full FHIR fanout (~6-8s).
+
+    When ``force_refresh`` is True the bundle is force-refetched first so the
+    safety report reflects current FHIR state rather than whatever the
+    bundle cache had from the previous shift.
+    """
+    if redis_client is None:
+        return
+    try:
+        if force_refresh:
+            # Force the underlying bundle to refresh before the safety tool
+            # reads it from Redis. The tool itself does no cache check.
+            await warm_bundle_for_patient(redis_client, patient_id, force_refresh=True)
+        await get_medication_safety(
+            {"patient_id": patient_id},
+            {"redis_client": redis_client, "langfuse": langfuse},
+        )
+    except Exception as exc:
+        logger.warning(
+            "Medication safety warm fetch failed",
+            extra={"patient_id": patient_id, "error": str(exc)},
+        )
 
 
 # ── Tool implementations ──────────────────────────────────────────────────────
@@ -901,4 +953,5 @@ __all__ = [
     "get_triage_rationale",
     "warm_bundle_for_patient",
     "warm_briefing_for_patient",
+    "warm_medication_safety_for_patient",
 ]

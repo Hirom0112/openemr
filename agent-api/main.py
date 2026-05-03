@@ -61,6 +61,7 @@ from agent.tools import (
     query_patient_records,
     warm_briefing_for_patient,
     warm_bundle_for_patient,
+    warm_medication_safety_for_patient,
 )
 from auth.fhir_client import (
     fhir_client,
@@ -646,6 +647,12 @@ class PrefetchRequest(_CoerceModel):
     session_id: str
     provider_id: str
     patient_ids: list[str] = []
+    # When True, the warm path bypasses every per-layer EXISTS check so
+    # census, bundles, briefings, and medication-safety are all regenerated
+    # against current FHIR state. Gated server-side by
+    # ``settings.prefetch_force_refresh_on_login`` so a hostile or buggy
+    # client cannot cost-bomb Anthropic by toggling this flag at will.
+    force_refresh: bool = False
 
 
 @app.post("/agent/prefetch")
@@ -657,16 +664,31 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
     endpoint exists so the UI can fire a non-blocking fetch on mount without
     waiting for it — keeping the session-open flow in UX_SPEC §3 intact.
     """
+    # Honour the server-side gate: clients can request force_refresh, but the
+    # operator decides whether the deployment is willing to pay for it on
+    # every login. See PREFETCH_FORCE_REFRESH_ON_LOGIN env var / config.py.
+    effective_force_refresh: bool = bool(
+        request.force_refresh and settings.prefetch_force_refresh_on_login
+    )
     logger.info(
         "Pre-fetch signal received",
-        extra={"session_id": request.session_id, "patient_count": len(request.patient_ids)},
+        extra={
+            "session_id": request.session_id,
+            "patient_count": len(request.patient_ids),
+            "force_refresh_requested": request.force_refresh,
+            "force_refresh_effective": effective_force_refresh,
+        },
     )
 
     async def _warm() -> None:
         t_start = time.monotonic()
         logger.info(
             "Pre-fetch warm started",
-            extra={"session_id": request.session_id, "patient_count": len(request.patient_ids)},
+            extra={
+                "session_id": request.session_id,
+                "patient_count": len(request.patient_ids),
+                "force_refresh": effective_force_refresh,
+            },
         )
         bulk_query_failed: bool = False
         entries: list[Any] = []
@@ -676,6 +698,7 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
                 redis_client=_redis,
                 cache_key=census_cache_key(request.provider_id, request.patient_ids),
                 provider_id=request.provider_id,
+                force_refresh=effective_force_refresh,
             )
             entries = list(census_result.verified)
         except Exception as exc:
@@ -711,15 +734,35 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
             )
 
         # After census builds (or the bulk-Patient query falls back), fan
-        # out bundle + briefing warmers, bounded by a small semaphore so we
-        # don't hammer FHIR / Anthropic. Each warmer EXISTS-checks before
-        # writing so re-mounts are cheap.
-        sem = asyncio.Semaphore(4)
+        # out bundle + briefing + medication-safety warmers, bounded by a
+        # small semaphore so we don't hammer FHIR / Anthropic. Each warmer
+        # EXISTS-checks before writing so re-mounts are cheap; when
+        # effective_force_refresh is True the EXISTS check is skipped and
+        # all three layers cascade-refresh against current FHIR state.
+        # 6-way fan-out keeps roughly the same per-patient latency as the
+        # previous 4-way fan-out even though we now have 3 work items per
+        # patient instead of 2.
+        sem = asyncio.Semaphore(6)
 
         async def _warm_one(pid: str) -> None:
             async with sem:
-                await warm_bundle_for_patient(_redis, pid)
-                await warm_briefing_for_patient(_redis, pid, langfuse=_langfuse)
+                # Bundle first — both downstream warmers read it from Redis.
+                await warm_bundle_for_patient(
+                    _redis, pid, force_refresh=effective_force_refresh
+                )
+                # Briefing and medication safety can run concurrently once
+                # the bundle is in Redis: neither writes the bundle key.
+                await asyncio.gather(
+                    warm_briefing_for_patient(
+                        _redis, pid, langfuse=_langfuse,
+                        force_refresh=effective_force_refresh,
+                    ),
+                    warm_medication_safety_for_patient(
+                        _redis, pid, langfuse=_langfuse,
+                        force_refresh=effective_force_refresh,
+                    ),
+                    return_exceptions=True,
+                )
 
         # When census-build failed, fall back to the patient_ids the client
         # passed in. They are usable directly by the per-patient warmers
@@ -758,8 +801,12 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
                 "census_entries": len(entries),
                 "bundle_warmed": len(warm_tasks),
                 "briefing_warmed": len(warm_tasks),
+                "medication_safety_warmed": len(warm_tasks),
                 "warm_failures": failures,
-                "caches_populated": ["census", "bundle", "briefing"],
+                "force_refresh": effective_force_refresh,
+                "caches_populated": [
+                    "census", "bundle", "briefing", "medication_safety",
+                ],
             },
         )
 

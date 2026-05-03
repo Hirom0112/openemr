@@ -785,6 +785,13 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     setLoading(true);
     const submitT0 = performance.now();
     try {
+      // Cascading-fresh: when the user clicks Refresh on the census, also
+      // fire a force-refresh prefetch so the per-patient bundle / briefing /
+      // medication-safety caches turn over too. Without this the census
+      // header reads "now" but a subsequent Brief click still returns the
+      // briefing keyed against the previous shift's bundle. Fire-and-forget;
+      // the census refresh below remains the user-visible operation.
+      void prefetchPatientData(sessionId, patientIds, { forceRefresh: true });
       const meta = await refreshCensus(patientIds, sessionId, (requestId) => {
         postClientTiming({
           action: 'chat_submit_to_first_byte',

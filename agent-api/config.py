@@ -76,6 +76,13 @@ class Settings(BaseSettings):
     # legacy endpoints have been stable for one full release cycle.
     legacy_endpoints_enabled: bool = True
 
+    # Cascading-fresh prefetch gate. When True, the OpenEMR landing-page
+    # prefetch may force-refresh census + bundles + briefings + medication
+    # safety on every login. Burns Anthropic + FHIR cost on every login —
+    # safe for single-user demo, gate behind this flag for real deployments.
+    # Override via ``PREFETCH_FORCE_REFRESH_ON_LOGIN=1``.
+    prefetch_force_refresh_on_login: bool = False
+
     @property
     def resolved_fhir_token_url(self) -> str:
         if self.fhir_token_url:
