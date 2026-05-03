@@ -814,12 +814,13 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
         # EXISTS-checks before writing so re-mounts are cheap; when
         # effective_force_refresh is True the EXISTS check is skipped and
         # all three layers cascade-refresh against current FHIR state.
-        # 6-way fan-out: tuned empirically against this OpenEMR build.
-        # 12-way was ~15s warm but ~30% failures (50%+ of patients had
-        # cold caches → slow first Brief click). 4-way was 100% reliable
-        # but ~40s warm. 6-way targets the middle: ~25s warm with the
-        # FHIR layer staying within its tolerance.
-        sem = asyncio.Semaphore(6)
+        # Strict batches of 6 (top-of-triage first). A semaphore alone would
+        # let lower-priority patients enter as soon as ANY higher-priority
+        # one finished — so the dots could light green out of triage order.
+        # Batch barriers guarantee: top 6 ALL go green before any of the
+        # bottom 4 starts warming. Wall-time same as semaphore=6 (~28s)
+        # because the slowest patient in each batch dominates either way.
+        BATCH_SIZE = 6
 
         # Track per-patient warm status in Redis under a session hash so
         # the UI can show ⚡/⏳ pills next to each census row. Best-effort:
@@ -842,9 +843,8 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
                 )
 
         async def _warm_one(pid: str, triage_rank: int | None, warmup_order: int) -> None:
-            await _record_warm_status(pid, "pending")
-            async with sem:
-                await _record_warm_status(pid, "warming")
+            await _record_warm_status(pid, "warming")
+            if True:
                 t_warm_start = time.monotonic()
                 # Bundle first — both downstream warmers read it from Redis.
                 await warm_bundle_for_patient(
@@ -912,13 +912,21 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
         for pid, _ in ranked_fanout:
             await _record_warm_status(pid, "pending")
 
-        warm_tasks = [
-            asyncio.create_task(_warm_one(pid, rank, idx))
-            for idx, (pid, rank) in enumerate(ranked_fanout)
-        ]
+        # Strict triage-ordered batches. Each batch waits for ALL members
+        # to settle before the next batch enters — so the green dots cascade
+        # top-to-bottom on the census view instead of finishing in random
+        # FHIR-latency order.
         results: list[Any] = []
-        if warm_tasks:
-            results = await asyncio.gather(*warm_tasks, return_exceptions=True)
+        total = len(ranked_fanout)
+        for batch_start in range(0, total, BATCH_SIZE):
+            batch = ranked_fanout[batch_start : batch_start + BATCH_SIZE]
+            batch_tasks = [
+                asyncio.create_task(_warm_one(pid, rank, batch_start + offset))
+                for offset, (pid, rank) in enumerate(batch)
+            ]
+            if batch_tasks:
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                results.extend(batch_results)
 
         failures = sum(1 for r in results if isinstance(r, Exception))
         if bulk_query_failed:
