@@ -44,7 +44,7 @@ const PENDING_STAGE_INTERVAL_MS = 1200;
 // the same render tick (cache-hit case where chunks arrive within ms of
 // each other), space them by this many ms so the user perceives the
 // expansion as a smooth wave rather than a synchronous flip.
-const EXPAND_STAGGER_MS = 300;
+const EXPAND_STAGGER_MS = 400;
 
 function PendingPatientStatus({ patientName }: { patientName: string }) {
   const [stageIdx, setStageIdx] = useState(0);
@@ -198,16 +198,23 @@ export default function HandoffRenderer({ data, narrative, citations }: HandoffR
   const userTouchedIdsRef = useRef<Set<string>>(new Set());
 
   const patients = data?.patients;
+  // Tracks the wall-clock time of the last auto-expand so we can enforce
+  // a MINIMUM gap between cards opening — even when chunks arrive ~5s
+  // apart in live streaming, we still want each card to take a beat
+  // before opening so the user perceives the cascade. Without this, a
+  // single chunk landing per render-tick fires immediately and there's
+  // no visual cascade at all (looks like cards just "appear" expanded).
+  const lastExpandAtRef = useRef<number>(0);
 
-  // Cascade auto-expand with stagger: every patient defaults to COLLAPSED
-  // on first sighting. A patient auto-expands only when (a) its own data
-  // is ready AND (b) every patient ABOVE it in the list is also ready.
+  // Cascade auto-expand with always-visible stagger: every patient defaults
+  // to COLLAPSED on first sighting. A patient auto-expands only when (a)
+  // its own data is ready AND (b) every patient ABOVE it is also ready.
   //
-  // When multiple patients become ready in the same effect tick (e.g. a
-  // cache hit returns 5 chunks in <300ms), we stagger their expansions
-  // by EXPAND_STAGGER_MS so the user sees a smooth top-to-bottom cascade
-  // rather than a single batched flip. Already-expanded-pre-stagger
-  // patients are skipped — only NEW expansions get the delay.
+  // Stagger applies in BOTH cases: (1) cache-hit batches where multiple
+  // chunks land in the same tick — uses idx * EXPAND_STAGGER_MS; (2) live
+  // streaming where chunks arrive 3-5s apart — enforces a minimum
+  // EXPAND_STAGGER_MS gap from the previous expansion. Either way the
+  // user always sees a deliberate top-to-bottom reveal.
   //
   // Manual user toggles win — anything in userTouchedIdsRef is left
   // alone forever.
@@ -239,11 +246,15 @@ export default function HandoffRenderer({ data, narrative, citations }: HandoffR
           allPriorReady = false;
         }
       }
-      // Schedule staggered expansions. The first one fires immediately to
-      // keep responsiveness; each subsequent one fires EXPAND_STAGGER_MS
-      // after the previous so the cascade reads as a deliberate animation
-      // rather than a synchronous batch update.
+      // Schedule expansions with always-visible cascade. Each expansion
+      // fires at: max(now, lastExpandAt + EXPAND_STAGGER_MS) + idx*STAGGER.
+      // The first one in a batch is gated by the previous expansion's
+      // wall-clock time; subsequent ones in the same batch stack on top.
+      const now = Date.now();
+      const earliestNext = Math.max(now, lastExpandAtRef.current + EXPAND_STAGGER_MS);
       toExpand.forEach((id, idx) => {
+        const fireAt = earliestNext + idx * EXPAND_STAGGER_MS;
+        const delay = Math.max(0, fireAt - now);
         const fire = (): void => {
           setCollapsedPatients((cur) => {
             if (!cur.has(id)) return cur;
@@ -251,11 +262,12 @@ export default function HandoffRenderer({ data, narrative, citations }: HandoffR
             updated.delete(id);
             return updated;
           });
+          lastExpandAtRef.current = Date.now();
         };
-        if (idx === 0) {
+        if (delay === 0) {
           fire();
         } else {
-          const t = window.setTimeout(fire, idx * EXPAND_STAGGER_MS);
+          const t = window.setTimeout(fire, delay);
           expandedTimers.push(t);
         }
       });
