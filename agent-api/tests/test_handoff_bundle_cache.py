@@ -107,12 +107,16 @@ def test_generate_one_uses_cached_bundle_and_skips_fhir() -> None:
 
 
 @pytest.mark.hard_failure
-def test_generate_one_uses_cached_handoff_and_skips_llm() -> None:
-    """When the per-patient handoff cache is hit, the LLM call must be skipped.
+def test_generate_one_bypasses_handoff_cache_for_freshness() -> None:
+    """Handoff intentionally regenerates per-patient on every shift.
 
-    Verifies the 2026-05 handoff cache fix: a fresh bundle fingerprint plus a
-    cached HandoffSummary at ``copilot:handoff:{pid}:{fingerprint}`` returns
-    immediately without invoking Anthropic.
+    Even when a cached HandoffSummary exists at
+    ``copilot:handoff:{pid}:{fingerprint}``, the generator MUST run the LLM
+    to produce a fresh I-PASS. Handoffs are clinical events at shift
+    boundaries — a stale cached summary that doesn't reflect the most
+    recent vitals/labs/orders is a clinical risk that outweighs the
+    latency win of skipping the LLM. (The bundle cache is still in play,
+    so the FHIR fetch is fast on warm sessions.)
     """
     patient_id = "pt-cache-2"
     fingerprint = "2026-05-02T10:00:00+00:00"
@@ -123,8 +127,8 @@ def test_generate_one_uses_cached_handoff_and_skips_llm() -> None:
         "mrn": "MRN-2",
         "triage_level": 3,
         "illness_severity": "Stable",
-        "patient_summary": "from-cache",
-        "action_list": ["follow up labs"],
+        "patient_summary": "STALE-from-cache",
+        "action_list": ["stale-action"],
         "situation_awareness": "",
         "contingency_plan": "",
         "generated_at": "2026-05-02T10:00:01+00:00",
@@ -142,15 +146,24 @@ def test_generate_one_uses_cached_handoff_and_skips_llm() -> None:
     redis_client.get = AsyncMock(side_effect=_redis_get)
     redis_client.setex = AsyncMock()
 
+    fresh_tool_use = MagicMock()
+    fresh_tool_use.type = "tool_use"
+    fresh_tool_use.input = {
+        "illness_severity": "Watcher",
+        "patient_summary": "FRESH from LLM",
+        "action_list": ["fresh-action"],
+        "situation_awareness": "fresh",
+        "contingency_plan": "fresh",
+    }
+    anthropic_response = MagicMock()
+    anthropic_response.content = [fresh_tool_use]
     anthropic_client = MagicMock()
-    anthropic_client.messages.create = AsyncMock(
-        side_effect=AssertionError("LLM must not be called when handoff cache hits"),
-    )
+    anthropic_client.messages.create = AsyncMock(return_value=anthropic_response)
 
     with patch("handoff.generator.fhir_client") as mock_fhir:
         mock_fhir.get_patient = AsyncMock(return_value={"id": patient_id})
         mock_fhir.get_bundle_for_patient = AsyncMock(
-            side_effect=AssertionError("Bundle FHIR fetch must not run on cache hit"),
+            side_effect=AssertionError("bundle cache hit → no FHIR fetch expected"),
         )
         summary = _run(
             _generate_one(
@@ -161,8 +174,13 @@ def test_generate_one_uses_cached_handoff_and_skips_llm() -> None:
             ),
         )
 
-    assert anthropic_client.messages.create.await_count == 0
-    assert summary.patient_id == patient_id
-    assert summary.patient_summary == "from-cache"
-    assert summary.action_list == ["follow up labs"]
-    assert summary.error is None
+    # LLM ran — handoff cache was bypassed.
+    assert anthropic_client.messages.create.await_count == 1
+    # Returned summary reflects FRESH LLM output, not the stale cache.
+    assert summary.patient_summary == "FRESH from LLM"
+    assert summary.action_list == ["fresh-action"]
+    # No write-back to handoff cache either (we removed both sides).
+    assert all(
+        not (call.args and str(call.args[0]).startswith(f"copilot:handoff:{patient_id}"))
+        for call in redis_client.setex.await_args_list
+    )
