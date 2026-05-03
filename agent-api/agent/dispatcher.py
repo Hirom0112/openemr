@@ -551,6 +551,32 @@ def _build_system_blocks(session_context: dict[str, Any]) -> list[dict[str, Any]
 
 # ── History → messages ────────────────────────────────────────────────────────
 
+_ALLOWED_TEXT_KEYS = {"type", "text", "cache_control"}
+_ALLOWED_TOOL_USE_KEYS = {"type", "id", "name", "input", "cache_control"}
+_ALLOWED_TOOL_RESULT_KEYS = {"type", "tool_use_id", "content", "is_error", "cache_control"}
+
+
+def _sanitize_block_for_anthropic(block: dict[str, Any]) -> dict[str, Any]:
+    """Strip non-standard fields from a content block before sending to API.
+
+    Older saved sessions and intermediate refactors stored extra metadata on
+    blocks (e.g. ``caller={"type":"direct"}`` from a fast-path tag). Anthropic
+    rejects unknown fields with HTTP 400, which surfaces as
+    "An unexpected error occurred" to the physician. Whitelist the keys
+    Anthropic actually accepts per block type.
+    """
+    btype = block.get("type")
+    if btype == "text":
+        allowed = _ALLOWED_TEXT_KEYS
+    elif btype == "tool_use":
+        allowed = _ALLOWED_TOOL_USE_KEYS
+    elif btype == "tool_result":
+        allowed = _ALLOWED_TOOL_RESULT_KEYS
+    else:
+        return block
+    return {k: v for k, v in block.items() if k in allowed}
+
+
 def _history_to_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert stored turns to Anthropic messages format.
 
@@ -585,8 +611,9 @@ def _history_to_messages(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
 
         if isinstance(content, list):
-            # Rich content blocks — already in Anthropic's expected shape.
-            messages.append({"role": role, "content": content})
+            # Sanitize each block to drop legacy metadata that Anthropic rejects.
+            sanitized = [_sanitize_block_for_anthropic(b) if isinstance(b, dict) else b for b in content]
+            messages.append({"role": role, "content": sanitized})
         else:
             # Plain string — wrap as a single text block for round-trip parity.
             messages.append({"role": role, "content": content})
