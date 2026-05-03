@@ -159,7 +159,7 @@ def build(patient: dict[str, Any], bundle: dict[str, Any]) -> BriefingContext:
             code=coding.get("code", ""),
             display=display,
             effective_dt=onset,
-            value="active",
+            value=" ".join(part for part in [display, "active"] if part).strip(),
         )
         conditions.append(ActiveCondition(display=display, onset=onset, citation=citation))
 
@@ -181,7 +181,7 @@ def build(patient: dict[str, Any], bundle: dict[str, Any]) -> BriefingContext:
             code=substance_coding.get("code", ""),
             display=substance,
             effective_dt=allergy.get("recordedDate", ""),
-            value=f"{reaction_display} ({severity})" if reaction_display else severity,
+            value=" ".join(part for part in [substance, f"{reaction_display} ({severity})" if reaction_display else severity] if part).strip(),
         )
         allergies.append(AllergyEntry(substance=substance, reaction=reaction_display, severity=severity, citation=citation))
 
@@ -204,7 +204,7 @@ def build(patient: dict[str, Any], bundle: dict[str, Any]) -> BriefingContext:
             code=med_coding.get("code", ""),
             display=name,
             effective_dt=med.get("authoredOn", ""),
-            value=f"{dose} {route}".strip(),
+            value=" ".join(part for part in [name, dose, route] if part).strip(),
         )
         medications.append(ActiveMedication(name=name, dose=dose, route=route, status=status, citation=citation))
 
@@ -231,7 +231,7 @@ def build(patient: dict[str, Any], bundle: dict[str, Any]) -> BriefingContext:
             code=loinc_code,
             display=display,
             effective_dt=eff,
-            value=f"{val_str} {unit}".strip(),
+            value=" ".join(part for part in [display, f"{val_str} {unit}".strip()] if part).strip(),
         )
 
         if VITAL_SIGN_CATEGORY in categories:
