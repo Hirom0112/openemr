@@ -965,12 +965,14 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
             }
 
             // assistant
-            // Census is the persistent reference frame — never collapsible.
-            const isCensus = msg.response?.type === 'census';
-            const collapsed = !isCensus && collapsedIds.has(msg.id);
+            // Census is collapsible MANUALLY (chevron + click) but is exempt
+            // from the auto-collapse-on-new-message effect at line ~324 so
+            // it stays the persistent reference frame unless the user
+            // explicitly folds it.
+            const collapsed = collapsedIds.has(msg.id);
             const label = labelForResponse(msg.response);
             const time = formatHeaderTime(msg.id);
-            const isHovered = !isCensus && hoveredHeaderId === msg.id;
+            const isHovered = hoveredHeaderId === msg.id;
             const headerStyle: React.CSSProperties = {
               display: 'flex',
               alignItems: 'center',
@@ -985,7 +987,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
               background: isHovered ? '#f3f4f6' : 'transparent',
               border: 'none',
               borderRadius: 6,
-              cursor: isCensus ? 'default' : 'pointer',
+              cursor: 'pointer',
               width: 'calc(96% - 34px)',
               textAlign: 'left',
               fontFamily: 'inherit',
@@ -997,32 +999,26 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                 <span>{label}</span>
                 <span style={{ color: '#9ca3af' }}>·</span>
                 <span>{time}</span>
-                {!isCensus && (
-                  <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }} aria-hidden="true">
-                    {collapsed ? '▸' : '▾'}
-                  </span>
-                )}
+                <span style={{ marginLeft: 'auto', fontSize: 12, color: '#6b7280' }} aria-hidden="true">
+                  {collapsed ? '▸' : '▾'}
+                </span>
               </>
             );
             return (
               <div key={msg.id}>
-                {isCensus ? (
-                  <div style={headerStyle}>{headerInner}</div>
-                ) : (
-                  <button
-                    type="button"
-                    aria-expanded={!collapsed}
-                    aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${label} message`}
-                    onClick={() => toggleCollapsed(msg.id)}
-                    onMouseEnter={() => setHoveredHeaderId(msg.id)}
-                    onMouseLeave={() => setHoveredHeaderId((cur) => (cur === msg.id ? null : cur))}
-                    onFocus={() => setHoveredHeaderId(msg.id)}
-                    onBlur={() => setHoveredHeaderId((cur) => (cur === msg.id ? null : cur))}
-                    style={headerStyle}
-                  >
-                    {headerInner}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  aria-expanded={!collapsed}
+                  aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${label} message`}
+                  onClick={() => toggleCollapsed(msg.id)}
+                  onMouseEnter={() => setHoveredHeaderId(msg.id)}
+                  onMouseLeave={() => setHoveredHeaderId((cur) => (cur === msg.id ? null : cur))}
+                  onFocus={() => setHoveredHeaderId(msg.id)}
+                  onBlur={() => setHoveredHeaderId((cur) => (cur === msg.id ? null : cur))}
+                  style={headerStyle}
+                >
+                  {headerInner}
+                </button>
                 {!collapsed && (
                   <div style={styles.assistantRow}>
                     <div style={styles.assistantAvatar} aria-hidden="true">AI</div>
