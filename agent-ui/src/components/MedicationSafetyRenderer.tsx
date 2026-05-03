@@ -174,13 +174,18 @@ export default function MedicationSafetyRenderer({ data, narrative, citations, p
         </div>
       )}
 
-      {hasAllergies && (
-        <>
-          <SectionHeading color={RED}>Allergies</SectionHeading>
-          {data.allergies.map((a, i) => (
-            <ClaimRow key={i} color={RED}>{a}</ClaimRow>
-          ))}
-        </>
+      {/* Always render the Allergies section — when the user asks
+          "what allergies does X have", a missing section visually buries
+          the answer in Interactions/Medications. Empty case shows an
+          explicit "No documented allergies on file" row so the answer
+          is unambiguous. */}
+      <SectionHeading color={hasAllergies ? RED : NEU}>Allergies</SectionHeading>
+      {hasAllergies ? (
+        data.allergies.map((a, i) => (
+          <ClaimRow key={i} color={RED}>{a}</ClaimRow>
+        ))
+      ) : (
+        <ClaimRow color={NEU}>No documented allergies on file — verify in chart.</ClaimRow>
       )}
 
       {hasInteractions && (
