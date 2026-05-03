@@ -39,6 +39,7 @@ from agent.metrics import (
 from agent.schemas import DISPATCHER_TOOLS
 from agent.system_prompt import build_system_prompt
 from agent.tool_registry import TOOL_REGISTRY
+from audit.openemr_log import emit_audit_event
 from config import settings
 from verification.dispatcher_response import verify_dispatcher_response
 from verification.domain_constraints import verify_conversation_answer
@@ -106,18 +107,61 @@ PHYSICIAN_ERROR_MESSAGES: dict[ToolFailureClass, str] = {
     ToolFailureClass.UNKNOWN: "An unexpected error occurred. Please view the chart directly.",
 }
 
+# ── User-facing error classification ─────────────────────────────────────────
+# Maps internal :class:`ToolFailureClass` (technical) to a small set of
+# error categories the UI can render distinctly.  Keep the set small and
+# stable — the frontend switches on these strings.
+#
+#   transient    — likely to succeed on retry (timeouts, transient FHIR)
+#   persistent   — auth/config/safety; retry won't help, contact IT
+#   missing_data — no record exists; retry won't help (currently unused
+#                  on the failure path; reserved for future "no patient"
+#                  signalling from tools)
+#   unknown      — default; offer retry but don't promise recovery
+ERROR_CLASS_TRANSIENT = "transient"
+ERROR_CLASS_PERSISTENT = "persistent"
+ERROR_CLASS_MISSING_DATA = "missing_data"
+ERROR_CLASS_UNKNOWN = "unknown"
 
-def _error_response(failure_class: ToolFailureClass, detail: str = "") -> dict[str, Any]:
+_FAILURE_CLASS_TO_ERROR_CLASS: dict[ToolFailureClass, str] = {
+    ToolFailureClass.FHIR_UNAVAILABLE: ERROR_CLASS_TRANSIENT,
+    ToolFailureClass.LLM_TIMEOUT: ERROR_CLASS_TRANSIENT,
+    ToolFailureClass.TOOL_VALIDATION: ERROR_CLASS_PERSISTENT,
+    ToolFailureClass.VERIFICATION_BLOCK: ERROR_CLASS_PERSISTENT,
+    ToolFailureClass.UNKNOWN: ERROR_CLASS_UNKNOWN,
+}
+
+_RETRY_BY_ERROR_CLASS: dict[str, bool] = {
+    ERROR_CLASS_TRANSIENT: True,
+    ERROR_CLASS_PERSISTENT: False,
+    ERROR_CLASS_MISSING_DATA: False,
+    ERROR_CLASS_UNKNOWN: True,
+}
+
+
+def _error_response(
+    failure_class: ToolFailureClass,
+    detail: str = "",
+    *,
+    retry_after_ms: int | None = None,
+) -> dict[str, Any]:
+    error_class = _FAILURE_CLASS_TO_ERROR_CLASS.get(failure_class, ERROR_CLASS_UNKNOWN)
+    retry_suggested = _RETRY_BY_ERROR_CLASS.get(error_class, True)
+    metadata: dict[str, Any] = {
+        "error": True,
+        "failure_class": failure_class.value,
+        "error_class": error_class,
+        "retry_suggested": retry_suggested,
+        "detail": detail,
+    }
+    if retry_after_ms is not None:
+        metadata["retry_after_ms"] = retry_after_ms
     return {
         "type": "error",
         "data": None,
         "narrative": PHYSICIAN_ERROR_MESSAGES[failure_class],
         "citations": [],
-        "metadata": {
-            "error": True,
-            "failure_class": failure_class.value,
-            "detail": detail,
-        },
+        "metadata": metadata,
     }
 
 
@@ -545,6 +589,15 @@ async def dispatch(
                             "scope_enforcement": True,
                             "requested_patient_id": requested_pid,
                         })
+                        emit_audit_event(
+                            session_id=session_id,
+                            provider_id=session_context.get("provider_id"),
+                            tool_name=tool_name,
+                            outcome="blocked",
+                            duration_ms=0,
+                            patient_id=requested_pid,
+                            failure_class="census_scope_violation",
+                        )
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": tool_use_id,
@@ -589,6 +642,7 @@ async def dispatch(
                             if tool_span is not None:
                                 tool_span.end(output=result_data)
 
+                            _tool_duration_ms = int((time.monotonic() - _t_tool) * 1000)
                             logger.info(
                                 "tool_call_end",
                                 extra={
@@ -596,9 +650,17 @@ async def dispatch(
                                     "tool": tool_name,
                                     "tool_use_id": tool_use_id,
                                     "turn": turn_count,
-                                    "duration_ms": int((time.monotonic() - _t_tool) * 1000),
+                                    "duration_ms": _tool_duration_ms,
                                     "outcome": "ok",
                                 },
+                            )
+                            emit_audit_event(
+                                session_id=session_id,
+                                provider_id=session_context.get("provider_id"),
+                                tool_name=tool_name,
+                                outcome="ok",
+                                duration_ms=_tool_duration_ms,
+                                patient_id=tool_input.get("patient_id"),
                             )
 
                         except Exception as exc:
@@ -612,6 +674,7 @@ async def dispatch(
                                 "Tool call failed",
                                 extra={"tool": tool_name, "error": str(exc), "class": failure_class.value},
                             )
+                            _tool_duration_ms = int((time.monotonic() - _t_tool) * 1000)
                             logger.info(
                                 "tool_call_end",
                                 extra={
@@ -619,10 +682,19 @@ async def dispatch(
                                     "tool": tool_name,
                                     "tool_use_id": tool_use_id,
                                     "turn": turn_count,
-                                    "duration_ms": int((time.monotonic() - _t_tool) * 1000),
+                                    "duration_ms": _tool_duration_ms,
                                     "outcome": "error",
                                     "failure_class": failure_class.value,
                                 },
+                            )
+                            emit_audit_event(
+                                session_id=session_id,
+                                provider_id=session_context.get("provider_id"),
+                                tool_name=tool_name,
+                                outcome="error",
+                                duration_ms=_tool_duration_ms,
+                                patient_id=tool_input.get("patient_id"),
+                                failure_class=failure_class.value,
                             )
 
                     tool_results.append(
@@ -719,7 +791,12 @@ async def dispatch(
                 "data": None,
                 "narrative": verification_result.physician_message,
                 "citations": [],
-                "metadata": {"verification_blocked": True},
+                "metadata": {
+                    "verification_blocked": True,
+                    "failure_class": ToolFailureClass.VERIFICATION_BLOCK.value,
+                    "error_class": ERROR_CLASS_PERSISTENT,
+                    "retry_suggested": False,
+                },
             }
 
         verified_response = verification_result.modified_response
