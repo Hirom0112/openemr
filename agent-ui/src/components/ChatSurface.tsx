@@ -6,11 +6,14 @@ import ResponseRenderer from './ResponseRenderer';
 import { RED, AMB, NEU, cardStyle, secondaryButtonStyle } from '../styles/tokens';
 import { resolvePatientPid } from '../utils/citations';
 
-function openChartForPatient(patientId: string): void {
-  const pid = resolvePatientPid(patientId);
+function openChartForPatient(patientId: string, openemrPid?: string): void {
+  // openemrPid is the numeric integer PID OpenEMR's set_pid requires.
+  // Fall back to resolvePatientPid for legacy pt-NNN synthetic IDs.
+  const pid = openemrPid ?? resolvePatientPid(patientId);
   if (!/^\d+$/.test(pid)) {
     console.warn('Cannot open chart: resolved pid is not a positive integer', {
       patient_id: patientId,
+      openemr_pid: openemrPid,
       resolved_pid: pid,
     });
     return;
@@ -30,42 +33,78 @@ function openChartForPatient(patientId: string): void {
 function chartPatientIdForResponse(
   response: AgentResponse | undefined,
   patientIdsInContext: string[],
-): string | null {
+): { patientId: string; openemrPid?: string } | null {
   if (!response) return null;
   if (response.type === 'census' || response.type === 'handoff' || response.type === 'error') {
     return null;
   }
-  const data = response.data as { patient_id?: unknown } | null | undefined;
+  const data = response.data as { patient_id?: unknown; openemr_pid?: unknown } | null | undefined;
+  const openemrPid = data && typeof data.openemr_pid === 'string' && data.openemr_pid
+    ? data.openemr_pid : undefined;
   if (data && typeof data.patient_id === 'string' && data.patient_id) {
-    return data.patient_id;
+    return { patientId: data.patient_id, openemrPid };
   }
   if (response.citations.length > 0 && response.citations[0].patient_id) {
-    return response.citations[0].patient_id;
+    return { patientId: response.citations[0].patient_id, openemrPid };
   }
   if (patientIdsInContext.length === 1) {
-    return patientIdsInContext[0];
+    return { patientId: patientIdsInContext[0], openemrPid };
   }
   return null;
 }
 
 const CENSUS_INIT_MESSAGE = '__census_summary__';
 
-function ThinkingDots() {
+// Progress messages timed against a typical 3-5s tool-chain. The user-visible
+// text is intentionally generic — these are perceived-progress hints, not real
+// dispatcher events (we have no streaming here). Each entry is shown for
+// ~1500ms; the final message stays put until the response actually arrives.
+const PROGRESS_MESSAGES: readonly string[] = [
+  'Working…',
+  'Looking up patient…',
+  'Pulling chart data…',
+  'Generating response…',
+  'Almost there…',
+];
+const PROGRESS_INTERVAL_MS = 1500;
+
+function ThinkingIndicator() {
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    setIndex(0);
+    const id = window.setInterval(() => {
+      setIndex((cur) => (cur < PROGRESS_MESSAGES.length - 1 ? cur + 1 : cur));
+    }, PROGRESS_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, []);
+
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, height: 16 }}>
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: '50%',
-            background: '#9ca3af',
-            display: 'inline-block',
-            animation: `copilot-pulse 1.2s ease-in-out ${i * 0.2}s infinite`,
-          }}
-        />
-      ))}
+    <span
+      role="status"
+      aria-live="polite"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        height: 16,
+        fontSize: 13,
+        color: NEU.secondary,
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          width: 12,
+          height: 12,
+          borderRadius: '50%',
+          border: `2px solid ${NEU.border}`,
+          borderTopColor: NEU.text,
+          display: 'inline-block',
+          animation: 'copilot-spin 0.8s linear infinite',
+        }}
+      />
+      <span>{PROGRESS_MESSAGES[index]}</span>
     </span>
   );
 }
@@ -566,9 +605,8 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     <>
       {/* Keyframe animation injected once */}
       <style>{`
-        @keyframes copilot-pulse {
-          0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
-          40% { opacity: 1; transform: scale(1); }
+        @keyframes copilot-spin {
+          to { transform: rotate(360deg); }
         }
       `}</style>
 
@@ -688,13 +726,13 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                         <span style={{ color: '#9ca3af' }}>…</span>
                       )}
                       {(() => {
-                        const chartPid = chartPatientIdForResponse(msg.response, patientIds);
-                        if (!chartPid) return null;
+                        const chartTarget = chartPatientIdForResponse(msg.response, patientIds);
+                        if (!chartTarget) return null;
                         return (
                           <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
                             <button
                               type="button"
-                              onClick={() => openChartForPatient(chartPid)}
+                              onClick={() => openChartForPatient(chartTarget.patientId, chartTarget.openemrPid)}
                               style={{
                                 fontSize: 11,
                                 fontWeight: 500,
@@ -722,7 +760,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
             <div style={styles.assistantRow}>
               <div style={styles.assistantAvatar} aria-hidden="true">AI</div>
               <div style={{ ...styles.assistantBubble, padding: '10px 14px' }}>
-                <ThinkingDots />
+                <ThinkingIndicator />
               </div>
             </div>
           )}
