@@ -551,6 +551,33 @@
         "method": "PUT",
         "url": "AllergyIntolerance/pt-003-allergy"
       }
+    },
+    {
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-003-codestatus",
+        "status": "final",
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "81638-3",
+              "display": "Code status"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-003"
+        },
+        "effectiveDateTime": "2026-05-01T08:00:00Z",
+        "valueCodeableConcept": {
+          "text": "Full Code"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-003-codestatus"
+      }
     }
   ]
 }

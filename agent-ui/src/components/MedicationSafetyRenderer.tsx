@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import type { Citation, MedicationSafetyData } from '../types';
 import { RED, AMB, NEU, MUTED } from '../styles/tokens';
 import { Header, SectionHeading, ClaimRow, Markdown, CitationFooter } from './primitives';
+import { formatFriendly, formatFriendlyWithSeconds } from '../utils/datetime';
 
 /**
  * Canary phrases the LLM narrative may carry that the structured
@@ -56,7 +57,7 @@ function CitationsList({ citations }: { citations: Citation[] }) {
       {citations.map((c, i) => (
         <li key={i} id={`copilot-citation-${i + 1}`} style={{ marginBottom: 2 }}>
           {c.value_summary}
-          {c.effective_datetime ? ` — ${c.effective_datetime.slice(0, 10)}` : ''}
+          {c.effective_datetime ? ` · ${c.effective_datetime.slice(0, 10)}` : ''}
         </li>
       ))}
     </ol>
@@ -104,11 +105,9 @@ export default function MedicationSafetyRenderer({ data, narrative, citations, p
       : ageMs > STALE_AMBER_MS ? AMB.text
       : MUTED;
 
-  const generatedTimeShort = generatedValid
-    ? generatedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : undefined;
+  const generatedTimeShort = generatedValid ? formatFriendly(generatedDate) : undefined;
   const generatedTooltip = generatedValid
-    ? `Last fetched from chart at ${generatedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} on ${generatedDate.toISOString().slice(0, 10)}`
+    ? `Last fetched from chart at ${formatFriendlyWithSeconds(generatedDate)}`
     : undefined;
 
   const isRefreshing = refreshingFrom !== null;

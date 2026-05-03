@@ -10,14 +10,17 @@ import {
   livePillStyle,
   admitBadgeStyle,
   severityColor,
+  tierChipStyle,
   NEU,
   MUTED,
+  SURFACE,
+  TYPE,
 } from '../../styles/tokens';
 import type { ColorToken, Severity } from '../../styles/tokens';
 import type { Citation } from '../../types';
 
 export function SectionHeading({ color, children }: { color: ColorToken; children: React.ReactNode }) {
-  return <div style={{ ...sectionHeadingStyle(color), marginBottom: 6, marginTop: 14 }}>{children}</div>;
+  return <div style={{ ...sectionHeadingStyle(color), marginBottom: 8, marginTop: 16 }}>{children}</div>;
 }
 
 export function ClaimRow({ color, children }: { color: ColorToken; children: React.ReactNode }) {
@@ -53,10 +56,10 @@ export function Header({
   meta?: ReactNode;
 }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
       <div>
-        <div style={{ fontSize: 15, fontWeight: 500, color: '#111' }}>{title}</div>
-        {subtitle && <div style={{ fontSize: 12, color: NEU.secondary, marginTop: 1 }}>{subtitle}</div>}
+        <div style={{ fontSize: 16, fontWeight: 600, color: SURFACE.fgStrong, letterSpacing: '-0.01em', lineHeight: 1.3 }}>{title}</div>
+        {subtitle && <div style={{ ...TYPE.body, fontSize: 12, color: SURFACE.muted, marginTop: 2 }}>{subtitle}</div>}
       </div>
       {(pill || meta) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -82,17 +85,49 @@ export function TierDot({ color }: { color: ColorToken }) {
   );
 }
 
-// Single metric card from the census summary strip.
+// Single metric card from the census summary strip. Big number, small muted
+// label below — scannable at a glance during rounds. The severity tint is
+// carried by metricCardStyle() so the row reads as a colored band.
 export function MetricCard({ label, count, color }: { label: string; count: number; color: ColorToken }) {
   return (
-    <li style={metricCardStyle(color)}>
-      <div style={{ fontSize: 11, fontWeight: 500, color: color.text, marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 500, color: color.text }}>{count}</div>
+    <li
+      style={{
+        ...metricCardStyle(color),
+        padding: '8px 6px 7px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 18,
+          fontWeight: 700,
+          lineHeight: 1.1,
+          color: color === NEU ? SURFACE.fgStrong : color.text,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {count}
+      </div>
+      <div
+        style={{
+          ...TYPE.caption,
+          fontWeight: 500,
+          color: color === NEU ? SURFACE.muted : color.secondary,
+          marginTop: 3,
+          textAlign: 'center',
+        }}
+      >
+        {label}
+      </div>
     </li>
   );
 }
 
-// 4-up CSS grid container of MetricCards.
+// CSS-grid container of MetricCards. Tighter gap than before — the row now
+// reads as a single cohesive metric strip rather than separated tiles.
 export function MetricStrip({
   items,
   ariaLabel,
@@ -107,10 +142,10 @@ export function MetricStrip({
       style={{
         display: 'grid',
         gridTemplateColumns: `repeat(${Math.max(items.length, 1)}, 1fr)`,
-        gap: 6,
+        gap: 4,
         listStyle: 'none',
         padding: 0,
-        margin: '0 0 4px',
+        margin: '0 0 8px',
       }}
     >
       {items.map((it) => (
@@ -118,6 +153,11 @@ export function MetricStrip({
       ))}
     </ul>
   );
+}
+
+// Tier chip ("P2", "P3") for the leading edge of a patient row.
+export function TierChip({ level, color }: { level: number | string; color: ColorToken }) {
+  return <span style={tierChipStyle(color)}>{`P${level}`}</span>;
 }
 
 // Generic patient row matching the census shape.
@@ -137,22 +177,41 @@ export function PatientRow({
   color: ColorToken;
 }) {
   return (
-    <div style={patientRowStyle(color)}>
+    <div
+      style={{
+        ...patientRowStyle(color),
+        padding: '10px 12px',
+        gap: 12,
+        marginBottom: 4,
+      }}
+    >
       {left !== undefined && (
-        <span style={{ fontSize: 11, fontWeight: 500, color: color.text, flexShrink: 0, minWidth: 22 }}>{left}</span>
+        typeof left === 'string' || typeof left === 'number'
+          ? <span style={{ fontSize: 11, fontWeight: 600, color: color.text, flexShrink: 0, minWidth: 22 }}>{left}</span>
+          : left
       )}
       <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 13, fontWeight: 500, color: color.text }}>{title}</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: color === NEU ? SURFACE.fg : color.text,
+              letterSpacing: '-0.005em',
+            }}
+          >
+            {title}
+          </span>
           {badges}
         </span>
         {subtitle !== undefined && (
           <span
             style={{
               display: 'block',
+              ...TYPE.body,
               fontSize: 12,
-              color: color.secondary,
-              marginTop: 1,
+              color: color === NEU ? SURFACE.muted : color.secondary,
+              marginTop: 2,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
@@ -354,6 +413,34 @@ export function SkeletonRow({ width, height }: { width?: number | string; height
   );
 }
 
+/**
+ * Insert newlines so single-line LLM tables parse as GFM tables.
+ *
+ * The LLM occasionally collapses a markdown table onto one line:
+ *   "| Category | Detail | |---|---| | row | val | | row2 | val2 |"
+ * react-markdown's table parser needs each row on its own line. Detect
+ * the table-start signature ("| header | ... | |---|---| ...") and split
+ * on " | " boundaries that follow each "|" cell-close.
+ */
+export function repairInlineMarkdownTables(input: string): string {
+  // Cheap pre-check — if there's no "|---|" at all, there are no tables.
+  if (!input.includes('|---|') && !/\|\s*-+\s*\|/.test(input)) return input;
+  // Walk each line; only rewrite lines that have a separator AND no \n
+  // inside the table region.
+  return input
+    .split('\n')
+    .map((line) => {
+      if (!/\|\s*-+/.test(line)) return line;
+      // Split on " | |" boundaries (cell-close + cell-open across rows),
+      // also handle "---| |" (separator -> next row). Keep the trailing
+      // pipe on each emitted row so GFM still parses.
+      // Strategy: insert \n before any "| " that follows a "| " preceded
+      // by another "|" — the "| |" sequence between rows.
+      return line.replace(/\|\s+\|/g, '|\n|').replace(/\|\s*$/g, '|');
+    })
+    .join('\n');
+}
+
 // ── Markdown narrative renderer ─────────────────────────────────────────────
 // Renders narrative text (model output that may include `##`, `**`, lists,
 // inline code) safely. Default escaping is on — no `rehype-raw`. Long URLs
@@ -370,6 +457,12 @@ export function Markdown({
 }) {
   void _citations;
   if (!narrative) return null;
+  // Repair LLM-produced markdown tables that were emitted on a single line
+  // (e.g. "| Category | Detail | |---|---| | row | val |" with no \n
+  // between rows). react-markdown's GFM table parser requires each row on
+  // its own line; without this fix the renderer leaves the raw pipes in
+  // the page and the table never materializes.
+  const cleaned = repairInlineMarkdownTables(narrative);
   return (
     <div
       style={{
@@ -447,7 +540,7 @@ export function Markdown({
           ),
         }}
       >
-        {narrative}
+        {cleaned}
       </ReactMarkdown>
     </div>
   );

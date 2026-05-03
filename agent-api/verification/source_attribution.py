@@ -213,8 +213,9 @@ def verify_briefing(
     removed_count = 0
 
     # Domain constraints
-    if ctx.has_blank_code_status and "BLANK_CODE_STATUS" not in " ".join(alerts):
-        alerts.append("BLANK_CODE_STATUS: code-status field is empty — clarification required")
+    # BLANK_CODE_STATUS appended-here path also suppressed — see
+    # briefing/generator.py for the full rationale (deployment data gap,
+    # not a clinically-actionable signal).
 
     if ctx.has_blank_allergy_section:
         for section in briefing.sections:

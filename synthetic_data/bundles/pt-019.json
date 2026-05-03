@@ -520,6 +520,33 @@
         "method": "PUT",
         "url": "Flag/pt-019-isolation"
       }
+    },
+    {
+      "resource": {
+        "resourceType": "Observation",
+        "id": "pt-019-codestatus",
+        "status": "final",
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "81638-3",
+              "display": "Code status"
+            }
+          ]
+        },
+        "subject": {
+          "reference": "Patient/pt-019"
+        },
+        "effectiveDateTime": "2026-05-01T08:00:00Z",
+        "valueCodeableConcept": {
+          "text": "Full Code"
+        }
+      },
+      "request": {
+        "method": "PUT",
+        "url": "Observation/pt-019-codestatus"
+      }
     }
   ]
 }

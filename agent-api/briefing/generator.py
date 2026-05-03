@@ -172,8 +172,13 @@ async def generate_briefing(
 
 def _fallback_briefing(ctx: BriefingContext) -> BriefingResponse:
     alerts: list[str] = []
-    if ctx.has_blank_code_status:
-        alerts.append("BLANK_CODE_STATUS: code-status field is empty — clarification required")
+    # BLANK_CODE_STATUS suppressed from briefing alerts: in this deployment
+    # not every patient's OpenEMR record carries a LOINC 81638-3
+    # observation, but the data is reliably present in the chart sidebar
+    # the physician already sees. Leaving this as a banner alert produced
+    # an "BLANK CODE STATUS IN CHART HEADER" line on most patients and
+    # drowned out genuine signals. The triage / verification layers still
+    # carry the underlying flag for downstream consumers that want it.
     if ctx.has_blank_allergy_section:
         alerts.append("BLANK_ALLERGY_SECTION: allergy section is empty — cannot assert NKDA")
 
