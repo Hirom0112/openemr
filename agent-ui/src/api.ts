@@ -174,9 +174,15 @@ export async function getBriefing(
   forceRefresh?: boolean,
 ): Promise<GetBriefingResult> {
   const t0 = performance.now();
+  // Include session_id so the backend persists this button-driven brief
+  // into the conversation history used by the dispatcher — without it,
+  // a subsequent "can she have tylenol?" can't resolve "she" because the
+  // button bypassed the dispatcher entirely.
+  const body: Record<string, unknown> = { session_id: sessionId };
+  if (forceRefresh) body.force_refresh = true;
   const result = await postWithMeta<import('./types').BriefingSection>(
     `/briefing/${patientId}`,
-    forceRefresh ? { force_refresh: true } : {},
+    body,
     90_000,
     onFirstByte,
   );
@@ -219,7 +225,11 @@ export async function getMedicationSafety(
   const timer = setTimeout(() => controller.abort(), 90_000);
   const clientRequestId = generateRequestId();
   try {
-    const res = await fetch(`${cfg().agentApiUrl}/medication/safety/${patientId}`, {
+    // Pass session_id so the backend can persist this button-driven action
+    // into conversation history (mirrors getBriefing — required for pronoun
+    // resolution in subsequent /agent/query calls).
+    const url = `${cfg().agentApiUrl}/medication/safety/${patientId}?session_id=${encodeURIComponent(sessionId)}`;
+    const res = await fetch(url, {
       method: 'GET',
       headers: { 'X-Request-ID': clientRequestId },
       signal: controller.signal,
