@@ -1,6 +1,6 @@
 import type { PatientSummary } from '../types';
 import { resolvePatientPid } from '../utils/citations';
-import { tierColor, primaryButtonStyle, secondaryButtonStyle, NEU, LINK_TINT } from '../styles/tokens';
+import { tierColor, primaryButtonStyle, secondaryButtonStyle, NEU, SURFACE, TYPE, LINK_TINT } from '../styles/tokens';
 
 interface PatientCardProps {
   patient: PatientSummary;
@@ -19,41 +19,42 @@ export default function PatientCard({ patient, rank, selected, onExpand, onSelec
       style={{
         display: 'flex',
         alignItems: 'flex-start',
-        gap: 8,
-        padding: '8px 10px',
-        marginBottom: 5,
+        gap: 10,
+        padding: '10px 12px',
+        marginBottom: 4,
         borderRadius: 6,
-        border: `1px solid ${NEU.border}`,
-        borderLeft: `3px solid ${color.border}`,
+        border: `1px solid ${color.border}`,
         background: selected ? LINK_TINT : color.bg,
         cursor: 'pointer',
       }}
     >
       <span
         style={{
-          minWidth: 26,
-          height: 26,
-          borderRadius: '50%',
+          minWidth: 28,
+          height: 22,
+          borderRadius: 4,
           background: color.border,
-          color: '#fff',
+          color: color === NEU ? SURFACE.fg : '#fff',
           fontSize: 11,
           fontWeight: 700,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           flexShrink: 0,
+          padding: '0 7px',
+          fontVariantNumeric: 'tabular-nums',
         }}
       >
         {rank}
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <strong style={{ fontSize: 13, color: color.text }}>{patient.name}</strong>
-          <span style={{ fontSize: 11, color: color.secondary, marginLeft: 6, flexShrink: 0 }}>
-            {patient.bed} &middot; <span style={{ color: color.text, fontWeight: 500 }}>{patient.priority}</span>
+          <strong style={{ fontSize: 13, fontWeight: 600, color: color === NEU ? SURFACE.fg : color.text }}>{patient.name}</strong>
+          <span style={{ fontSize: 11, color: color === NEU ? SURFACE.muted : color.secondary, marginLeft: 6, flexShrink: 0 }}>
+            {patient.bed} &middot; <span style={{ color: color === NEU ? SURFACE.fg : color.text, fontWeight: 600 }}>{patient.priority}</span>
           </span>
         </div>
-        <div style={{ fontSize: 12, color: color.secondary, marginTop: 2 }}>{patient.one_line}</div>
+        <div style={{ ...TYPE.body, fontSize: 12, color: color === NEU ? SURFACE.muted : color.secondary, marginTop: 2 }}>{patient.one_line}</div>
       </div>
       <button
         onClick={(e) => {

@@ -15,7 +15,7 @@ function CitationsList({ citations }: { citations: Citation[] }) {
       {citations.map((c, i) => (
         <li key={i} id={`copilot-citation-${i + 1}`} style={{ marginBottom: 2 }}>
           {c.value_summary}
-          {c.effective_datetime ? ` — ${c.effective_datetime.slice(0, 10)}` : ''}
+          {c.effective_datetime ? ` · ${c.effective_datetime.slice(0, 10)}` : ''}
         </li>
       ))}
     </ol>

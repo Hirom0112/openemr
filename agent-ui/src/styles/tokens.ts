@@ -64,6 +64,42 @@ export function sectionHeadingStyle(color: ColorToken): React.CSSProperties {
   return { textTransform: 'uppercase', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', color: color.text };
 }
 
+// Promoted census-section heading: larger, mixed-case, weighty. Pairs with a
+// leading TierDot so the eye lands on the section anchor before the rows.
+// Replaces the older uppercase 11px label inside CensusRenderer.
+export function censusSectionHeadingStyle(color: ColorToken): React.CSSProperties {
+  return {
+    fontSize: 14,
+    fontWeight: 600,
+    letterSpacing: '-0.005em',
+    color: color === NEU ? SURFACE.fg : color.text,
+    margin: 0,
+    lineHeight: 1.3,
+  };
+}
+
+// Tier chip used at the leading edge of a patient row (e.g. "P2" / "P3").
+// Carries the tier color visibly so triage rank reads at a glance — the
+// "triage-first hierarchy" principle made literal.
+export function tierChipStyle(color: ColorToken): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 30,
+    height: 22,
+    padding: '0 7px',
+    borderRadius: 4,
+    background: color.border,
+    color: color === NEU ? SURFACE.fg : '#FFFFFF',
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.02em',
+    flexShrink: 0,
+    fontVariantNumeric: 'tabular-nums',
+  };
+}
+
 export function summaryCardStyle(color: ColorToken): React.CSSProperties {
   return {
     background: color.bg,
