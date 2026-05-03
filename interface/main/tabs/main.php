@@ -628,6 +628,12 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
     (function () {
         try {
             var c = <?php echo $copilotConfigJson; ?>;
+            // Window-scoped guard to prevent double-fire when this script
+            // executes more than once in the same page context (observed
+            // 2× POST /agent/prefetch within 200ms). sessionStorage gates
+            // across page reloads but not in-page re-execution.
+            if (window.__copilotPrefetchFired) { return; }
+            window.__copilotPrefetchFired = true;
             function fire() {
                 try {
                     if (sessionStorage.getItem(c.flagKey) === '1') { return; }

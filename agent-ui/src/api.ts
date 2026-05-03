@@ -204,7 +204,7 @@ export async function getBriefing(
   // button bypassed the dispatcher entirely.
   const body: Record<string, unknown> = { session_id: sessionId };
   if (forceRefresh) body.force_refresh = true;
-  const result = await postWithMeta<import('./types').BriefingSection>(
+  const result = await postWithMeta<import('./types').BriefingSection & { summary?: string }>(
     `/briefing/${patientId}`,
     body,
     90_000,
@@ -218,10 +218,15 @@ export async function getBriefing(
     session_id: sessionId,
     extra: { patient_id: patientId },
   });
+  // Mirror the med-safety unification: lift the structured payload's
+  // top-level `summary` (LLM executive synthesis) into AgentResponse.narrative
+  // so the BriefingRenderer shows analysis prose above the section claims.
+  // Without this the button path looks bare compared to the typed-query path.
+  const { summary, ...data } = result.data ?? ({} as { summary?: string });
   const response: AgentResponse = {
     type: 'briefing',
-    data: result.data,
-    narrative: '',
+    data: data as import('./types').BriefingSection,
+    narrative: typeof summary === 'string' ? summary : '',
     citations: [],
   };
   return { response, requestId: result.requestId, durationMs };

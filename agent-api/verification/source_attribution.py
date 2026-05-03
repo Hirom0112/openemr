@@ -282,5 +282,6 @@ def verify_briefing(
         name=briefing.name,
         sections=verified_sections,
         alerts=alerts,
+        summary=briefing.summary,
         generated_at=briefing.generated_at,
     )
