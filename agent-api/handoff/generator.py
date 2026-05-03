@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -210,25 +211,35 @@ _CONCURRENCY = 4          # max parallel Anthropic calls
 _PATIENT_TIMEOUT = 25.0   # seconds per patient before returning error stub
 
 
+OnPatientComplete = Callable[[HandoffSummary], Awaitable[None]]
+
+
 async def generate_handoffs(
     patient_ids: list[str],
     langfuse: Langfuse | None = None,
     redis_client: aioredis.Redis | None = None,
+    on_patient_complete: OnPatientComplete | None = None,
 ) -> list[HandoffSummary]:
-    """Generate handoff summaries for all patients in parallel."""
+    """Generate handoff summaries for all patients in parallel.
+
+    When ``on_patient_complete`` is provided, the callback is awaited as soon
+    as each per-patient task settles (success or error stub). The callback
+    fires in completion order, not census order. The aggregate sorted list
+    is still returned for backward compatibility.
+    """
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
     sem = asyncio.Semaphore(_CONCURRENCY)
 
     async def _bounded(pid: str) -> HandoffSummary:
         async with sem:
             try:
-                return await asyncio.wait_for(
+                summary = await asyncio.wait_for(
                     _generate_one(pid, client, langfuse, redis_client),
                     timeout=_PATIENT_TIMEOUT,
                 )
             except asyncio.TimeoutError:
                 logger.warning("Handoff timed out", extra={"patient_id": pid})
-                return HandoffSummary(
+                summary = HandoffSummary(
                     patient_id=pid, name="Unknown", mrn="", triage_level=10,
                     illness_severity="Unknown",
                     patient_summary="Handoff timed out — review chart directly.",
@@ -236,6 +247,15 @@ async def generate_handoffs(
                     generated_at=datetime.now(timezone.utc).isoformat(),
                     error="timeout",
                 )
+        if on_patient_complete is not None:
+            try:
+                await on_patient_complete(summary)
+            except Exception as exc:
+                logger.warning(
+                    "on_patient_complete callback raised",
+                    extra={"patient_id": pid, "error": str(exc)},
+                )
+        return summary
 
     summaries = await asyncio.gather(*[_bounded(pid) for pid in patient_ids])
     result = list(summaries)

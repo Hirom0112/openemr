@@ -10,6 +10,7 @@ Exposes:
   POST /session/{id}/query           — UC-3: multi-turn targeted record query (legacy)
   GET  /medication/safety/{id}       — UC-4: medication safety surface (legacy)
   POST /handoff/generate             — UC-5: parallel handoff generation (legacy)
+  POST /handoff/generate/stream      — UC-5: per-patient SSE streaming handoff
   POST /agent/query                  — dispatcher: all use cases via tool_use loop
   POST /agent/triage_rationale/{id}  — direct-call triage rationale (click-to-expand)
   POST /session/{id}/message         — raw conversation turn (checkpointer)
@@ -23,8 +24,10 @@ import uuid
 from typing import Any
 
 import redis.asyncio as aioredis
+from dataclasses import asdict
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from langfuse import Langfuse
 from prometheus_client import Counter, Histogram, make_asgi_app
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -355,6 +358,7 @@ async def medication_safety(patient_id: str) -> dict:
 
 class HandoffRequest(BaseModel):
     patient_ids: list[str]
+    shift_end_time: str | None = None
 
 
 @app.post("/handoff/generate")
@@ -370,6 +374,101 @@ async def handoff_generate(body: HandoffRequest) -> dict:
     except Exception as exc:
         logger.error("Handoff generation failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="Handoff generation failed") from exc
+
+
+# ── UC-5 Streaming Handoff (per-patient SSE) ─────────────────────────────────
+#
+# Returns Server-Sent Events; each per-patient ``_generate_one`` completion
+# emits one ``handoff_chunk`` event so the UI can render incrementally
+# instead of blocking ~38 s for the full census.
+
+def _sse_format(event: str, data: dict[str, Any]) -> str:
+    import json as _json
+    return f"event: {event}\ndata: {_json.dumps(data, default=str)}\n\n"
+
+
+@app.post("/handoff/generate/stream")
+async def handoff_generate_stream(body: HandoffRequest) -> StreamingResponse:
+    if not body.patient_ids:
+        raise HTTPException(status_code=400, detail="patient_ids must not be empty")
+
+    from handoff.generator import HandoffSummary, generate_handoffs
+
+    queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+    started_at = time.monotonic()
+    counts = {"succeeded": 0, "failed": 0}
+
+    async def _on_complete(summary: HandoffSummary) -> None:
+        summary_dict = asdict(summary)
+        if summary.error:
+            counts["failed"] += 1
+            await queue.put((
+                "error",
+                {
+                    "patient_id": summary.patient_id,
+                    "error_class": "HandoffError",
+                    "message": summary.error,
+                    "summary": summary_dict,
+                },
+            ))
+        else:
+            counts["succeeded"] += 1
+            await queue.put((
+                "handoff_chunk",
+                {"patient_id": summary.patient_id, "summary": summary_dict},
+            ))
+
+    gather_task = asyncio.create_task(
+        generate_handoffs(
+            patient_ids=body.patient_ids,
+            langfuse=_langfuse,
+            redis_client=_redis,
+            on_patient_complete=_on_complete,
+        ),
+    )
+
+    async def _sentinel_when_done() -> None:
+        try:
+            await gather_task
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(
+                "Streaming handoff gather failed",
+                extra={"error": str(exc)},
+            )
+        finally:
+            await queue.put(None)
+
+    sentinel_task = asyncio.create_task(_sentinel_when_done())
+
+    async def _event_stream() -> Any:
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    duration_ms = int((time.monotonic() - started_at) * 1000)
+                    yield _sse_format(
+                        "done",
+                        {
+                            "total": len(body.patient_ids),
+                            "succeeded": counts["succeeded"],
+                            "failed": counts["failed"],
+                            "duration_ms": duration_ms,
+                        },
+                    )
+                    return
+                event_name, payload = item
+                yield _sse_format(event_name, payload)
+        finally:
+            if not gather_task.done():
+                gather_task.cancel()
+            if not sentinel_task.done():
+                sentinel_task.cancel()
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Triage rationale (direct-call, not dispatcher) ───────────────────────────
