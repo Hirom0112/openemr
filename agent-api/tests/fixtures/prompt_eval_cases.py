@@ -168,11 +168,11 @@ CASES: list[PromptEvalCase] = [
     ),
 
     # 2. Cold start: brief by name (auto-discover via census in session_context).
-    # NB: stubbed mode cannot chain census→briefing because the structured-
-    # response shortcut returns after the first structured tool.  We seed the
-    # census in session_context["patient_ids"] so the planner can issue the
-    # briefing call directly — which is the steady-state warm path live mode
-    # exercises after the first census of the morning.
+    # The dispatcher's structured-skip gate now requires the user's intent to
+    # match the structured response_type before short-circuiting, so chaining
+    # census→briefing is supported in live mode.  We still seed
+    # session_context["patient_ids"] here to keep the stubbed case minimal
+    # (single tool call) — it mirrors the steady-state warm path.
     PromptEvalCase(
         name="cold_start_brief_by_name",
         user_message="Brief Marcus Webb.",
@@ -477,10 +477,10 @@ CASES: list[PromptEvalCase] = [
 
     # G1.1 — Brief by name with bed reference. With census already loaded
     # in session_context (warm path: morning census ran first), the model
-    # should pick get_patient_briefing directly. The cold-start path
-    # (census not yet loaded) requires a census→briefing chain, but the
-    # dispatcher's structured-skip shortcut prevents chaining in a single
-    # request — see report for the recommended gate-script update.
+    # should pick get_patient_briefing directly. Cold-start chaining
+    # (census→briefing in a single request) is now supported by the
+    # dispatcher's intent-aware structured-skip gate, but this case stays
+    # on the warm path to keep stub turns minimal.
     PromptEvalCase(
         name="route_brief_by_name_bed_marcus",
         user_message="Brief me on Marcus Webb in bed 501.",
