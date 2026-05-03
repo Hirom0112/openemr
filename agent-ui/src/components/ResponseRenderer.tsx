@@ -50,6 +50,7 @@ export default function ResponseRenderer({ response, onBrief, onMeds, providerNa
           data={data as BriefingSection}
           narrative={narrative}
           citations={citations}
+          onBrief={onBrief}
         />
       );
     case 'query_answer':
