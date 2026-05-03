@@ -52,6 +52,7 @@ const SEVERE_PAIN_LEVEL = 7;
 const ABNORMAL_LAB_LEVELS = new Set([8]);
 const STABLE_CHRONIC_LEVEL = 9;
 const CODE_STATUS_LEVEL = 10;
+const ROUTINE_LEVEL = 11;
 const LAB_PREVIEW_COUNT = 4;
 
 interface CensusRendererProps {
@@ -169,6 +170,19 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, provi
   const severePain = census.filter(p => p.triage_level === SEVERE_PAIN_LEVEL);
   const abnormalLab = census.filter(p => ABNORMAL_LAB_LEVELS.has(p.triage_level));
   const codeStatus = census.filter(p => p.triage_level === CODE_STATUS_LEVEL);
+  const stableChronic = census.filter(p => p.triage_level === STABLE_CHRONIC_LEVEL);
+  const routine = census.filter(p => p.triage_level === ROUTINE_LEVEL);
+  const KNOWN_TIERS = new Set<number>([
+    ...IMMEDIATE_LEVELS,
+    CRITICAL_LAB_LEVEL,
+    ...CRITICAL_VITAL_LEVELS,
+    SEVERE_PAIN_LEVEL,
+    ...ABNORMAL_LAB_LEVELS,
+    CODE_STATUS_LEVEL,
+    STABLE_CHRONIC_LEVEL,
+    ROUTINE_LEVEL,
+  ]);
+  const other = census.filter(p => !KNOWN_TIERS.has(p.triage_level));
 
   const labVisible = labExpanded ? abnormalLab : abnormalLab.slice(0, LAB_PREVIEW_COUNT);
   const labHiddenCount = abnormalLab.length - LAB_PREVIEW_COUNT;
@@ -205,8 +219,12 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, provi
           { label: 'Immediate', count: immediate.length, color: RED },
           { label: 'Critical lab', count: criticalLab.length, color: RED },
           { label: 'Critical vital', count: criticalVital.length, color: AMB },
+          { label: 'Severe pain', count: severePain.length, color: AMB },
           { label: 'Code unverified', count: codeStatus.length, color: RED },
           { label: 'Abnormal lab', count: abnormalLab.length, color: AMB },
+          { label: 'Stable', count: stableChronic.length, color: NEU },
+          ...(routine.length > 0 ? [{ label: 'Routine', count: routine.length, color: NEU }] : []),
+          ...(other.length > 0 ? [{ label: 'Other', count: other.length, color: NEU }] : []),
         ]}
       />
 
@@ -259,7 +277,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, provi
           <CensusSectionHeading
             label="Abnormal lab · monitoring required"
             color={AMB}
-            aside={<span style={{ fontSize: 11, color: MUTED }}>{abnormalLab.length} patients</span>}
+            aside={<span style={{ fontSize: 11, color: MUTED }}>{abnormalLab.length} patient{abnormalLab.length !== 1 ? 's' : ''}</span>}
           />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             {labVisible.map(p => {
@@ -333,6 +351,42 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, provi
               Show {labHiddenCount} more ↓
             </button>
           )}
+        </section>
+      )}
+
+      {/* Active condition — stable */}
+      {stableChronic.length > 0 && (
+        <section aria-labelledby="tier-stable">
+          <CensusSectionHeading
+            label="Active condition — stable"
+            color={NEU}
+            aside={<span style={{ fontSize: 11, color: MUTED }}>{stableChronic.length} patient{stableChronic.length !== 1 ? 's' : ''}</span>}
+          />
+          {stableChronic.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={NEU} onBrief={onBrief} onMeds={onMeds} />)}
+        </section>
+      )}
+
+      {/* Routine */}
+      {routine.length > 0 && (
+        <section aria-labelledby="tier-routine">
+          <CensusSectionHeading
+            label="Routine"
+            color={NEU}
+            aside={<span style={{ fontSize: 11, color: MUTED }}>{routine.length} patient{routine.length !== 1 ? 's' : ''}</span>}
+          />
+          {routine.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={NEU} onBrief={onBrief} onMeds={onMeds} />)}
+        </section>
+      )}
+
+      {/* Other — surfaces unrecognized tiers so backend drift doesn't silently drop patients */}
+      {other.length > 0 && (
+        <section aria-labelledby="tier-other">
+          <CensusSectionHeading
+            label="Other"
+            color={NEU}
+            aside={<span style={{ fontSize: 11, color: MUTED }}>{other.length} patient{other.length !== 1 ? 's' : ''}</span>}
+          />
+          {other.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={NEU} onBrief={onBrief} onMeds={onMeds} />)}
         </section>
       )}
 
