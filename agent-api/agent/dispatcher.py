@@ -693,15 +693,17 @@ def _assistant_tool_use_names(message: dict[str, Any]) -> list[str]:
 
 
 def _trim_to_valid_prefix(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Walk forward until the messages slice starts with a valid user turn.
+    """Walk forward until the messages slice starts with a valid user turn,
+    drop trailing orphan assistant tool_use turns, AND drop any mid-stream
+    assistant tool_use whose ids lack matching tool_result blocks in the
+    immediately-following user turn.
 
-    Anthropic rejects sequences that start with an orphan ``tool_result``
-    (no preceding ``tool_use``) or with an ``assistant`` turn.  Drop leading
-    messages until the first message is a real user text turn.
-
-    Also drops a trailing assistant turn whose ``tool_use`` has no matching
-    user ``tool_result`` in the kept slice — that would leave the model in
-    the middle of a tool call.
+    Anthropic strictly enforces tool_use→tool_result pairing: every tool_use
+    id in an assistant turn must appear as a tool_use_id in the next user
+    turn's tool_result blocks. A mid-stream orphan (e.g. from a crashed
+    earlier dispatch that saved tool_use but never wrote its tool_result)
+    produces 400 invalid_request_error and surfaces as "An unexpected error"
+    to the physician.
     """
     start = 0
     while start < len(messages) and not _is_user_text(messages[start]):
@@ -710,7 +712,63 @@ def _trim_to_valid_prefix(messages: list[dict[str, Any]]) -> list[dict[str, Any]
     # Drop trailing orphan assistant tool_use.
     while trimmed and trimmed[-1].get("role") == "assistant" and _has_tool_use(trimmed[-1]):
         trimmed = trimmed[:-1]
-    return trimmed
+
+    # Mid-stream validity sweep: for every assistant turn carrying tool_use
+    # blocks, the next message must be a user turn whose tool_result blocks
+    # cover every tool_use id. Drop any assistant turn that fails this check
+    # (and any user tool_result turn left without a preceding tool_use).
+    valid: list[dict[str, Any]] = []
+    skip_next_orphan_result = False
+    for i, msg in enumerate(trimmed):
+        if skip_next_orphan_result:
+            skip_next_orphan_result = False
+            if msg.get("role") == "user" and _has_tool_result(msg) and not _has_user_text_block(msg):
+                continue  # skip the orphan tool_result that followed the dropped tool_use
+        if msg.get("role") == "assistant" and _has_tool_use(msg):
+            tool_use_ids = _assistant_tool_use_ids(msg)
+            nxt = trimmed[i + 1] if i + 1 < len(trimmed) else None
+            result_ids = _user_tool_result_ids(nxt) if nxt else set()
+            if not tool_use_ids.issubset(result_ids):
+                # Orphan tool_use — drop this assistant turn, and skip the
+                # next message if it's a half-matching tool_result.
+                skip_next_orphan_result = True
+                continue
+        valid.append(msg)
+    return valid
+
+
+def _assistant_tool_use_ids(msg: dict[str, Any]) -> set[str]:
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return set()
+    return {
+        b["id"]
+        for b in content
+        if isinstance(b, dict) and b.get("type") == "tool_use" and isinstance(b.get("id"), str)
+    }
+
+
+def _user_tool_result_ids(msg: dict[str, Any] | None) -> set[str]:
+    if not msg or msg.get("role") != "user":
+        return set()
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return set()
+    return {
+        b["tool_use_id"]
+        for b in content
+        if isinstance(b, dict) and b.get("type") == "tool_result" and isinstance(b.get("tool_use_id"), str)
+    }
+
+
+def _has_user_text_block(msg: dict[str, Any]) -> bool:
+    """True if a user message contains any text-typed block (vs purely tool_result)."""
+    content = msg.get("content")
+    if isinstance(content, str):
+        return True
+    if not isinstance(content, list):
+        return False
+    return any(isinstance(b, dict) and b.get("type") == "text" for b in content)
 
 
 def _select_context_bearing_indices(
