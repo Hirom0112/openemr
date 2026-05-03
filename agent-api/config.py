@@ -57,6 +57,16 @@ class Settings(BaseSettings):
     # confirmation after a deploy.
     copilot_diag: str = ""
 
+    # OpenEMR MySQL — used by the audit module to write rows into the
+    # OpenEMR `log` table for HIPAA audit trail. All settings overridable
+    # via env vars (OPENEMR_DB_HOST, etc). Defaults target the docker-compose
+    # mysql service.
+    openemr_db_host: str = "mysql"
+    openemr_db_port: int = 3306
+    openemr_db_name: str = "openemr"
+    openemr_db_user: str = "openemr"
+    openemr_db_password: str = ""
+
     # Phase 13 cutover flag — set to False once all cutover gates pass and the
     # legacy endpoints have been stable for one full release cycle.
     legacy_endpoints_enabled: bool = True

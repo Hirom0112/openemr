@@ -14,6 +14,8 @@ Anthropic client, ``patch.dict`` the tool registry).
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import sys
 from pathlib import Path
@@ -29,8 +31,10 @@ from agent import dispatcher  # noqa: E402
 from agent.dispatcher import dispatch  # noqa: E402
 from audit import openemr_log  # noqa: E402
 from audit.openemr_log import (  # noqa: E402
+    agent_audit_db_write_failures_total,
     agent_audit_events_total,
     emit_audit_event,
+    write_audit_row,
 )
 
 
@@ -345,6 +349,220 @@ async def test_dispatch_census_scope_block_emits_blocked_event() -> None:
     assert ev["failure_class"] == "census_scope_violation"
     # duration_ms is set to 0 for blocked-pre-call events.
     assert ev["duration_ms"] == 0
+
+
+# ── DB write tests ───────────────────────────────────────────────────────────
+
+
+def _db_failure_count() -> float:
+    return agent_audit_db_write_failures_total._value.get()  # type: ignore[attr-defined]
+
+
+class _FakeCursor:
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def __aenter__(self) -> "_FakeCursor":
+        return self
+
+    async def __aexit__(self, *exc_info: Any) -> None:
+        return None
+
+    async def execute(self, sql: str, params: tuple[Any, ...]) -> None:
+        self.executed.append((sql, params))
+
+
+class _FakeConn:
+    def __init__(self, cursor: _FakeCursor) -> None:
+        self._cursor = cursor
+
+    def cursor(self) -> _FakeCursor:
+        return self._cursor
+
+
+class _FakeAcquireCM:
+    def __init__(self, conn: _FakeConn) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> _FakeConn:
+        return self._conn
+
+    async def __aexit__(self, *exc_info: Any) -> None:
+        return None
+
+
+class _FakePool:
+    def __init__(self, cursor: _FakeCursor) -> None:
+        self._cursor = cursor
+
+    def acquire(self) -> _FakeAcquireCM:
+        return _FakeAcquireCM(_FakeConn(self._cursor))
+
+
+class _ExplodingPool:
+    def acquire(self) -> Any:
+        raise RuntimeError("pool exploded on acquire")
+
+
+@pytest.mark.hard_failure
+@pytest.mark.asyncio
+async def test_write_audit_row_inserts_expected_columns() -> None:
+    """Successful DB write issues the documented INSERT with mapped columns."""
+    cursor = _FakeCursor()
+    fake_pool = _FakePool(cursor)
+
+    async def _fake_get_pool() -> Any:
+        return fake_pool
+
+    with patch.object(openemr_log, "_get_pool", _fake_get_pool):
+        await write_audit_row(
+            session_id="sess-db-1",
+            provider_id="42",
+            tool_name="get_patient_briefing",
+            outcome="ok",
+            duration_ms=321,
+            patient_id="pt-001",
+            failure_class=None,
+        )
+
+    assert len(cursor.executed) == 1
+    sql, params = cursor.executed[0]
+    # Sanity-check the INSERT shape (column count, table).
+    assert "INSERT INTO log" in sql
+    assert sql.count("%s") == 9
+    # Column-by-column assertions: event, category, user, groupname,
+    # success, comments, crt_user, log_from, patient_id.
+    (event, category, user, groupname, success,
+     comments, crt_user, log_from, pid) = params
+    assert event == "get_patient_briefing"
+    assert category == "copilot"
+    assert user == "42"
+    assert groupname == "Default"
+    assert success == 1
+    parsed = json.loads(comments)
+    assert parsed["session_id"] == "sess-db-1"
+    assert parsed["duration_ms"] == 321
+    assert parsed["failure_class"] is None
+    assert crt_user == "42"
+    assert log_from == "copilot"
+    assert pid == "pt-001"
+
+
+@pytest.mark.hard_failure
+@pytest.mark.asyncio
+async def test_write_audit_row_swallows_pool_failure() -> None:
+    """Pool acquire raising must not propagate; counter increments; warn logged."""
+    before = _db_failure_count()
+    warn_logger = MagicMock()
+
+    async def _fake_get_pool() -> Any:
+        return _ExplodingPool()
+
+    with patch.object(openemr_log, "_get_pool", _fake_get_pool), \
+         patch.object(openemr_log, "_logger", warn_logger):
+        # MUST NOT RAISE
+        await write_audit_row(
+            session_id="sess-fail",
+            provider_id="p",
+            tool_name="get_patient_briefing",
+            outcome="ok",
+            duration_ms=10,
+        )
+
+    assert _db_failure_count() - before == 1.0
+    assert warn_logger.warning.called
+    args, _kwargs = warn_logger.warning.call_args
+    assert args[0] == "audit_db_write_failed"
+
+
+@pytest.mark.parametrize(
+    "outcome,expected",
+    [("ok", 1), ("error", 0), ("blocked", 0)],
+)
+@pytest.mark.hard_failure
+@pytest.mark.asyncio
+async def test_write_audit_row_outcome_to_success_column(
+    outcome: str, expected: int
+) -> None:
+    cursor = _FakeCursor()
+    fake_pool = _FakePool(cursor)
+
+    async def _fake_get_pool() -> Any:
+        return fake_pool
+
+    with patch.object(openemr_log, "_get_pool", _fake_get_pool):
+        await write_audit_row(
+            session_id="s",
+            provider_id="p",
+            tool_name="t",
+            outcome=outcome,  # type: ignore[arg-type]
+            duration_ms=1,
+        )
+
+    _, params = cursor.executed[0]
+    # success is the 5th column (index 4).
+    assert params[4] == expected
+
+
+@pytest.mark.hard_failure
+@pytest.mark.asyncio
+async def test_write_audit_row_patient_id_none_writes_null() -> None:
+    """Audit event without patient_id → DB row with patient_id=None (SQL NULL)."""
+    cursor = _FakeCursor()
+    fake_pool = _FakePool(cursor)
+
+    async def _fake_get_pool() -> Any:
+        return fake_pool
+
+    with patch.object(openemr_log, "_get_pool", _fake_get_pool):
+        await write_audit_row(
+            session_id="s",
+            provider_id="p",
+            tool_name="t",
+            outcome="ok",
+            duration_ms=1,
+            patient_id=None,
+        )
+
+    _, params = cursor.executed[0]
+    # patient_id is the 9th column (index 8).
+    assert params[8] is None
+
+
+@pytest.mark.hard_failure
+@pytest.mark.asyncio
+async def test_emit_audit_event_dual_logger_and_db() -> None:
+    """A single emit_audit_event triggers BOTH the structured logger and DB INSERT."""
+    cursor = _FakeCursor()
+    fake_pool = _FakePool(cursor)
+
+    async def _fake_get_pool() -> Any:
+        return fake_pool
+
+    with patch.object(openemr_log, "_audit_logger") as mock_log, \
+         patch.object(openemr_log, "_get_pool", _fake_get_pool):
+        emit_audit_event(
+            session_id="sess-dual",
+            provider_id="9",
+            tool_name="get_census_summary",
+            outcome="ok",
+            duration_ms=7,
+            patient_id="pt-001",
+        )
+        # Yield to let the create_task scheduled write_audit_row run.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    # Logger fired exactly once.
+    assert mock_log.info.call_count == 1
+    # DB INSERT fired exactly once.
+    assert len(cursor.executed) == 1
+    _, params = cursor.executed[0]
+    assert params[0] == "get_census_summary"  # event
+    assert params[2] == "9"                    # user (provider_id stringified)
+
+
+# ── existing autouse fixture preserved below ─────────────────────────────────
 
 
 # Cleanup: prevent a leaked logger handle from earlier patches affecting
