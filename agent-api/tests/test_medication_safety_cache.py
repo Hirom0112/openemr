@@ -47,7 +47,10 @@ _BUNDLE_FINGERPRINT = "2026-04-30T00:00:00+00:00"
 def _bundle(fingerprint: str = _BUNDLE_FINGERPRINT) -> dict[str, Any]:
     return {
         "resources": {
-            "MedicationRequest": [],
+            # At least one resource is non-empty so the bundle-cache
+            # transient-empty guard in agent/tools/__init__.py does not
+            # skip the write — these tests assert on bundle setex behavior.
+            "MedicationRequest": [{"id": "m-1"}],
             "AllergyIntolerance": [],
             "Observation": [],
         },
@@ -60,7 +63,10 @@ def _safety_report() -> MedicationSafetyReport:
         patient_id="8",
         flags=[],
         summary="No medication safety flags detected for the active medication list.",
-        medications_reviewed=0,
+        # >0 so the bundle-cache transient-empty guard does not skip the
+        # cache write — pipeline derives current_medications from bundle's
+        # MedicationRequest, which we seed in _bundle().
+        medications_reviewed=1,
         generated_at=_BUNDLE_FINGERPRINT,
     )
 

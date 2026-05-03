@@ -203,6 +203,26 @@ async def _set_cached_bundle(
     """
     if redis_client is None:
         return None
+    # Guard against caching a bundle that's a transient-failure artifact —
+    # the FHIR fanout runs ~8 searches per patient and under load OpenEMR
+    # occasionally returns empty bundles for several at once. If
+    # MedicationRequest, AllergyIntolerance, AND Condition all came back
+    # empty, the bundle is almost certainly partial — caching it for 2h
+    # would strand every downstream surface (briefing, med safety, query)
+    # with thin/empty answers until the fingerprint flips. Skip the write;
+    # the next call re-fetches.
+    resources = bundle.get("resources") or {}
+    suspicious = (
+        not (resources.get("MedicationRequest") or [])
+        and not (resources.get("AllergyIntolerance") or [])
+        and not (resources.get("Condition") or [])
+    )
+    if suspicious:
+        logger.info(
+            "bundle_cache_write_skipped_partial_fanout",
+            extra={"patient_id": patient_id},
+        )
+        return None
     fingerprint = datetime.now(timezone.utc).isoformat()
     # Stamp into the dict in-place so callers using the same dict downstream
     # see the same fingerprint. Safe — we only add an underscored key.
@@ -339,8 +359,11 @@ async def _set_cached_medication_safety(
     """
     if redis_client is None:
         return
-    meds = payload.get("current_medications") or []
-    allergies = payload.get("allergies") or []
+    # Look in result first (nested shape from get_medication_safety) then at
+    # the top level (flat shape from the /medication/safety/{id} endpoint).
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else payload
+    meds = result.get("current_medications") or []
+    allergies = result.get("allergies") or []
     if not meds and not allergies:
         logger.info(
             "medication_safety_cache_write_skipped_empty_bundle",

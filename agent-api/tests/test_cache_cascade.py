@@ -51,7 +51,9 @@ def _patient(pid: str = "pt-001") -> dict[str, Any]:
 
 def _bundle(marker: str = "fresh") -> dict[str, Any]:
     # Marker lets us detect whether a freshly-fetched bundle reached the cache.
-    return {"resources": {}, "_marker": marker}
+    # Non-empty resources so the bundle-cache transient-empty guard in
+    # agent/tools/__init__.py::_set_cached_bundle does not skip the write.
+    return {"resources": {"Condition": [{"id": "c-1"}]}, "_marker": marker}
 
 
 def _ctx() -> BriefingContext:

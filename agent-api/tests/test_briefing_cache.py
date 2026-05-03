@@ -37,7 +37,9 @@ def _run(coro: Any) -> Any:  # noqa: ANN401
 
 
 def _bundle() -> dict[str, Any]:
-    return {"resources": {}}
+    # Non-empty resources so the bundle-cache "transient-empty fanout" guard
+    # in agent/tools/__init__.py::_set_cached_bundle does not skip the write.
+    return {"resources": {"Condition": [{"id": "c-1"}]}}
 
 
 def _patient() -> dict[str, Any]:
