@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from 'react';
 import type { BriefingSection, BriefingResponseSection, Citation } from '../types';
 import { RED, AMB, NEU, MUTED } from '../styles/tokens';
 import type { ColorToken } from '../styles/tokens';
@@ -16,6 +17,7 @@ interface BriefingRendererProps {
   data: BriefingSection;
   narrative: string;
   citations: Citation[];
+  onBrief?: (patientName: string, patientId?: string) => void;
 }
 
 function CitationsList({ citations }: { citations: Citation[] }) {
@@ -58,8 +60,22 @@ function renderSection(sec: BriefingResponseSection) {
   );
 }
 
-export default function BriefingRenderer({ data, narrative, citations }: BriefingRendererProps) {
+export default function BriefingRenderer({ data, narrative, citations, onBrief }: BriefingRendererProps) {
   const count = citations?.length ?? 0;
+
+  // Track the generated_at value captured when the user clicked Refresh.
+  // When a fresh briefing arrives the parent re-renders this component with
+  // a new generated_at — that change clears the pending state.
+  const [refreshingFrom, setRefreshingFrom] = useState<string | null>(null);
+  const hoveredRef = useRef(false);
+  const [hovered, setHovered] = useState(false);
+  hoveredRef.current = hovered;
+
+  useEffect(() => {
+    if (refreshingFrom !== null && data?.generated_at && data.generated_at !== refreshingFrom) {
+      setRefreshingFrom(null);
+    }
+  }, [data?.generated_at, refreshingFrom]);
 
   if (!data?.sections) {
     return (
@@ -95,14 +111,42 @@ export default function BriefingRenderer({ data, narrative, citations }: Briefin
     ? `Last fetched from chart at ${generatedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} on ${generatedDate.toISOString().slice(0, 10)}`
     : undefined;
 
-  // TODO: wire to onBrief(data.name, data.patient_id) — callback isn't plumbed
-  // through ResponseRenderer → BriefingRenderer yet. Until then, "Refresh" is
-  // shown as muted hint text (not interactive) so it doesn't lie to the user.
+  const isRefreshing = refreshingFrom !== null;
+  const canRefresh = !!onBrief && !!data.patient_id && !!data.name && !isRefreshing;
+  const handleRefresh = () => {
+    if (!canRefresh || !onBrief) return;
+    setRefreshingFrom(data.generated_at ?? '');
+    onBrief(data.name, data.patient_id);
+  };
+  const refreshBtnStyle: React.CSSProperties = {
+    background: hovered && canRefresh ? '#f3f4f6' : 'transparent',
+    border: 'none',
+    padding: '0 4px',
+    margin: 0,
+    fontFamily: 'inherit',
+    fontSize: 11,
+    color: canRefresh ? MUTED : '#9ca3af',
+    cursor: canRefresh ? 'pointer' : 'not-allowed',
+    borderRadius: 4,
+    lineHeight: 'inherit',
+  };
   const freshnessMeta = generatedTimeShort ? (
     <span style={{ fontSize: 11, color: stalenessColor }}>
       <span title={generatedTooltip}>Data as of {generatedTimeShort}</span>
       <span style={{ color: MUTED }}>{'  ·  '}</span>
-      <span style={{ color: MUTED }}>Refresh</span>
+      <button
+        type="button"
+        onClick={handleRefresh}
+        disabled={!canRefresh}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onFocus={() => setHovered(true)}
+        onBlur={() => setHovered(false)}
+        aria-label={`Refresh briefing for ${data.name}`}
+        style={refreshBtnStyle}
+      >
+        {isRefreshing ? 'Refreshing…' : 'Refresh'}
+      </button>
     </span>
   ) : undefined;
 
