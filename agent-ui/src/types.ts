@@ -134,6 +134,16 @@ export interface HandoffPatient {
   active_issues: string[];
   pending_items: string[];
   escalation_triggers: string[];
+  /**
+   * When true, this entry is a placeholder while the per-patient handoff
+   * stream is still in flight. Renderer shows a "generating…" card.
+   */
+  pending?: boolean;
+  /**
+   * When set, the per-patient handoff failed and the renderer shows an
+   * error card with this message in place of the I-PASS sections.
+   */
+  error?: string;
 }
 
 export interface HandoffData {
