@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Citation, HandoffData, HandoffPatient } from '../types';
 import { RED, NEU, MUTED, AMB } from '../styles/tokens';
 import { SectionHeading, ClaimRow, PatientRow, Markdown, CitationFooter } from './primitives';
@@ -149,11 +149,55 @@ function HandoffPatientBlock({ patient, collapsed, onToggle }: HandoffPatientBlo
   );
 }
 
+function isDataReady(p: HandoffPatient): boolean {
+  // Placeholder rows carry pending=true; once the SSE chunk lands the
+  // dispatcher replaces the row with real data (pending falsy) or an error
+  // card. Either transition counts as "ready" — we want errors to auto-expand
+  // too so the failure message is visible.
+  return !p.pending;
+}
+
 export default function HandoffRenderer({ data, narrative, citations }: HandoffRendererProps) {
   const count = citations?.length ?? 0;
   const [collapsedPatients, setCollapsedPatients] = useState<Set<string>>(new Set());
+  const seenPatientsRef = useRef<Set<string>>(new Set());
+  const userTouchedIdsRef = useRef<Set<string>>(new Set());
+
+  const patients = data?.patients;
+
+  useEffect(() => {
+    if (!patients?.length) return;
+    setCollapsedPatients((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const p of patients) {
+        const id = p.patient_id;
+        if (!seenPatientsRef.current.has(id)) {
+          seenPatientsRef.current.add(id);
+          if (!userTouchedIdsRef.current.has(id)) {
+            // First sighting — collapse by default unless data is already
+            // present in the very first render (then leave expanded).
+            if (!isDataReady(p)) {
+              if (!next.has(id)) {
+                next.add(id);
+                changed = true;
+              }
+            }
+          }
+        } else if (isDataReady(p) && !userTouchedIdsRef.current.has(id)) {
+          // Data just arrived — auto-expand.
+          if (next.has(id)) {
+            next.delete(id);
+            changed = true;
+          }
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [patients]);
 
   const togglePatient = useCallback((patientId: string) => {
+    userTouchedIdsRef.current.add(patientId);
     setCollapsedPatients((prev) => {
       const next = new Set(prev);
       if (next.has(patientId)) {
@@ -167,12 +211,20 @@ export default function HandoffRenderer({ data, narrative, citations }: HandoffR
 
   const collapseAll = useCallback(() => {
     if (!data?.patients?.length) return;
+    for (const p of data.patients) {
+      userTouchedIdsRef.current.add(p.patient_id);
+    }
     setCollapsedPatients(new Set(data.patients.map((p) => p.patient_id)));
   }, [data]);
 
   const expandAll = useCallback(() => {
+    if (data?.patients?.length) {
+      for (const p of data.patients) {
+        userTouchedIdsRef.current.add(p.patient_id);
+      }
+    }
     setCollapsedPatients(new Set());
-  }, []);
+  }, [data]);
 
   if (!data?.patients?.length) {
     return (
