@@ -1167,4 +1167,101 @@ CASES: list[PromptEvalCase] = [
             ),
         ),
     ),
+
+    # 36. Encounter routing for "when was her last appointment".
+    # Guards commit 509bd8005: query router added an Encounter regex pattern
+    # so appointment-style questions resolve through query_patient_records
+    # instead of falling back to "I was unable to retrieve…".  The bug had
+    # appointment questions hit the wrong slice and surface the failure
+    # boilerplate even when records existed.
+    PromptEvalCase(
+        name="route_appointment_to_encounter_query",
+        conversation=[
+            _user_text("Brief Yvonne."),
+            _assistant_text("Briefing Yvonne (pt-008). Active problems: …"),
+        ],
+        user_message="When was her last appointment?",
+        session_context={"patient_ids": ["pt-008"]},
+        stub_assistant_turns=[
+            StubToolUse(
+                "query_patient_records",
+                {"patient_id": "pt-008", "query": "last appointment"},
+            ),
+            StubText("Yvonne's last documented appointment was on 2026-04-15."),
+        ],
+        stub_tool_results={
+            "query_patient_records": _query_payload(
+                "Last documented appointment: 2026-04-15 (follow-up)."
+            ),
+        },
+        expected=Expected(
+            tool_called=("query_patient_records",),
+            tool_input_contains={"query_patient_records": {"patient_id": "pt-008"}},
+            narrative_excludes=("i was unable to retrieve",),
+        ),
+    ),
+
+    # 37. Query LLM history filter: real answer when records exist.
+    # Guards commit d3edc9822 — UC-3 query LLM was inheriting the
+    # dispatcher's tool_use blocks via shared history → Anthropic 400 →
+    # 100% empty/fallback narratives.  Fix filters history to TEXT turns
+    # only.  The prior conversation seeds dispatcher tool_use into shared
+    # history (via the "Brief Marcus" turn); a regression would short-circuit
+    # to the failure boilerplate even though the tool returned a real answer.
+    PromptEvalCase(
+        name="query_returns_real_answer_when_records_exist",
+        conversation=[
+            _user_text("Brief Marcus Webb."),
+            _assistant_text("Briefing Marcus Webb (pt-001). Active problems: CHF…"),
+        ],
+        user_message="What conditions does Marcus have?",
+        session_context={"patient_ids": ["pt-001"]},
+        stub_assistant_turns=[
+            StubToolUse(
+                "query_patient_records",
+                {"patient_id": "pt-001", "query": "active conditions"},
+            ),
+            StubText("Marcus Webb's documented conditions include sepsis and pneumonia."),
+        ],
+        stub_tool_results={
+            "query_patient_records": _query_payload(
+                "Active conditions on file: Sepsis, Pneumonia, CHF."
+            ),
+        },
+        expected=Expected(
+            tool_called=("query_patient_records",),
+            narrative_contains=("sepsis",),
+            narrative_excludes=(
+                "i was unable to retrieve",
+                "please review the chart directly",
+            ),
+        ),
+    ),
+
+    # 38. Med safety analysis prose presence after structured-skip removal.
+    # Guards commit 5d84f8b28 — `medication_safety` was removed from
+    # `_STRUCTURED_RESPONSE_TYPES`, so the framing turn now runs and
+    # produces an "Analysis" prose section.  Without it, med-safety
+    # responses lose the contextual framing the user explicitly asked for.
+    PromptEvalCase(
+        name="med_safety_response_includes_analysis_prose",
+        user_message="What allergies does Marcus Webb have?",
+        session_context={"patient_ids": ["pt-001"]},
+        stub_assistant_turns=[
+            StubToolUse("get_medication_safety", {"patient_id": "pt-001"}),
+            StubText(
+                "Allergy data is incomplete for Marcus Webb — penicillin (hives) "
+                "is on file, but please verify in chart for any additional "
+                "documentation before clinical decisions."
+            ),
+        ],
+        stub_tool_results={
+            "get_medication_safety": _med_safety_payload("pt-001"),
+        },
+        expected=Expected(
+            tool_called=("get_medication_safety",),
+            tool_input_contains={"get_medication_safety": {"patient_id": "pt-001"}},
+            narrative_contains=("verify in chart",),
+        ),
+    ),
 ]
