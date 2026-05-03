@@ -138,6 +138,93 @@ def _simplify_for_llm(res: dict, resource_type: str) -> dict:
     return {k: v for k, v in out.items() if v}
 
 
+def _format_records_fallback(resource_type: str, simplified: list[dict], query: str) -> str:
+    """Deterministic answer when the LLM fails to summarise non-empty records.
+
+    Better to give the physician an honest structured listing than the
+    misleading "I was unable to retrieve" string. Format depends on
+    resource type — conditions get name + status, meds get name + dosage,
+    observations get name + value, etc.
+    """
+    if not simplified:
+        return ""
+    n = len(simplified)
+    if resource_type == "Condition":
+        lines = []
+        for r in simplified[:10]:
+            name = r.get("name") or "Unnamed condition"
+            status = r.get("clinical_status") or ""
+            onset = r.get("onset", "")[:10]
+            tail = []
+            if status:
+                tail.append(status)
+            if onset:
+                tail.append(f"onset {onset}")
+            suffix = f" ({', '.join(tail)})" if tail else ""
+            lines.append(f"- **{name}**{suffix}")
+        return f"{n} condition{'s' if n != 1 else ''} on file:\n" + "\n".join(lines)
+    if resource_type == "MedicationRequest":
+        lines = []
+        for r in simplified[:15]:
+            med = r.get("medication") or "Unnamed medication"
+            dosage = r.get("dosage") or ""
+            status = r.get("status") or ""
+            tail = []
+            if dosage:
+                tail.append(dosage)
+            if status and status != "active":
+                tail.append(status)
+            suffix = f" — {', '.join(tail)}" if tail else ""
+            lines.append(f"- **{med}**{suffix}")
+        return f"{n} medication{'s' if n != 1 else ''} on file:\n" + "\n".join(lines)
+    if resource_type == "Observation":
+        lines = []
+        for r in simplified[:15]:
+            name = r.get("name") or "Observation"
+            val = r.get("value") or ""
+            eff = r.get("effective", "")[:10]
+            interp = r.get("interpretation") or ""
+            tail = []
+            if val:
+                tail.append(val)
+            if eff:
+                tail.append(eff)
+            if interp:
+                tail.append(f"flag: {interp}")
+            suffix = f" — {', '.join(tail)}" if tail else ""
+            lines.append(f"- **{name}**{suffix}")
+        return f"{n} observation{'s' if n != 1 else ''} on file:\n" + "\n".join(lines)
+    if resource_type == "AllergyIntolerance":
+        lines = []
+        for r in simplified[:10]:
+            allergen = r.get("allergen") or "Unnamed allergen"
+            criticality = r.get("criticality") or ""
+            reaction = r.get("reaction") or ""
+            tail = []
+            if criticality:
+                tail.append(criticality)
+            if reaction:
+                tail.append(reaction)
+            suffix = f" ({', '.join(tail)})" if tail else ""
+            lines.append(f"- **{allergen}**{suffix}")
+        return f"{n} allerg{'ies' if n != 1 else 'y'} on file:\n" + "\n".join(lines)
+    if resource_type == "Encounter":
+        lines = []
+        for r in simplified[:10]:
+            etype = r.get("type") or r.get("class") or "Encounter"
+            start = r.get("start", "")[:10]
+            status = r.get("status", "")
+            tail = []
+            if start:
+                tail.append(start)
+            if status:
+                tail.append(status)
+            suffix = f" — {', '.join(tail)}" if tail else ""
+            lines.append(f"- **{etype}**{suffix}")
+        return f"{n} encounter{'s' if n != 1 else ''} on file:\n" + "\n".join(lines)
+    return f"{n} {resource_type} record{'s' if n != 1 else ''} on file (raw extract — verify in chart)."
+
+
 _SYSTEM = """You are a clinical record assistant for a rounding hospitalist.
 You have access to a patient's FHIR records.  Use the produce_query_answer tool
 to answer the physician's question using only the records provided.
@@ -259,14 +346,20 @@ class ConversationHandler:
                 tool_block = next((b for b in response.content if b.type == "tool_use"), None)
                 if tool_block is None:
                     logger.error("No tool_use block in UC-3 response", extra={"session_id": session_id})
-                    answer_text = "I was unable to retrieve an answer from the records. Please review the chart directly."
+                    answer_text = ""
                 else:
                     answer_text = tool_block.input.get("answer", "").strip()
-                    if not answer_text:
-                        answer_text = "I was unable to retrieve an answer from the records. Please review the chart directly."
             except Exception as exc:
                 logger.error("UC-3 LLM call failed", extra={"session_id": session_id, "error": str(exc)})
-                answer_text = "I was unable to retrieve an answer from the records. Please review the chart directly."
+                answer_text = ""
+
+            # Deterministic fallback: when the LLM returns empty (which it
+            # has been doing intermittently even with simplified records),
+            # build the answer ourselves from the simplified records the LLM
+            # already saw. The user gets useful structured info instead of
+            # the misleading "I was unable to retrieve" string.
+            if not answer_text and simplified:
+                answer_text = _format_records_fallback(query_route.resource, simplified, query)
 
         answer_text = verify_conversation_answer(answer_text, patient_id)
 
