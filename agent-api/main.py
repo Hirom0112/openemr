@@ -752,14 +752,12 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
         # EXISTS-checks before writing so re-mounts are cheap; when
         # effective_force_refresh is True the EXISTS check is skipped and
         # all three layers cascade-refresh against current FHIR state.
-        # 4-way fan-out: 12 was overwhelming OpenEMR's FHIR layer (each
-        # patient warm runs ~3 parallel sub-tasks of ~8 FHIR searches
-        # each, so 12-way meant 96+ concurrent requests). Empirically
-        # observed ~30% of warm calls failing with 500s, leaving caches
-        # cold so the user paid the full latency on the first Brief
-        # click. 4-way roughly triples warm wall time but caches actually
-        # populate, so click-time is sub-100ms instead of 5-15s.
-        sem = asyncio.Semaphore(4)
+        # 6-way fan-out: tuned empirically against this OpenEMR build.
+        # 12-way was ~15s warm but ~30% failures (50%+ of patients had
+        # cold caches → slow first Brief click). 4-way was 100% reliable
+        # but ~40s warm. 6-way targets the middle: ~25s warm with the
+        # FHIR layer staying within its tolerance.
+        sem = asyncio.Semaphore(6)
 
         async def _warm_one(pid: str, triage_rank: int | None, warmup_order: int) -> None:
             async with sem:
