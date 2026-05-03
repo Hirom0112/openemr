@@ -1343,6 +1343,273 @@ async def _try_briefing_fast_path(
     }
 
 
+# ── Deterministic targeted-query fast path ────────────────────────────────────
+#
+# Mirrors the briefing fast path: detect free-text targeted-query phrasings
+# ("what is the creatinine for Marcus", "Marcus's potassium",
+# "creatinine trend for Marcus", "when was last appointment for Delia") that
+# both (a) name a clinical concept and (b) reference exactly one census
+# patient, and dispatch ``query_patient_records`` directly without paying for
+# the LLM planner hop (~2 s saved per cold-start query).
+#
+# Same gates as the briefing fast path: cold-start only, exactly-one census
+# match required, all bail-outs return None and fall through to the LLM
+# dispatch loop.
+
+_QUERY_FAST_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # "what is/was the creatinine for Marcus"
+    re.compile(
+        r"^(?:what\s+(?:is|was)|show\s+me|tell\s+me)\s+(?:the\s+)?(.+?)\s+(?:for|of)\s+(.+?)\??$",
+        re.IGNORECASE,
+    ),
+    # "when was (the) last appointment for Delia"
+    re.compile(
+        r"^when\s+was\s+(?:the\s+)?last\s+(.+?)\s+(?:for|of)\s+(.+?)\??$",
+        re.IGNORECASE,
+    ),
+    # "creatinine trend for Marcus"
+    re.compile(
+        r"^(.+?)\s+trend\s+for\s+(.+?)\??$",
+        re.IGNORECASE,
+    ),
+    # "Marcus's potassium" / "Marcus' potassium" — note: patient FIRST, concept SECOND
+    re.compile(
+        r"^(?:show\s+me\s+)?(.+?)['’]s\s+(.+?)\??$",
+        re.IGNORECASE,
+    ),
+    # Generic "creatinine for Marcus" — kept last so more specific patterns win.
+    re.compile(
+        r"^(.+?)\s+for\s+(.+?)\??$",
+        re.IGNORECASE,
+    ),
+)
+
+# Pattern indices whose capture order is (patient, concept) rather than
+# (concept, patient). Possessive form is the only one that flips.
+_QUERY_PATTERN_PATIENT_FIRST: frozenset[int] = frozenset({3})
+
+# Words that must NOT appear inside the captured patient or concept slot —
+# they signal the message is too vague / not a targeted clinical query and
+# should fall through to the LLM. Keep this conservative.
+_QUERY_BAIL_TOKENS: frozenset[str] = frozenset({
+    "going on",
+    "happening",
+    "weather",
+    "everyone",
+    "anyone",
+    "everything",
+    "anything",
+})
+
+# When the message contains a command/action verb the LLM should handle it
+# (deflection, scheduling, writing, billing, etc.). The targeted-query fast
+# path is for read-only clinical lookups only.
+_QUERY_ACTION_TOKEN_RE: re.Pattern[str] = re.compile(
+    r"\b(?:submit|send|schedule|order|prescribe|write|create|make|file|claim|"
+    r"refill|cancel|update|delete|book|reschedule|approve|sign|bill|billing|"
+    r"can\s+you|could\s+you|would\s+you|will\s+you|please)\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_query_fast_path(message: str) -> tuple[str, str] | None:
+    """Return (patient_reference, query_string) when ``message`` matches a
+    targeted-query fast-path pattern with both a clinical concept AND a
+    patient reference cleanly extracted, else None.
+    """
+    trimmed = message.strip()
+    if not trimmed:
+        return None
+    lowered = trimmed.lower()
+    for token in _QUERY_BAIL_TOKENS:
+        if token in lowered:
+            return None
+    if _QUERY_ACTION_TOKEN_RE.search(trimmed):
+        return None
+    for idx, pattern in enumerate(_QUERY_FAST_PATH_PATTERNS):
+        match = pattern.match(trimmed)
+        if match is None:
+            continue
+        a = match.group(1).strip()
+        b = match.group(2).strip()
+        if not a or not b:
+            return None
+        if idx in _QUERY_PATTERN_PATIENT_FIRST:
+            patient_ref, concept = a, b
+        else:
+            concept, patient_ref = a, b
+        # Strip leading "the " from concept; trim leading "patient " on ref.
+        concept = re.sub(r"^the\s+", "", concept, flags=re.IGNORECASE).strip()
+        patient_ref = _LEADING_PATIENT_PREFIX_RE.sub("", patient_ref).strip()
+        if not concept or not patient_ref:
+            return None
+        # Bail when either slot is implausibly long (>60 chars) — most likely
+        # a free-form sentence the LLM should handle.
+        if len(concept) > 60 or len(patient_ref) > 60:
+            return None
+        return patient_ref, concept
+    return None
+
+
+async def _try_query_fast_path(
+    message: str,
+    session_id: str,
+    session_context: dict[str, Any],
+    history: list[dict[str, Any]],
+    t_start: float,
+) -> dict[str, Any] | None:
+    """Attempt the deterministic targeted-query fast path.
+
+    Returns a fully-formed ``query_answer`` response envelope on success, or
+    None to signal the caller should fall through to the LLM dispatch loop.
+    Never raises.
+    """
+    if history:
+        return None
+
+    detection = _detect_query_fast_path(message)
+    if detection is None:
+        return None
+    patient_ref, _concept = detection
+
+    if _PATIENT_ID_RE.match(patient_ref):
+        resolved_id: str | None = patient_ref.lower()
+    else:
+        census_tool = TOOL_REGISTRY.get("get_census_summary")
+        if census_tool is None:
+            return None
+        try:
+            census_payload = await census_tool(
+                {
+                    "provider_id": session_context.get("provider_id", "system"),
+                    "patient_ids": session_context.get("patient_ids", []) or [],
+                },
+                session_context,
+            )
+        except Exception as exc:
+            logger.info(
+                "dispatcher.query_fast_path_bail_census_error",
+                extra={
+                    "session_id": session_id,
+                    "error": str(exc),
+                    "reference": patient_ref,
+                },
+            )
+            return None
+        census_result = (
+            census_payload.get("result") if isinstance(census_payload, dict) else None
+        )
+        if not isinstance(census_result, dict):
+            return None
+        resolved_id = _resolve_patient_from_census(patient_ref, census_result)
+
+    if resolved_id is None:
+        logger.info(
+            "dispatcher.query_fast_path_bail_no_match",
+            extra={"session_id": session_id, "reference": patient_ref},
+        )
+        return None
+
+    query_tool = TOOL_REGISTRY.get("query_patient_records")
+    if query_tool is None:
+        return None
+
+    fast_path_duration_ms = int((time.monotonic() - t_start) * 1000)
+    logger.info(
+        "dispatcher.query_fast_path_dispatch",
+        extra={
+            "session_id": session_id,
+            "tool": "query_patient_records",
+            "patient_id": resolved_id,
+            "resolved_name": patient_ref,
+            "original_message": message[:120],
+            "duration_ms_so_far": fast_path_duration_ms,
+        },
+    )
+
+    _t_tool = time.monotonic()
+    try:
+        query_payload = await query_tool(
+            {"patient_id": resolved_id, "query": message},
+            session_context,
+        )
+    except Exception as exc:
+        logger.info(
+            "dispatcher.query_fast_path_bail_tool_error",
+            extra={
+                "session_id": session_id,
+                "error": str(exc),
+                "patient_id": resolved_id,
+            },
+        )
+        return None
+
+    if not isinstance(query_payload, dict):
+        return None
+
+    final_data: dict[str, Any] = query_payload.get("result") or {}
+    if not isinstance(final_data, dict):
+        return None
+    citations = query_payload.get("citations", []) or []
+    response_type = "query_answer"
+
+    answer_text = final_data.get("answer")
+    if not isinstance(answer_text, str):
+        answer_text = ""
+    final_narrative = _query_answer_narrative(
+        final_data, patient_id=resolved_id
+    )
+
+    tool_duration_ms = int((time.monotonic() - _t_tool) * 1000)
+
+    agent_fast_path_hits_total.labels(tool="query_patient_records").inc()
+    agent_tool_calls_total.labels(tool="query_patient_records").inc()
+    emit_audit_event(
+        session_id=session_id,
+        provider_id=session_context.get("provider_id"),
+        tool_name="query_patient_records",
+        outcome="ok",
+        duration_ms=tool_duration_ms,
+        patient_id=resolved_id,
+    )
+
+    # Persist a synthetic user/assistant pair so follow-ups have context.
+    # query_patient_records itself ALSO writes its own user/assistant turns
+    # into the per-patient ConversationHandler session — those live under a
+    # different session_id (effective_session) so they don't conflict with
+    # the dispatcher session history.
+    await _save_turn(session_id, session_context, "user", message)
+    await _save_turn(
+        session_id,
+        session_context,
+        "assistant",
+        [{"type": "text", "text": final_narrative}],
+    )
+
+    duration_s = time.monotonic() - t_start
+    duration_ms = int(duration_s * 1000)
+    agent_dispatch_latency_seconds.observe(duration_s)
+
+    fast_path_metadata: dict[str, Any] = {
+        "session_id": session_id,
+        "duration_ms": duration_ms,
+        "turn_count": 0,
+        "misroute_detected": False,
+        "self_corrected": False,
+        "verification_violations": [],
+        "fast_path": True,
+        "patient_id": resolved_id,
+    }
+
+    return {
+        "type": response_type,
+        "data": final_data,
+        "narrative": final_narrative,
+        "citations": citations,
+        "metadata": fast_path_metadata,
+    }
+
+
 # ── Main dispatcher ───────────────────────────────────────────────────────────
 
 async def dispatch(
@@ -1405,6 +1672,30 @@ async def dispatch(
             metadata={"fast_path": True},
         )
         return fast_path_response
+
+    # Targeted-query fast path — runs AFTER the briefing fast path so
+    # "brief Marcus Webb" is still claimed by briefing. Detects clear
+    # "what is X for Y" / "X trend for Y" / "Y's X" patterns and dispatches
+    # query_patient_records directly when the patient resolves to exactly
+    # one census entry. Bails to the LLM dispatch on any failure.
+    query_fast_path_response = await _try_query_fast_path(
+        message=message,
+        session_id=session_id,
+        session_context=session_context,
+        history=history,
+        t_start=t_start,
+    )
+    if query_fast_path_response is not None:
+        _finalize_span(
+            dispatch_span,
+            error=False,
+            output={
+                "type": query_fast_path_response["type"],
+                "duration_ms": query_fast_path_response["metadata"]["duration_ms"],
+            },
+            metadata={"fast_path": True, "tool": "query_patient_records"},
+        )
+        return query_fast_path_response
 
     await _save_turn(session_id, session_context, "user", message)
 

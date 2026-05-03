@@ -29,7 +29,10 @@ from verification.domain_constraints import verify_conversation_answer
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-sonnet-4-6"
+_MODEL = "claude-haiku-4-5-20251001"  # was claude-sonnet-4-6 — Haiku 4.5 is capable
+                                       # for the constrained-prompt query path; the
+                                       # simplified-records preprocess + deterministic
+                                       # fallback bound quality risk
 
 _EMPTY_NARRATIVES: dict[str, str] = {
     "Condition": "No active or documented conditions are on file in the chart.",

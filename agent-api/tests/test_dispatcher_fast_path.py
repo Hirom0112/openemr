@@ -367,3 +367,202 @@ async def test_pattern_non_match_skips_fast_path() -> None:
     # LLM path took over.
     assert fake_create.await_count >= 1
     assert result["metadata"].get("fast_path") is not True
+
+
+# ── Targeted-query fast path tests ────────────────────────────────────────────
+
+
+def _query_payload(answer: str = "Creatinine 1.2 mg/dL on 2026-04-01.") -> dict[str, Any]:
+    return {
+        "result": {
+            "answer": answer,
+            "route": {"resource": "Observation", "confidence": 0.9, "source": "fast"},
+            "records_fetched": 3,
+            "turn": 1,
+            "session_id": "qsess",
+        },
+        "citations": [{"resource_type": "Observation"}],
+        "metadata": {"tool": "query_patient_records"},
+    }
+
+
+@pytest.mark.hard_failure
+@pytest.mark.asyncio
+async def test_query_fast_path_what_is_pattern() -> None:
+    """'what is the creatinine for Marcus' → query_patient_records, type=query_answer."""
+    fake_create = AsyncMock()  # must NOT be called
+    fake_census = AsyncMock(
+        return_value=_census_payload([{"patient_id": "pt-001", "name": "Marcus Webb"}])
+    )
+    fake_query = AsyncMock(return_value=_query_payload())
+
+    before = _fast_path_counter("query_patient_records")
+    with patch.object(dispatcher._anthropic.messages, "create", fake_create), \
+         patch.dict(
+             dispatcher.TOOL_REGISTRY,
+             {
+                 "get_census_summary": fake_census,
+                 "query_patient_records": fake_query,
+             },
+             clear=False,
+         ):
+        result = await dispatch(
+            message="what is the creatinine for Marcus",
+            session_id="sess-qfp-whatis",
+            session_context={"provider_id": "prov-1", "patient_ids": []},
+        )
+
+    assert fake_create.await_count == 0, "Query fast path must not call Anthropic"
+    assert fake_query.await_count == 1
+    # Tool was called with the resolved patient_id and original query.
+    call_args = fake_query.await_args
+    assert call_args.args[0]["patient_id"] == "pt-001"
+    assert call_args.args[0]["query"] == "what is the creatinine for Marcus"
+    assert result["type"] == "query_answer"
+    assert result["data"]["answer"].startswith("Creatinine")
+    assert result["metadata"].get("fast_path") is True
+    assert _fast_path_counter("query_patient_records") - before == pytest.approx(1.0)
+
+
+@pytest.mark.hard_failure
+@pytest.mark.asyncio
+async def test_query_fast_path_possessive() -> None:
+    """'Marcus's potassium' → routes correctly with patient resolved first."""
+    fake_create = AsyncMock()
+    fake_census = AsyncMock(
+        return_value=_census_payload([{"patient_id": "pt-001", "name": "Marcus Webb"}])
+    )
+    fake_query = AsyncMock(return_value=_query_payload("Potassium 4.1 mEq/L."))
+
+    with patch.object(dispatcher._anthropic.messages, "create", fake_create), \
+         patch.dict(
+             dispatcher.TOOL_REGISTRY,
+             {
+                 "get_census_summary": fake_census,
+                 "query_patient_records": fake_query,
+             },
+             clear=False,
+         ):
+        result = await dispatch(
+            message="Marcus's potassium",
+            session_id="sess-qfp-poss",
+            session_context={"provider_id": "prov-1", "patient_ids": []},
+        )
+
+    assert fake_create.await_count == 0
+    assert fake_query.await_count == 1
+    assert fake_query.await_args.args[0]["patient_id"] == "pt-001"
+    assert result["type"] == "query_answer"
+    assert result["metadata"].get("fast_path") is True
+
+
+@pytest.mark.hard_failure
+@pytest.mark.asyncio
+async def test_query_fast_path_when_was_last() -> None:
+    """'when was last appointment for Delia' → routes to query_patient_records."""
+    fake_create = AsyncMock()
+    fake_census = AsyncMock(
+        return_value=_census_payload([{"patient_id": "pt-002", "name": "Delia Fontaine"}])
+    )
+    fake_query = AsyncMock(return_value=_query_payload("Last appointment 2026-03-15."))
+
+    with patch.object(dispatcher._anthropic.messages, "create", fake_create), \
+         patch.dict(
+             dispatcher.TOOL_REGISTRY,
+             {
+                 "get_census_summary": fake_census,
+                 "query_patient_records": fake_query,
+             },
+             clear=False,
+         ):
+        result = await dispatch(
+            message="when was last appointment for Delia",
+            session_id="sess-qfp-when",
+            session_context={"provider_id": "prov-1", "patient_ids": []},
+        )
+
+    assert fake_create.await_count == 0
+    assert fake_query.await_count == 1
+    assert fake_query.await_args.args[0]["patient_id"] == "pt-002"
+    assert result["type"] == "query_answer"
+    assert result["metadata"].get("fast_path") is True
+
+
+@pytest.mark.hard_failure
+@pytest.mark.asyncio
+async def test_query_fast_path_bails_when_ambiguous() -> None:
+    """'what's going on' → no clear patient + concept → falls through to LLM."""
+    # LLM path will be exercised; provide a planner response that ends quickly.
+    text_block = SimpleNamespace(text="ok")
+    text_block.type = "text"
+    framing = SimpleNamespace(
+        stop_reason="end_turn",
+        content=[text_block],
+        usage=SimpleNamespace(
+            input_tokens=1, output_tokens=1,
+            cache_read_input_tokens=0, cache_creation_input_tokens=0,
+        ),
+    )
+    fake_create = AsyncMock(side_effect=[framing])
+    fake_census = AsyncMock(side_effect=AssertionError("census must not run"))
+    fake_query = AsyncMock(side_effect=AssertionError("query tool must not run"))
+
+    with patch.object(dispatcher._anthropic.messages, "create", fake_create), \
+         patch.dict(
+             dispatcher.TOOL_REGISTRY,
+             {
+                 "get_census_summary": fake_census,
+                 "query_patient_records": fake_query,
+             },
+             clear=False,
+         ):
+        result = await dispatch(
+            message="what's going on",
+            session_id="sess-qfp-ambig",
+            session_context={"provider_id": "prov-1", "patient_ids": []},
+        )
+
+    # LLM took over.
+    assert fake_create.await_count >= 1
+    assert result["metadata"].get("fast_path") is not True
+
+
+@pytest.mark.hard_failure
+@pytest.mark.asyncio
+async def test_query_fast_path_bails_on_warm_session() -> None:
+    """Warm session (prior history) → cold-start gate keeps fast path off."""
+    text_block = SimpleNamespace(text="ok")
+    text_block.type = "text"
+    framing = SimpleNamespace(
+        stop_reason="end_turn",
+        content=[text_block],
+        usage=SimpleNamespace(
+            input_tokens=1, output_tokens=1,
+            cache_read_input_tokens=0, cache_creation_input_tokens=0,
+        ),
+    )
+    fake_create = AsyncMock(side_effect=[framing])
+    fake_census = AsyncMock(side_effect=AssertionError("census must not run"))
+    fake_query = AsyncMock(side_effect=AssertionError("query tool must not run"))
+
+    async def _fake_load(session_id: str, ctx: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"role": "user", "content": "earlier message"}]
+
+    with patch.object(dispatcher, "_load_history", _fake_load), \
+         patch.object(dispatcher._anthropic.messages, "create", fake_create), \
+         patch.dict(
+             dispatcher.TOOL_REGISTRY,
+             {
+                 "get_census_summary": fake_census,
+                 "query_patient_records": fake_query,
+             },
+             clear=False,
+         ):
+        result = await dispatch(
+            message="what is the creatinine for Marcus",
+            session_id="sess-qfp-warm",
+            session_context={"provider_id": "prov-1", "patient_ids": []},
+        )
+
+    assert fake_create.await_count >= 1
+    assert result["metadata"].get("fast_path") is not True
