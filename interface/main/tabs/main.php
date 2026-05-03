@@ -607,7 +607,11 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
         }
         if ($copilotProviderId > 0 && $copilotAgentUrl !== '' && $copilotPatientIds !== []) {
             $copilotSessionId = 'copilot-' . hash('sha256', $copilotProviderId . '|' . date('Y-m-d'));
-            $copilotPrefetchKey = 'copilot_prefetched_' . date('Y-m-d');
+            // 5-minute bucket so a page reload re-fires the prefetch after 5 min
+            // (matches census_cache_ttl). Per-day debounce was too sticky — once
+            // the script ran on the first reload of the morning, every subsequent
+            // reload skipped the prefetch and the user kept seeing stale data.
+            $copilotPrefetchKey = 'copilot_prefetched_' . date('Y-m-d-H') . '-' . str_pad((string) (intdiv((int) date('i'), 5) * 5), 2, '0', STR_PAD_LEFT);
             $copilotConfig = [
                 'agentApiUrl' => $copilotAgentUrl,
                 'sessionId'   => $copilotSessionId,
