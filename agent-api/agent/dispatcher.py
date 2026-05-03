@@ -891,18 +891,28 @@ def _apply_messages_cache_breakpoint(messages: list[dict[str, Any]]) -> None:
 
     Only mutates list-shaped content (rich blocks); plain-string messages are
     left alone since string content does not support cache_control.
+
+    Strips any prior cache_control from earlier messages first — the
+    multi-iteration tool loop calls this each time it dispatches, and
+    Anthropic caps cache_control at 4 blocks total (3 system + 1 prefix);
+    accumulating cache_control across loop iterations overflows the cap.
     """
     if len(messages) < 2:
         return
+    # Clear any cache_control left over from a prior iteration of the loop.
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and "cache_control" in block:
+                block.pop("cache_control", None)
     target = messages[-2]
     content = target.get("content")
     if not isinstance(content, list) or not content:
         return
     last_block = content[-1]
     if isinstance(last_block, dict):
-        # Don't double-up if a breakpoint already exists.
-        if last_block.get("cache_control"):
-            return
         last_block["cache_control"] = {"type": "ephemeral"}
 
 
