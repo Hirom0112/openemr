@@ -56,6 +56,88 @@ def _empty_records_narrative(resource: str) -> str:
     )
 
 
+def _simplify_for_llm(res: dict, resource_type: str) -> dict:
+    """Reduce a raw FHIR resource to the fields a clinician would read.
+
+    Raw FHIR is deeply nested (code.coding[0].display, clinicalStatus.coding[0].code,
+    valueQuantity.value/unit, etc.). The query LLM kept failing to extract
+    answers because it couldn't reliably navigate the nesting, then defaulted
+    to "I was unable to retrieve". Simplified flat dicts are unambiguous and
+    ~10x smaller per record (more records fit per turn budget too).
+    """
+    if not isinstance(res, dict):
+        return res
+
+    def _coding_display(field: dict | None) -> str:
+        if not isinstance(field, dict):
+            return ""
+        coding = (field.get("coding") or [{}])[0]
+        return coding.get("display") or field.get("text") or ""
+
+    def _status(field: dict | str | None) -> str:
+        if isinstance(field, str):
+            return field
+        if not isinstance(field, dict):
+            return ""
+        coding = (field.get("coding") or [{}])[0]
+        return coding.get("code") or coding.get("display") or ""
+
+    out: dict[str, str] = {"resource_type": resource_type}
+    if resource_type == "Condition":
+        out["name"] = _coding_display(res.get("code"))
+        out["clinical_status"] = _status(res.get("clinicalStatus"))
+        out["verification_status"] = _status(res.get("verificationStatus"))
+        out["onset"] = res.get("onsetDateTime") or res.get("recordedDate") or ""
+        out["category"] = _coding_display((res.get("category") or [{}])[0]) if isinstance(res.get("category"), list) and res.get("category") else ""
+    elif resource_type == "MedicationRequest":
+        med = res.get("medicationCodeableConcept") or {}
+        out["medication"] = _coding_display(med)
+        out["status"] = res.get("status", "")
+        out["intent"] = res.get("intent", "")
+        # Dosage instruction text is the most physician-readable form.
+        di = (res.get("dosageInstruction") or [{}])[0]
+        out["dosage"] = di.get("text", "")
+    elif resource_type == "Observation":
+        out["name"] = _coding_display(res.get("code"))
+        vq = res.get("valueQuantity") or {}
+        if vq:
+            out["value"] = f"{vq.get('value', '')} {vq.get('unit', '')}".strip()
+        elif res.get("valueString"):
+            out["value"] = res["valueString"]
+        elif res.get("valueCodeableConcept"):
+            out["value"] = _coding_display(res["valueCodeableConcept"])
+        out["effective"] = res.get("effectiveDateTime") or ""
+        # Reference range + interpretation flags help the LLM contextualize.
+        rr = (res.get("referenceRange") or [{}])[0]
+        if rr:
+            low = (rr.get("low") or {}).get("value")
+            high = (rr.get("high") or {}).get("value")
+            if low is not None or high is not None:
+                out["reference_range"] = f"{low or ''}-{high or ''}".strip("-")
+        interp = (res.get("interpretation") or [{}])
+        if interp and isinstance(interp, list):
+            out["interpretation"] = _coding_display(interp[0])
+    elif resource_type == "AllergyIntolerance":
+        out["allergen"] = _coding_display(res.get("code"))
+        out["clinical_status"] = _status(res.get("clinicalStatus"))
+        out["criticality"] = res.get("criticality", "")
+        rxn = (res.get("reaction") or [{}])[0]
+        if rxn:
+            out["reaction"] = _coding_display((rxn.get("manifestation") or [{}])[0])
+    elif resource_type == "Encounter":
+        out["status"] = res.get("status", "")
+        out["class"] = _coding_display(res.get("class"))
+        out["type"] = _coding_display((res.get("type") or [{}])[0]) if isinstance(res.get("type"), list) else ""
+        period = res.get("period") or {}
+        out["start"] = period.get("start", "")
+        out["end"] = period.get("end", "")
+    else:
+        # Unknown resource type — return as-is so the LLM has SOMETHING.
+        return res
+    # Drop empty values to keep the JSON tight.
+    return {k: v for k, v in out.items() if v}
+
+
 _SYSTEM = """You are a clinical record assistant for a rounding hospitalist.
 You have access to a patient's FHIR records.  Use the produce_query_answer tool
 to answer the physician's question using only the records provided.
@@ -145,7 +227,13 @@ class ConversationHandler:
             # extract clinical fields, then says "unable to retrieve"). Same
             # unwrap pattern as agent/tools/__init__.py for medications/labs.
             unwrapped = [r.get("resource", r) if isinstance(r, dict) else r for r in fhir_records[:30]]
-            fhir_context = json.dumps(unwrapped, indent=2)  # cap at 30 records per turn
+            # Simplify each resource to the handful of fields a clinician would
+            # read (name, status, dates, value if Observation). Raw FHIR is
+            # deeply nested and the LLM kept returning "unable to retrieve"
+            # because it couldn't reliably parse code.coding[0].display etc.
+            # The simplified records are ~10x smaller and unambiguous.
+            simplified = [_simplify_for_llm(r, query_route.resource) for r in unwrapped]
+            fhir_context = json.dumps(simplified, indent=2)  # cap at 30 records per turn
             user_content = (
                 f"<patient_data>\n"
                 f"FHIR {query_route.resource} records (patient {patient_id}):\n"
