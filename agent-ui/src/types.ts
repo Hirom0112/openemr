@@ -50,12 +50,26 @@ export interface Citation {
   claim_class: string;
 }
 
+export type ErrorClass = 'transient' | 'persistent' | 'missing_data' | 'unknown';
+
+export interface AgentResponseMetadata {
+  /** Coarse, user-facing category for the error. Set on type === 'error'. */
+  error_class?: ErrorClass;
+  /** Whether the UI should offer a Retry CTA. */
+  retry_suggested?: boolean;
+  /** If set, suggested wait time before retry (e.g. from a 429). */
+  retry_after_ms?: number;
+  /** Internal failure class (telemetry / support handle). */
+  failure_class?: string;
+  [key: string]: unknown;
+}
+
 export interface AgentResponse {
   type: 'census' | 'briefing' | 'query_answer' | 'medication_safety' | 'handoff' | 'text' | 'error';
   data: unknown;
   narrative: string;
   citations: Citation[];
-  metadata?: Record<string, unknown>;
+  metadata?: AgentResponseMetadata;
 }
 
 // ── Per-type data shapes ───────────────────────────────────────────────────────
