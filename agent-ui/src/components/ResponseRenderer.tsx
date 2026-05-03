@@ -32,9 +32,12 @@ interface ResponseRendererProps {
    *  Used by free-text renderers (query_answer, medication_safety) to render a
    *  prominent banner so the physician can confirm patient identity at a glance. */
   patientName?: string;
+  /** sessionId — passed through to CensusRenderer so it can poll
+   *  /agent/prefetch/status and surface ⚡/⏳ pills next to each row. */
+  sessionId?: string;
 }
 
-export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff, handoffInFlight, providerName, patientName, onRefreshCensus, onRefreshMedicationSafety }: ResponseRendererProps) {
+export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff, handoffInFlight, providerName, patientName, sessionId, onRefreshCensus, onRefreshMedicationSafety }: ResponseRendererProps) {
   const { type, data, narrative, citations } = response;
 
   if (type === 'error') {
@@ -58,6 +61,7 @@ export default function ResponseRenderer({ response, onBrief, onMeds, onHandoff,
           handoffInFlight={handoffInFlight}
           providerName={providerName}
           onRefresh={onRefreshCensus}
+          sessionId={sessionId}
         />
       );
     case 'briefing':

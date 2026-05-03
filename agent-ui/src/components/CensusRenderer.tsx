@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import type { CensusData, CensusPatient, Citation } from '../types';
 import { resolvePatientPid } from '../utils/citations';
 import { formatFriendly, formatFriendlyWithSeconds } from '../utils/datetime';
+import { getPrefetchStatus, type WarmStatus } from '../api';
 import DisclaimerIcon from './DisclaimerIcon';
 import { RED, AMB, NEU, MUTED, SURFACE, TYPE, primaryButtonStyle, secondaryButtonStyle, cardStyle, censusSectionHeadingStyle } from '../styles/tokens';
 import type { ColorToken } from '../styles/tokens';
@@ -71,6 +72,11 @@ interface CensusRendererProps {
    * the backend bypasses its Redis cache.
    */
   onRefresh?: () => void;
+  /**
+   * sessionId — used to poll /agent/prefetch/status for the per-row
+   * ⚡/⏳ pills. Optional; when absent the pills simply never appear.
+   */
+  sessionId?: string;
 }
 
 function extractTrigger(explanation: string): string {
@@ -105,7 +111,39 @@ function CensusSectionHeading({ label, color, aside }: { label: string; color: C
   );
 }
 
-function CensusPatientRow({ patient, color, onBrief, onMeds }: { patient: CensusPatient; color: ColorToken; onBrief: (name: string, patientId?: string) => void; onMeds: (name: string, patientId?: string) => void }) {
+type WarmStatusValue = 'pending' | 'warming' | 'warmed' | 'failed';
+
+function WarmDot({ status }: { status: WarmStatusValue | undefined }) {
+  // No status known yet (poll hasn't returned, or no warm in flight) →
+  // render nothing so we don't introduce noise on cold loads.
+  if (!status) return null;
+  const map: Record<WarmStatusValue, { color: string; label: string }> = {
+    pending: { color: '#9CA3AF', label: 'Queued for cache warm — Brief click will fetch on demand' },
+    warming: { color: '#F59E0B', label: 'Warming cache now — Brief click in a moment will be instant' },
+    warmed:  { color: '#10B981', label: 'Cache warmed — Brief and Meds clicks are instant' },
+    failed:  { color: '#EF4444', label: 'Cache warm failed — Brief click will fetch on demand' },
+  };
+  const { color, label } = map[status];
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      style={{
+        display: 'inline-block',
+        width: 7,
+        height: 7,
+        borderRadius: '50%',
+        background: color,
+        marginLeft: 6,
+        verticalAlign: 'middle',
+        // Subtle pulse while still warming so the eye catches the live state.
+        animation: status === 'warming' ? 'copilot-warm-pulse 1.4s ease-in-out infinite' : undefined,
+      }}
+    />
+  );
+}
+
+function CensusPatientRow({ patient, color, onBrief, onMeds, warmStatus }: { patient: CensusPatient; color: ColorToken; onBrief: (name: string, patientId?: string) => void; onMeds: (name: string, patientId?: string) => void; warmStatus?: WarmStatusValue }) {
   const trigger = extractTrigger(patient.explanation);
   const briefBtnStyle: React.CSSProperties = {
     flexShrink: 0, fontSize: 12, fontWeight: 600, padding: '6px 12px', minHeight: 30,
@@ -132,6 +170,7 @@ function CensusPatientRow({ patient, color, onBrief, onMeds }: { patient: Census
         <>
           {patient.name}
           <span style={{ fontSize: 11, fontWeight: 500, color: color === NEU ? SURFACE.subtle : color.secondary }}>#{patient.mrn.slice(0, 8)}</span>
+          <WarmDot status={warmStatus} />
         </>
       }
       badges={<AdmitBadge days={patient.days_since_admit} />}
@@ -177,7 +216,7 @@ function LabSeverityBadge({ level }: { level: number }) {
   return <Pill color={col} label={label} />;
 }
 
-export default function CensusRenderer({ data, citations, onBrief, onMeds, onHandoff, handoffInFlight, providerName, onRefresh }: CensusRendererProps) {
+export default function CensusRenderer({ data, citations, onBrief, onMeds, onHandoff, handoffInFlight, providerName, onRefresh, sessionId }: CensusRendererProps) {
   const [labExpanded, setLabExpanded] = useState(false);
 
   const census = data?.census ?? [];
@@ -198,6 +237,37 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
       setRefreshingFrom(null);
     }
   }, [data?.generated_at, refreshingFrom]);
+
+  // Per-patient warm status. Polls /agent/prefetch/status every 2s while
+  // any patient is still pending/warming, then stops to keep the request
+  // pressure flat. Best-effort — failures fall back to "no pill" so the
+  // census still renders normally.
+  const [warmMap, setWarmMap] = useState<Record<string, WarmStatus>>({});
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const tick = async () => {
+      try {
+        const result = await getPrefetchStatus(sessionId);
+        if (cancelled) return;
+        setWarmMap(result.patients);
+        const stillRunning = Object.values(result.patients).some(
+          (s) => s === 'pending' || s === 'warming',
+        );
+        if (stillRunning) {
+          timer = window.setTimeout(tick, 2000);
+        }
+      } catch {
+        // swallow — pills are non-critical
+      }
+    };
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [sessionId]);
 
   const generatedDate = data?.generated_at ? new Date(data.generated_at) : null;
   const generatedValid = generatedDate && !Number.isNaN(generatedDate.getTime());
@@ -259,6 +329,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
 
   return (
     <div style={{ ...TYPE.body, color: SURFACE.fg, fontFamily: 'inherit' }}>
+      <style>{`@keyframes copilot-warm-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }`}</style>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
         <div>
@@ -327,7 +398,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
       {immediate.length > 0 && (
         <section aria-labelledby="tier-immediate">
           <CensusSectionHeading label="Immediate attention" color={RED} />
-          {immediate.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} onMeds={onMeds} />)}
+          {immediate.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} onMeds={onMeds} warmStatus={warmMap[p.patient_id]} />)}
         </section>
       )}
 
@@ -335,7 +406,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
       {criticalLab.length > 0 && (
         <section aria-labelledby="tier-critical-lab">
           <CensusSectionHeading label="Critical lab: unacknowledged" color={RED} />
-          {criticalLab.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} onMeds={onMeds} />)}
+          {criticalLab.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} onMeds={onMeds} warmStatus={warmMap[p.patient_id]} />)}
         </section>
       )}
 
@@ -343,7 +414,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
       {criticalVital.length > 0 && (
         <section aria-labelledby="tier-critical">
           <CensusSectionHeading label="Critical vital sign" color={AMB} />
-          {criticalVital.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={AMB} onBrief={onBrief} onMeds={onMeds} />)}
+          {criticalVital.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={AMB} onBrief={onBrief} onMeds={onMeds} warmStatus={warmMap[p.patient_id]} />)}
         </section>
       )}
 
@@ -351,7 +422,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
       {severePain.length > 0 && (
         <section aria-labelledby="tier-pain">
           <CensusSectionHeading label="Severe pain" color={AMB} />
-          {severePain.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={AMB} onBrief={onBrief} onMeds={onMeds} />)}
+          {severePain.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={AMB} onBrief={onBrief} onMeds={onMeds} warmStatus={warmMap[p.patient_id]} />)}
         </section>
       )}
 
@@ -362,7 +433,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
           <div style={{ ...TYPE.caption, color: RED.secondary, marginBottom: 8, paddingLeft: 2 }}>
             Hard safety flag · verify before orders
           </div>
-          {codeStatus.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} onMeds={onMeds} />)}
+          {codeStatus.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={RED} onBrief={onBrief} onMeds={onMeds} warmStatus={warmMap[p.patient_id]} />)}
         </section>
       )}
 
@@ -457,7 +528,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
             color={NEU}
             aside={<span style={{ fontSize: 11, color: MUTED }}>{stableChronic.length} patient{stableChronic.length !== 1 ? 's' : ''}</span>}
           />
-          {stableChronic.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={NEU} onBrief={onBrief} onMeds={onMeds} />)}
+          {stableChronic.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={NEU} onBrief={onBrief} onMeds={onMeds} warmStatus={warmMap[p.patient_id]} />)}
         </section>
       )}
 
@@ -469,7 +540,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
             color={NEU}
             aside={<span style={{ fontSize: 11, color: MUTED }}>{routine.length} patient{routine.length !== 1 ? 's' : ''}</span>}
           />
-          {routine.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={NEU} onBrief={onBrief} onMeds={onMeds} />)}
+          {routine.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={NEU} onBrief={onBrief} onMeds={onMeds} warmStatus={warmMap[p.patient_id]} />)}
         </section>
       )}
 
@@ -481,7 +552,7 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
             color={NEU}
             aside={<span style={{ fontSize: 11, color: MUTED }}>{other.length} patient{other.length !== 1 ? 's' : ''}</span>}
           />
-          {other.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={NEU} onBrief={onBrief} onMeds={onMeds} />)}
+          {other.map(p => <CensusPatientRow key={p.patient_id} patient={p} color={NEU} onBrief={onBrief} onMeds={onMeds} warmStatus={warmMap[p.patient_id]} />)}
         </section>
       )}
 
