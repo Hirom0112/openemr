@@ -68,25 +68,121 @@ _STRUCTURED_RESPONSE_TYPES: frozenset[str] = frozenset({
 })
 
 
+# Canary phrases mandated verbatim by ``agent/system_prompt.py`` lines 143 and
+# 146.  Kept as module-level constants so a repo-wide grep finds both the
+# prompt rule and the runtime emission point.  When we skip the framing turn
+# for structured-renderer types we lose the LLM's chance to surface these
+# phrases in the narrative — so we synthesize them here from the structured
+# data so they reach conversation history (and any future text-mode follow-up)
+# in addition to the structured ``alerts`` array.
+_CANARY_BLANK_ALLERGIES = "Allergy data is incomplete — verify in the chart."
+_CANARY_BLANK_CODE_STATUS = "Code status not documented — verify before orders."
+
+
+def _briefing_canaries(data: dict[str, Any]) -> tuple[bool, bool]:
+    """Detect blank-allergies / blank-code-status flags in a briefing payload.
+
+    Briefing alerts are emitted as strings (see ``briefing/generator.py``)
+    using the ``BLANK_ALLERGY_SECTION`` / ``BLANK_CODE_STATUS`` tokens, but
+    the LLM-shaped briefing may use plain English instead.  Match either.
+    """
+    alerts = data.get("alerts") or []
+    blank_allergies = False
+    blank_code_status = False
+    for alert in alerts:
+        if not isinstance(alert, str):
+            continue
+        lowered = alert.lower()
+        if "blank_allergy" in lowered or "allerg" in lowered and (
+            "blank" in lowered or "incomplete" in lowered or "empty" in lowered or "missing" in lowered
+        ):
+            blank_allergies = True
+        if "blank_code_status" in lowered or "code status" in lowered and (
+            "blank" in lowered or "not documented" in lowered or "missing" in lowered or "empty" in lowered
+        ):
+            blank_code_status = True
+    return blank_allergies, blank_code_status
+
+
+def _medication_safety_canaries(data: dict[str, Any]) -> tuple[bool, bool]:
+    """Detect blank-allergies in a medication_safety payload.
+
+    Medication safety responses do not surface code status, so only the
+    allergy canary is in scope here.  An empty allergies list is treated
+    as "data incomplete" because medication-vs-allergy checks cannot be
+    asserted as safe with zero allergy entries.
+    """
+    if "allergies" not in data:
+        return False, False
+    allergies = data.get("allergies")
+    if allergies is None or (isinstance(allergies, list) and len(allergies) == 0):
+        return True, False
+    return False, False
+
+
+def _handoff_canaries(data: dict[str, Any]) -> tuple[bool, bool]:
+    """Detect blank-allergies / blank-code-status across handoff patients.
+
+    Aggregates per-patient blocks: if any patient block carries a blank
+    flag (via an ``alerts`` list or explicit blank fields), surface the
+    canary.  Handoff payload shapes vary across generator paths so we
+    match defensively on whichever fields are present.
+    """
+    blank_allergies = False
+    blank_code_status = False
+    patients = data.get("patients") or []
+    for patient in patients:
+        if not isinstance(patient, dict):
+            continue
+        per_alerts = patient.get("alerts") or []
+        for alert in per_alerts:
+            if not isinstance(alert, str):
+                continue
+            lowered = alert.lower()
+            if "blank_allergy" in lowered or "allergy data is incomplete" in lowered:
+                blank_allergies = True
+            if "blank_code_status" in lowered or "code status not documented" in lowered:
+                blank_code_status = True
+    return blank_allergies, blank_code_status
+
+
 def _structured_skip_narrative(response_type: str, final_data: dict[str, Any]) -> str:
     """Build a one-line placeholder narrative for a structured-renderer response.
 
     The renderer ignores this string, but downstream verification, history,
-    and observability all expect a non-None narrative.  Mirrors the previous
-    handoff-only shortcut.
+    and observability all expect a non-None narrative.  When the structured
+    data signals blank allergies or blank code status, the mandated canary
+    phrases from ``system_prompt.py`` are appended verbatim so the prompt
+    contract is preserved even though the framing turn is skipped.
     """
     if response_type == "handoff":
         total = final_data.get("total", len(final_data.get("patients", [])))
-        return f"Handoff generated for {total} patients."
-    if response_type == "census":
+        base = f"Handoff generated for {total} patients."
+        blank_allergies, blank_code_status = _handoff_canaries(final_data)
+    elif response_type == "census":
         patients = final_data.get("patients") or []
-        return f"Census summary generated for {len(patients)} patients."
-    if response_type == "briefing":
+        base = f"Census summary generated for {len(patients)} patients."
+        # Census aggregates many patients; per-patient allergy / code-status
+        # canaries belong on the briefing / medication_safety paths.
+        blank_allergies, blank_code_status = False, False
+    elif response_type == "briefing":
         patient_id = final_data.get("patient_id") or final_data.get("patientId") or "patient"
-        return f"Briefing generated for {patient_id}."
-    if response_type == "medication_safety":
-        return "Medication safety check generated."
-    return ""
+        base = f"Briefing generated for {patient_id}."
+        blank_allergies, blank_code_status = _briefing_canaries(final_data)
+    elif response_type == "medication_safety":
+        base = "Medication safety check generated."
+        blank_allergies, blank_code_status = _medication_safety_canaries(final_data)
+    else:
+        return ""
+
+    suffix_parts: list[str] = []
+    if blank_allergies:
+        suffix_parts.append(_CANARY_BLANK_ALLERGIES)
+    if blank_code_status:
+        suffix_parts.append(_CANARY_BLANK_CODE_STATUS)
+    if not suffix_parts:
+        return base
+    return base + " " + " ".join(suffix_parts)
 
 
 # ── Error contract ────────────────────────────────────────────────────────────
@@ -135,7 +231,11 @@ _RETRY_BY_ERROR_CLASS: dict[str, bool] = {
     ERROR_CLASS_TRANSIENT: True,
     ERROR_CLASS_PERSISTENT: False,
     ERROR_CLASS_MISSING_DATA: False,
-    ERROR_CLASS_UNKNOWN: True,
+    # ``unknown`` by definition gives no signal that retry will help.
+    # Defaulting to True invited pointless retry loops on persistent
+    # bugs, so we surface no retry affordance and let the physician
+    # fall back to the chart.
+    ERROR_CLASS_UNKNOWN: False,
 }
 
 
@@ -463,6 +563,11 @@ async def dispatch(
     final_narrative: str = ""
     final_data: dict[str, Any] | None = None
     response_type: str = "text"
+    # Track the most recent tool failure so the LLM-narrated final envelope
+    # can surface error_class / retry_suggested metadata for the UI.  Reset
+    # on any subsequent tool success so a "failed then recovered" dispatch
+    # returns a clean envelope.
+    last_tool_failure_class: ToolFailureClass | None = None
 
     try:
         while turn_count < MAX_TOOL_TURNS:
@@ -630,6 +735,9 @@ async def dispatch(
                         _t_tool = time.monotonic()
                         try:
                             tool_result = await _call_tool_with_retry(tool_fn, tool_input, session_context, tool_name)
+                            # Successful tool call clears any prior failure
+                            # signal so a recovered dispatch returns clean.
+                            last_tool_failure_class = None
                             all_citations.extend(tool_result.get("citations", []))
                             result_data = tool_result.get("result", {})
                             tool_result_content = json.dumps(result_data)
@@ -665,6 +773,7 @@ async def dispatch(
 
                         except Exception as exc:
                             failure_class = _classify_failure(exc)
+                            last_tool_failure_class = failure_class
                             tool_result_content = json.dumps(
                                 {"error": PHYSICIAN_ERROR_MESSAGES[failure_class]}
                             )
@@ -822,20 +931,57 @@ async def dispatch(
             },
         )
 
+        metadata: dict[str, Any] = {
+            "session_id": session_id,
+            "duration_ms": duration_ms,
+            "turn_count": turn_count,
+            "misroute_detected": misroute_detected,
+            "self_corrected": self_corrected,
+            "verification_violations": verification_result.violations,
+        }
+        # If a tool failure occurred during this dispatch and was NOT cleared
+        # by a subsequent successful call, surface the classification on the
+        # final (LLM-narrated) envelope so the UI can render the right Retry
+        # affordance.  The narrative still comes from the framing turn.
+        if last_tool_failure_class is not None:
+            error_class = _FAILURE_CLASS_TO_ERROR_CLASS.get(
+                last_tool_failure_class, ERROR_CLASS_UNKNOWN
+            )
+            metadata["failure_class"] = last_tool_failure_class.value
+            metadata["error_class"] = error_class
+            metadata["retry_suggested"] = _RETRY_BY_ERROR_CLASS.get(error_class, False)
+
         return {
             "type": response_type,
             "data": final_data,
             "narrative": final_narrative,
             "citations": all_citations,
-            "metadata": {
-                "session_id": session_id,
-                "duration_ms": duration_ms,
-                "turn_count": turn_count,
-                "misroute_detected": misroute_detected,
-                "self_corrected": self_corrected,
-                "verification_violations": verification_result.violations,
-            },
+            "metadata": metadata,
         }
+
+    except anthropic.RateLimitError as exc:
+        # Capture ``retry-after`` (seconds) from the upstream 429 so the UI
+        # can render an informed back-off.  Header may be absent; treat
+        # parse failures as "unknown back-off" rather than failing the
+        # request a second time.
+        retry_after_ms: int | None = None
+        try:
+            response = getattr(exc, "response", None)
+            header = response.headers.get("retry-after") if response is not None else None
+            if header is not None:
+                retry_after_ms = int(float(header) * 1000)
+        except (AttributeError, TypeError, ValueError):
+            retry_after_ms = None
+        logger.error(
+            "Dispatcher rate-limited",
+            extra={"session_id": session_id, "retry_after_ms": retry_after_ms},
+        )
+        _finalize_span(dispatch_span, error=True)
+        return _error_response(
+            ToolFailureClass.LLM_TIMEOUT,
+            "rate limited",
+            retry_after_ms=retry_after_ms,
+        )
 
     except Exception as exc:
         logger.error("Dispatcher error", extra={"session_id": session_id, "error": str(exc)})

@@ -11,7 +11,7 @@ Mapping found in ``agent-api/agent/dispatcher.py``::
     LLM_TIMEOUT        -> "transient"   retry_suggested=True
     TOOL_VALIDATION    -> "persistent"  retry_suggested=False
     VERIFICATION_BLOCK -> "persistent"  retry_suggested=False
-    UNKNOWN            -> "unknown"     retry_suggested=True
+    UNKNOWN            -> "unknown"     retry_suggested=False
 
 Note ``missing_data`` is reserved but currently unused on the failure
 path (no ToolFailureClass maps to it), so it is exercised here only by
@@ -99,12 +99,10 @@ _EXPECTED_RETRY: dict[ToolFailureClass, bool] = {
     ToolFailureClass.LLM_TIMEOUT: True,
     ToolFailureClass.TOOL_VALIDATION: False,
     ToolFailureClass.VERIFICATION_BLOCK: False,
-    # NOTE: UNKNOWN currently maps to retry_suggested=True.  This is the
-    # shipped behaviour — debatable on its merits since "unknown" by
-    # definition gives no signal that retry will help.  Keeping the
-    # assertion in lockstep with the implementation so a deliberate
-    # change still trips the test.
-    ToolFailureClass.UNKNOWN: True,
+    # UNKNOWN now maps to retry_suggested=False — "unknown" gives no
+    # signal that retry will help, defaulting to True invited pointless
+    # retry loops on persistent bugs.
+    ToolFailureClass.UNKNOWN: False,
 }
 
 
@@ -125,7 +123,8 @@ def test_failure_class_mapping_table(failure_class: ToolFailureClass) -> None:
         (ERROR_CLASS_TRANSIENT, True),
         (ERROR_CLASS_PERSISTENT, False),
         (ERROR_CLASS_MISSING_DATA, False),
-        (ERROR_CLASS_UNKNOWN, True),
+        # ``unknown`` no longer offers retry — see dispatcher comment.
+        (ERROR_CLASS_UNKNOWN, False),
     ],
 )
 @pytest.mark.hard_failure
@@ -190,7 +189,7 @@ async def test_dispatch_unhandled_exception_returns_unknown_error_envelope() -> 
     md = result["metadata"]
     assert md["failure_class"] == ToolFailureClass.UNKNOWN.value
     assert md["error_class"] == ERROR_CLASS_UNKNOWN
-    assert md["retry_suggested"] is True
+    assert md["retry_suggested"] is False
 
 
 @pytest.mark.hard_failure
@@ -224,14 +223,15 @@ async def test_dispatch_max_tokens_with_no_data_returns_llm_timeout_envelope() -
 
 @pytest.mark.hard_failure
 @pytest.mark.asyncio
-async def test_dispatch_tool_failure_does_not_short_circuit_to_error_envelope() -> None:
-    """Documented behaviour: when a tool raises, the dispatcher hands the
-    error to the LLM as a tool_result and lets it framing-narrate.  The
-    final envelope is NOT an error envelope and carries no error_class.
+async def test_dispatch_tool_failure_propagates_failure_class_to_envelope() -> None:
+    """When a tool raises, the dispatcher still lets the LLM narrate (no
+    short-circuit), but the final envelope ALSO carries error_class /
+    failure_class / retry_suggested so the UI can render the right Retry
+    affordance for the LLM-narrated error.
 
-    This is intentionally separate from the UNKNOWN/TIMEOUT envelope
-    tests above so a future change to short-circuit on tool-call errors
-    immediately surfaces here as a deliberate contract change.
+    Previously (before Fix 2/B) the metadata was silently dropped, leaving
+    the new ChatSurface error UI inert for tool failures.  Surfacing the
+    classification lets the UX match the underlying outcome.
     """
     tool_name = "query_patient_records"
     fake_create = AsyncMock(side_effect=[
@@ -248,11 +248,12 @@ async def test_dispatch_tool_failure_does_not_short_circuit_to_error_envelope() 
             session_context={"provider_id": "prov-1", "patient_ids": ["p1"]},
         )
 
+    # Type is the LLM-led free-text path, not "error" — narrative still wins.
     assert result["type"] != "error"
     md = result.get("metadata", {})
-    assert "error_class" not in md
-    assert "failure_class" not in md
-    assert "retry_suggested" not in md
+    assert md["failure_class"] == ToolFailureClass.FHIR_UNAVAILABLE.value
+    assert md["error_class"] == ERROR_CLASS_TRANSIENT
+    assert md["retry_suggested"] is True
 
 
 @pytest.mark.parametrize(
