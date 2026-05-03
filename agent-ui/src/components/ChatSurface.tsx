@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff } from '../api';
 import type { HandoffSummaryPayload } from '../api';
 import type { AgentResponse, ErrorClass, HandoffData, HandoffPatient } from '../types';
@@ -240,8 +240,17 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   const [hoveredHeaderId, setHoveredHeaderId] = useState<string | null>(null);
   const lastAssistantIdRef = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const censusDispatched = useRef(false);
   const censusContext = useRef<string | undefined>(undefined);
+  // Stick-to-bottom state. `isAtBottomRef` mirrors the state for synchronous
+  // reads inside the layout effect (avoids stale closure on rapid streaming
+  // chunks). `programmaticScrollRef` suppresses the scroll listener while we
+  // call scrollIntoView ourselves, preventing a feedback loop.
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const isAtBottomRef = useRef(true);
+  const programmaticScrollRef = useRef(false);
+  const [showNewMessagesPill, setShowNewMessagesPill] = useState(false);
 
   // When a NEW finalized assistant message arrives, collapse all prior assistant messages.
   // Census responses are exempt — they stay open as the persistent reference frame.
@@ -302,9 +311,62 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Track whether the user is at (or near) the bottom of the scroll container.
+  // 80px tolerance covers the case where a thinking indicator pushes content
+  // slightly above the true bottom while the user "feels" pinned.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const handleScroll = (): void => {
+      if (programmaticScrollRef.current) return;
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      const atBottom = distance < 80;
+      isAtBottomRef.current = atBottom;
+      setIsAtBottom(atBottom);
+      if (atBottom) setShowNewMessagesPill(false);
+    };
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Initial mount: jump to bottom (chats start at the latest message).
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    programmaticScrollRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    requestAnimationFrame(() => { programmaticScrollRef.current = false; });
+  }, []);
+
+  // Stick-to-bottom on new content, but only if the user hasn't scrolled up.
+  useLayoutEffect(() => {
+    if (isAtBottomRef.current) {
+      programmaticScrollRef.current = true;
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      // Release the suppression flag after the smooth scroll has had a chance
+      // to fire its scroll events. One rAF is enough — the listener early-exits
+      // while the flag is true and we re-derive `isAtBottom` on the next real
+      // user scroll.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => { programmaticScrollRef.current = false; });
+      });
+    } else {
+      setShowNewMessagesPill(true);
+    }
   }, [messages]);
+
+  const scrollToBottom = useCallback((): void => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    programmaticScrollRef.current = true;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    isAtBottomRef.current = true;
+    setIsAtBottom(true);
+    setShowNewMessagesPill(false);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => { programmaticScrollRef.current = false; });
+    });
+  }, []);
 
   const dispatchMessage = useCallback(async (text: string, isAutoDispatch = false) => {
     if (!isAutoDispatch) {
@@ -619,9 +681,43 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
         }
       `}</style>
 
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', minHeight: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', minHeight: 0, position: 'relative' }}>
+        {/* "↓ New messages" pill — only visible when content arrived while the
+            user was scrolled up. Click to resume pinning. */}
+        {showNewMessagesPill && !isAtBottom && (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            style={{
+              position: 'absolute',
+              bottom: 70,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 10,
+              padding: '6px 14px',
+              background: '#2c3e9e',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 16,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+              fontFamily: 'inherit',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            <span aria-hidden="true">↓</span>
+            <span>New messages</span>
+          </button>
+        )}
         {/* Message list */}
-        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 14px' }}>
+        <div
+          ref={scrollContainerRef}
+          style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 14px' }}
+        >
           {messages.map((msg) => {
             if (msg.role === 'system') {
               return (
