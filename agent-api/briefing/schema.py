@@ -36,6 +36,14 @@ class BriefingResponse(BaseModel):
     sections: list[BriefingSection] = Field(default_factory=list)
     alerts: list[str] = Field(
         default_factory=list,
-        description="Hard alerts that must always be shown: critical labs, blank code status, stale values.",
+        description="Hard alerts that must always be shown: critical labs, stale values.",
+    )
+    # Top-level synthesis paragraph rendered above the structured sections —
+    # mirrors medication_safety's `summary` field. Surfaces an executive
+    # 2-3 sentence narrative so the button path doesn't display only
+    # bullet-list claims with no framing.
+    summary: str = Field(
+        default="",
+        description="2-3 sentence executive synthesis of the patient's most important issues. Plain English. Not source-attributed.",
     )
     generated_at: str = Field(description="ISO-8601 UTC timestamp of generation.")

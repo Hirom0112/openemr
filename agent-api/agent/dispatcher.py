@@ -339,7 +339,14 @@ def _structured_skip_narrative(response_type: str, final_data: dict[str, Any]) -
         # canaries belong on the briefing / medication_safety paths.
         blank_allergies, blank_code_status = False, False
     elif response_type == "briefing":
-        base = _briefing_identity_summary(final_data)
+        # Prefer the LLM-generated executive summary so the typed-query
+        # path surfaces the same analysis prose as the button path. Falls
+        # back to the identity line when the tool produced no summary.
+        summary = final_data.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            base = summary.strip()
+        else:
+            base = _briefing_identity_summary(final_data)
         blank_allergies, blank_code_status = _briefing_canaries(final_data)
     elif response_type == "medication_safety":
         # Prefer the tool's LLM-generated ``summary`` so the dispatcher path

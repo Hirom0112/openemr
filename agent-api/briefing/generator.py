@@ -37,17 +37,21 @@ Rules you must follow without exception:
 1. Every clinical claim in your output must include source_resource, source_code, source_value, and source_dt from the data provided.
 2. Do not invent or extrapolate values. If a value is not in the data, omit it.
 3. Never say "no known allergies" if the allergy section is flagged as blank.
-4. Always include an alert for blank code status if present.
-5. Mark any critical value older than 30 minutes as potentially stale.
-6. Use the produce_briefing tool to return your response.
-7. Do not include clinical recommendations, treatment suggestions, or medication changes.
-8. Observations about a section being blank, absent, or undocumented (e.g. "allergy section is blank", "code status not documented", "no allergy entries on file") belong in the "alerts" array, NOT inside sections[*].claims. Claims are reserved for clinical facts derived from a specific FHIR resource entry; meta-observations about the absence of data are alerts.
+4. Mark any critical value older than 30 minutes as potentially stale.
+5. Use the produce_briefing tool to return your response.
+6. Do not include clinical recommendations, treatment suggestions, or medication changes.
+7. Observations about a section being blank, absent, or undocumented (e.g. "allergy section is blank", "no allergy entries on file") belong in the "alerts" array, NOT inside sections[*].claims. Claims are reserved for clinical facts derived from a specific FHIR resource entry; meta-observations about the absence of data are alerts.
+8. Do NOT generate alerts about code status — code status is rendered in a dedicated chart panel and the briefing alerts array must not duplicate it. If has_blank_code_status is true in the input, ignore it; do not surface it as an alert or claim.
 
 Sections requirement (do not skip):
 - The "sections" array is mandatory and must be populated whenever any of the following are present in the input: active_conditions, active_medications, recent_vitals, recent_labs, allergies. Do not return only an "alerts" array.
 - For each non-empty input category, emit a corresponding section (e.g. diagnosis, medications, vitals, labs, allergies) with at least one ClinicalClaim per fact, sourced from the input.
-- The "alerts" array is for safety flags (blank code status, blank allergies, stale critical values). It supplements sections; it does not replace them.
-- If a category in the input is empty, omit that section — do not fabricate placeholder claims."""
+- The "alerts" array is for safety flags (blank allergies, stale critical values). It supplements sections; it does not replace them.
+- If a category in the input is empty, omit that section — do not fabricate placeholder claims.
+
+Summary requirement:
+- Always populate the top-level "summary" field with a 2-3 sentence executive synthesis of the patient's most important issues (active diagnoses, key vitals/labs, sepsis/critical-event status, what the rounding clinician should focus on).
+- The summary is plain English and does NOT need source attribution — it is the clinician's narrative framing. Keep it specific to this patient using the input data."""
 
 
 def _render_prompt(ctx: BriefingContext) -> str:

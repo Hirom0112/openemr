@@ -53,11 +53,15 @@ PRODUCE_BRIEFING: dict[str, Any] = {
             "alerts": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Hard alerts: critical labs, blank code status, stale values.",
+                "description": "Hard alerts: critical labs, stale values. Do NOT include code-status alerts.",
+            },
+            "summary": {
+                "type": "string",
+                "description": "2-3 sentence executive synthesis of the patient's most important issues. Plain English. Not source-attributed.",
             },
             "generated_at": {"type": "string", "description": "ISO-8601 UTC timestamp."},
         },
-        "required": ["patient_id", "name", "sections", "alerts", "generated_at"],
+        "required": ["patient_id", "name", "sections", "alerts", "summary", "generated_at"],
         "additionalProperties": False,
     },
 }
