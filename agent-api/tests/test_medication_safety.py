@@ -3,8 +3,17 @@
 Covers 7 of the 47 required tests.
 """
 
+import asyncio
+import sys
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
 import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from medication.safety import run_safety_checks, MedicationSafetyReport
+from agent.tools import _normalize_patient_id
 
 
 def _med(name: str) -> dict:
@@ -80,3 +89,58 @@ class TestMedicationSafety:
         high_idx = severities.index("HIGH")
         info_idx = severities.index("INFO")
         assert high_idx < info_idx
+
+
+@pytest.mark.hard_failure
+class TestPatientIdNormalization:
+    """Verify the single-patient tool entry-point normalization helper.
+
+    Covers the 2026-05 latency fix: synthetic ``pt-NNN`` ids must collapse
+    to the OpenEMR pid form before the dispatcher's census-scope check or
+    downstream tools see them, eliminating the 6-12s misroute round-trip.
+    """
+
+    def test_synthetic_to_pid_strips_zero_pad(self):
+        assert _normalize_patient_id("pt-008", {}) == "8"
+        assert _normalize_patient_id("pt-2", {}) == "2"
+        assert _normalize_patient_id("pt-100", {}) == "100"
+
+    def test_already_pid_passes_through(self):
+        assert _normalize_patient_id("8", {}) == "8"
+        assert _normalize_patient_id("100", {}) == "100"
+
+    def test_uuid_passes_through_unchanged(self):
+        uuid = "9f86d081-884c-7d65-9b27-2bcccaf09c5a"
+        assert _normalize_patient_id(uuid, {}) == uuid
+
+    def test_none_returns_none(self):
+        assert _normalize_patient_id(None, {}) is None
+
+    def test_empty_string_returns_empty(self):
+        # Empty string is unrecognised but must not raise — the calling
+        # tool surfaces a clean validation error from its own input check.
+        assert _normalize_patient_id("", {}) == ""
+
+    def test_get_medication_safety_normalizes_synthetic_pid(self):
+        """End-to-end: pt-008 must resolve to "8" before fhir_client is called."""
+        from agent import tools as tools_mod
+
+        captured: dict[str, str] = {}
+
+        async def _fake_get_bundle(pid: str) -> dict:
+            captured["pid"] = pid
+            return {"resources": {"MedicationRequest": [], "AllergyIntolerance": [], "Observation": []}}
+
+        async def _fake_add_summary(report, langfuse=None):
+            return report
+
+        with patch.object(tools_mod.fhir_client, "get_bundle_for_patient", side_effect=_fake_get_bundle), \
+             patch("agent.tools.add_llm_summary", side_effect=_fake_add_summary):
+            asyncio.new_event_loop().run_until_complete(
+                tools_mod.get_medication_safety(
+                    {"patient_id": "pt-008"},
+                    {},
+                ),
+            )
+
+        assert captured["pid"] == "8", "synthetic pt-008 must normalize to OpenEMR pid '8'"

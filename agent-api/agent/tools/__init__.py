@@ -35,6 +35,7 @@ from agent.citation import Citation, CitationList, ClaimClass, citations_for_fhi
 from agent.metrics import (
     agent_data_cache_hits_total,
     agent_data_cache_misses_total,
+    agent_pid_normalization_total,
     agent_prewarm_runs_total,
 )
 from observability.tool_logging import CacheState, log_tool_outcome
@@ -53,6 +54,58 @@ from verification.domain_constraints import verify_conversation_answer, verify_s
 from verification.source_attribution import extract_citations, verify_briefing
 
 logger = logging.getLogger(__name__)
+
+
+# ── Patient-id normalization ─────────────────────────────────────────────────
+#
+# WHY: the LLM emits patient_id in synthetic FHIR-style (``pt-008``) because
+# the system prompt advertises that form, but the dispatcher's census-scope
+# check and several downstream tools historically expected the OpenEMR pid
+# (``"8"``).  When the forms disagreed the first tool call failed, the
+# dispatcher's self-correction loop kicked in, and the model spent 3-4 extra
+# turns retrying — costing 6-12s of wall-clock per query.  Normalizing once
+# at the entry of every single-patient tool collapses that to a single turn.
+#
+# Accepted forms:
+#   ``pt-008`` → ``"8"``    (synthetic FHIR-style, the common misroute)
+#   ``pt-2``   → ``"2"``
+#   ``"8"``    → ``"8"``    (already canonical)
+#   FHIR UUID  → unchanged  (fhir_client._resolve_patient_id handles it)
+#   None       → None       (caller errors gracefully)
+
+import re as _re  # local alias — module-level ``re`` import would shadow nothing
+
+_PT_SYNTHETIC = _re.compile(r"^pt-(\d+)$")
+
+
+def _normalize_patient_id(
+    raw: str | None,
+    session_context: dict[str, Any],  # noqa: ARG001 — reserved for future cohort lookups
+) -> str | None:
+    """Normalize a tool-input patient_id to the canonical OpenEMR pid string.
+
+    See the module-level comment for the rationale.  Increments
+    ``agent_pid_normalization_total`` so we can monitor which forms arrive in
+    production.  Never raises — unknown inputs are returned unchanged so the
+    downstream tool surfaces a clean error instead of crashing on the
+    normalization path itself.
+    """
+    if raw is None or raw == "":
+        agent_pid_normalization_total.labels(form="unknown").inc()
+        return raw  # let the tool's own validation surface the empty input
+
+    m = _PT_SYNTHETIC.match(raw)
+    if m is not None:
+        agent_pid_normalization_total.labels(form="synthetic_to_pid").inc()
+        return str(int(m.group(1)))  # strip the zero-pad: pt-008 → "8"
+
+    if raw.isdigit():
+        agent_pid_normalization_total.labels(form="already_pid").inc()
+        return raw
+
+    # Anything else (UUIDs, FHIR-style ids) we leave to fhir_client._resolve_patient_id.
+    agent_pid_normalization_total.labels(form="uuid_to_pid").inc()
+    return raw
 
 
 # ── Citation helpers ──────────────────────────────────────────────────────────
@@ -463,6 +516,11 @@ async def get_patient_briefing(
 ) -> dict[str, Any]:
     t0 = time.monotonic()
     patient_id: str = input["patient_id"]
+    # Briefing intentionally does NOT normalize: its Redis cache keys
+    # (``copilot:briefing:{patient_id}``) are stable on whatever form the
+    # caller passed in, and both forms route to the same FHIR data via
+    # ``fhir_client._resolve_patient_id``. Normalizing here would split the
+    # cache between ``copilot:briefing:pt-008`` and ``copilot:briefing:8``.
     force_refresh: bool = bool(input.get("force_refresh", False))
     langfuse = session_context.get("langfuse")
     redis_client: aioredis.Redis | None = session_context.get("redis_client")
@@ -569,7 +627,8 @@ async def query_patient_records(
     session_context: dict[str, Any],
 ) -> dict[str, Any]:
     t0 = time.monotonic()
-    patient_id: str = input["patient_id"]
+    patient_id_raw: str = input["patient_id"]
+    patient_id = _normalize_patient_id(patient_id_raw, session_context) or patient_id_raw
     query: str = input["query"]
     session_id: str | None = session_context.get("session_id")
 
@@ -615,11 +674,18 @@ async def get_medication_safety(
     session_context: dict[str, Any],
 ) -> dict[str, Any]:
     t0 = time.monotonic()
-    patient_id: str = input["patient_id"]
+    patient_id_raw: str = input["patient_id"]
+    patient_id = _normalize_patient_id(patient_id_raw, session_context) or patient_id_raw
     medication_name: str | None = input.get("medication_name")
     langfuse = session_context.get("langfuse")
+    redis_client: aioredis.Redis | None = session_context.get("redis_client")
 
-    bundle = await fhir_client.get_bundle_for_patient(patient_id)
+    # Bundle cache mirrors the briefing tool's read-through pattern so this
+    # tool no longer triggers a fresh 8-search FHIR fanout per call.
+    bundle = await _get_cached_bundle(redis_client, patient_id)
+    if bundle is None:
+        bundle = await fhir_client.get_bundle_for_patient(patient_id)
+        await _set_cached_bundle(redis_client, patient_id, bundle)
     resources = bundle.get("resources", {})
     meds = [e.get("resource", e) for e in resources.get("MedicationRequest", [])]
     allergies = [e.get("resource", e) for e in resources.get("AllergyIntolerance", [])]
@@ -761,9 +827,16 @@ async def get_triage_rationale(
     Recomputes triage criteria + rationale for the given patient.
     """
     t0 = time.monotonic()
-    patient_id: str = input["patient_id"]
+    patient_id_raw: str = input["patient_id"]
+    patient_id = _normalize_patient_id(patient_id_raw, session_context) or patient_id_raw
+    redis_client: aioredis.Redis | None = session_context.get("redis_client")
 
-    bundle = await fhir_client.get_bundle_for_patient(patient_id)
+    # Bundle cache mirrors the briefing tool — keeps this direct-call endpoint
+    # off the FHIR critical path when the census already warmed the bundle.
+    bundle = await _get_cached_bundle(redis_client, patient_id)
+    if bundle is None:
+        bundle = await fhir_client.get_bundle_for_patient(patient_id)
+        await _set_cached_bundle(redis_client, patient_id, bundle)
     criteria = extract_criteria(bundle)
     triage_result = rank(criteria)
 

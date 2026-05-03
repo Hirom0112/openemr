@@ -104,6 +104,19 @@ agent_checkpointer_op_duration_seconds = Histogram(
     buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
 )
 
+# ── Patient-id normalization counter ─────────────────────────────────────────
+# Increments at the entry point of every single-patient tool. The ``form``
+# label tracks which input form the dispatcher passed in:
+#   synthetic_to_pid → ``pt-008`` → ``8``  (most common misroute source)
+#   already_pid      → ``8``                (canonical, no work needed)
+#   uuid_to_pid      → FHIR UUID            (passed through to fhir_client)
+#   unknown          → empty / unrecognised input
+agent_pid_normalization_total = Counter(
+    "agent_pid_normalization_total",
+    "Patient-id forms arriving at single-patient tools",
+    ["form"],
+)
+
 # ── Census fan-out drop counter ──────────────────────────────────────────────
 # Increments every time _build_entry returns None for a patient (transient
 # FHIR failure). Surfaces silent census shrinkage that previously caused
