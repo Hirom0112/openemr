@@ -84,6 +84,13 @@ class BriefingContext:
     has_blank_allergy_section: bool
     has_blank_code_status: bool
     fetched_at: str          # ISO-8601 UTC timestamp
+    # Age computed from DOB at context-build time. Pre-computed so the LLM
+    # never has to do date arithmetic in the prompt — that produced an
+    # off-by-one in production (Marcus rendered as 57 vs actual 58). The
+    # system prompt explicitly tells the model to USE this value rather
+    # than derive its own. Optional with default None so tests / external
+    # constructors that built BriefingContext positionally keep working.
+    age_years: int | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -286,10 +293,27 @@ def build(patient: dict[str, Any], bundle: dict[str, Any]) -> BriefingContext:
     vitals.sort(key=lambda v: v.effective_dt, reverse=True)
     labs.sort(key=lambda l: l.effective_dt, reverse=True)
 
+    # Compute age from DOB at context-build time so the LLM does not have
+    # to do date arithmetic. Falls through to None on any parse failure;
+    # the prompt handles the missing-age case explicitly.
+    age_years: int | None = None
+    if dob:
+        try:
+            dob_dt = datetime.fromisoformat(dob)
+            today = datetime.now(timezone.utc).date()
+            dob_date = dob_dt.date() if hasattr(dob_dt, "date") else dob_dt
+            years = today.year - dob_date.year
+            if (today.month, today.day) < (dob_date.month, dob_date.day):
+                years -= 1
+            age_years = max(years, 0)
+        except (ValueError, TypeError):
+            age_years = None
+
     return BriefingContext(
         patient_id=patient.get("id", ""),
         name=name_str,
         dob=dob,
+        age_years=age_years,
         mrn=mrn,
         code_status=code_status,
         active_conditions=conditions,

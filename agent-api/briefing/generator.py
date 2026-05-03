@@ -50,8 +50,14 @@ Sections requirement (do not skip):
 - If a category in the input is empty, omit that section — do not fabricate placeholder claims.
 
 Summary requirement:
-- Always populate the top-level "summary" field with a 2-3 sentence executive synthesis of the patient's most important issues (active diagnoses, key vitals/labs, sepsis/critical-event status, what the rounding clinician should focus on).
-- The summary is plain English and does NOT need source attribution — it is the clinician's narrative framing. Keep it specific to this patient using the input data."""
+- Always populate the top-level "summary" field with a 2-3 sentence executive overview.
+- The summary states WHAT IS DOCUMENTED, not what it means. Use raw values verbatim from the input data — do NOT add clinical interpretations, labels, or impressions. Examples of what to say vs not say:
+  * Say "HR 118, RR 26, SpO2 88%, temp 38.9°F, lactate 4.2" — NOT "tachycardia, tachypnea, hypoxemia, fever, lactic acidosis."
+  * Say "Active conditions: sepsis, pneumonia" — NOT "septic patient with pulmonary involvement."
+  * Say "On norepinephrine infusion" — NOT "requires vasopressor support for hemodynamic instability."
+  The clinician applies their own clinical interpretation; your job is to present documented values, not synthesize impressions.
+- For age, use the pre-computed age_years field from the input. Do NOT calculate age from DOB yourself. If age_years is null, omit age from the summary entirely.
+- Keep the summary specific to this patient and the values that are actually present in the input."""
 
 
 def _render_prompt(ctx: BriefingContext) -> str:
