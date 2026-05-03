@@ -450,6 +450,15 @@
         },
         "encounter": {
           "reference": "Encounter/enc-005"
+        },
+        "verificationStatus": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/condition-ver-status",
+              "code": "confirmed",
+              "display": "Confirmed"
+            }
+          ]
         }
       },
       "request": {
