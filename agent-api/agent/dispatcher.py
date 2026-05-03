@@ -720,10 +720,11 @@ def _trim_to_valid_prefix(messages: list[dict[str, Any]]) -> list[dict[str, Any]
     while trimmed and trimmed[-1].get("role") == "assistant" and _has_tool_use(trimmed[-1]):
         trimmed = trimmed[:-1]
 
-    # Mid-stream validity sweep: for every assistant turn carrying tool_use
-    # blocks, the next message must be a user turn whose tool_result blocks
-    # cover every tool_use id. Drop any assistant turn that fails this check
-    # (and any user tool_result turn left without a preceding tool_use).
+    # Mid-stream validity sweep — bidirectional pairing check. Anthropic
+    # rejects:
+    #   (a) assistant tool_use ids without matching tool_result in next msg
+    #   (b) user tool_result tool_use_ids without matching tool_use in prev msg
+    # Drop offending pairs (or singletons) entirely.
     valid: list[dict[str, Any]] = []
     skip_next_orphan_result = False
     for i, msg in enumerate(trimmed):
@@ -735,11 +736,25 @@ def _trim_to_valid_prefix(messages: list[dict[str, Any]]) -> list[dict[str, Any]
             tool_use_ids = _assistant_tool_use_ids(msg)
             nxt = trimmed[i + 1] if i + 1 < len(trimmed) else None
             result_ids = _user_tool_result_ids(nxt) if nxt else set()
-            if not tool_use_ids.issubset(result_ids):
-                # Orphan tool_use — drop this assistant turn, and skip the
-                # next message if it's a half-matching tool_result.
+            # Bidirectional: assistant ids must equal next-msg result ids.
+            # Mismatch in either direction → drop the assistant turn AND
+            # skip the half-matching user tool_result.
+            if tool_use_ids != result_ids:
                 skip_next_orphan_result = True
                 continue
+        if msg.get("role") == "user" and _has_tool_result(msg):
+            # Check: previous KEPT message must be an assistant with the same
+            # tool_use ids. If not, this is a stray tool_result — drop it.
+            prev_kept = valid[-1] if valid else None
+            if prev_kept is None or prev_kept.get("role") != "assistant" or not _has_tool_use(prev_kept):
+                if not _has_user_text_block(msg):
+                    continue
+            else:
+                prev_use_ids = _assistant_tool_use_ids(prev_kept)
+                this_result_ids = _user_tool_result_ids(msg)
+                if prev_use_ids != this_result_ids:
+                    if not _has_user_text_block(msg):
+                        continue
         valid.append(msg)
     return valid
 
