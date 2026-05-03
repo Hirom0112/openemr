@@ -1608,6 +1608,26 @@ async def dispatch(
         # Surface patient identity for the UI: lets ChatSurface render the
         # "Verify in Chart" button on free-text responses whose `data` has
         # no patient_id, and lets renderers show a prominent patient banner.
+        # When this turn made no fresh tool call (LLM answered from prior
+        # context), scan the loaded conversation history backward for the
+        # most recent assistant tool_use with a patient_id input and surface
+        # that — so the chart button stays visible across follow-up turns.
+        if not last_tool_patient_id:
+            for msg in reversed(messages):
+                if msg.get("role") != "assistant":
+                    continue
+                content = msg.get("content")
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if not isinstance(block, dict) or block.get("type") != "tool_use":
+                        continue
+                    pid = (block.get("input") or {}).get("patient_id")
+                    if isinstance(pid, str) and pid:
+                        last_tool_patient_id = pid
+                        break
+                if last_tool_patient_id:
+                    break
         if last_tool_patient_id:
             metadata["patient_id"] = last_tool_patient_id
         if last_tool_patient_name:
