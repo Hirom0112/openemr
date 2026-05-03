@@ -158,6 +158,10 @@ def _briefing_cache_key(patient_id: str) -> str:
     return f"copilot:briefing:{patient_id}"
 
 
+def _medication_safety_cache_key(patient_id: str) -> str:
+    return f"copilot:medication_safety:{patient_id}"
+
+
 async def _get_cached_bundle(
     redis_client: aioredis.Redis | None,
     patient_id: str,
@@ -283,6 +287,59 @@ async def _set_cached_briefing(
         )
     except Exception as exc:
         logger.warning("Briefing cache write failed patient_id=%s error=%s", patient_id, exc)
+
+
+async def _get_cached_medication_safety(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+) -> dict[str, Any] | None:
+    """Return the cached medication-safety payload for ``patient_id`` or None.
+
+    Mirrors ``_get_cached_briefing``: increments hit/miss counters under the
+    ``medication_safety`` cache label and treats Redis exceptions as miss.
+    """
+    if redis_client is None:
+        return None
+    key = _medication_safety_cache_key(patient_id)
+    try:
+        raw = await redis_client.get(key)
+    except Exception as exc:
+        logger.warning(
+            "Medication safety cache read failed patient_id=%s error=%s", patient_id, exc
+        )
+        agent_data_cache_misses_total.labels(cache="medication_safety").inc()
+        return None
+    if raw:
+        agent_data_cache_hits_total.labels(cache="medication_safety").inc()
+        try:
+            return json.loads(raw)
+        except Exception as exc:
+            logger.warning(
+                "Medication safety cache decode failed patient_id=%s error=%s", patient_id, exc
+            )
+            return None
+    agent_data_cache_misses_total.labels(cache="medication_safety").inc()
+    return None
+
+
+async def _set_cached_medication_safety(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+    payload: dict[str, Any],
+) -> None:
+    """Write the medication-safety payload to Redis. Non-fatal on failure."""
+    if redis_client is None:
+        return
+    try:
+        await redis_client.setex(
+            _medication_safety_cache_key(patient_id),
+            settings.medication_safety_cache_ttl_seconds,
+            json.dumps(payload),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Medication safety cache write failed patient_id=%s error=%s", patient_id, exc
+        )
 
 
 async def _redis_exists(redis_client: aioredis.Redis | None, key: str) -> bool:
@@ -789,6 +846,39 @@ async def get_medication_safety(
     langfuse = session_context.get("langfuse")
     redis_client: aioredis.Redis | None = session_context.get("redis_client")
 
+    # Output-cache read-through (mirrors get_patient_briefing). The medication
+    # safety report is deterministic given the FHIR bundle, so we key the
+    # cache on patient_id and validate freshness against the bundle's
+    # ``_cached_at`` fingerprint. Without this, every Meds button click pays
+    # the full Haiku LLM round trip (~1.3s); with it, second clicks drop to
+    # ~50-100ms. ``force_refresh`` (UI Refresh button) bypasses the read.
+    if not force_refresh:
+        cached = await _get_cached_medication_safety(redis_client, patient_id)
+        if cached is not None:
+            cached_fp = cached.get("metadata", {}).get("bundle_fingerprint")
+            current_fp = await _peek_bundle_fingerprint(redis_client, patient_id)
+            stale = (current_fp is None) or (cached_fp != current_fp)
+            if not stale:
+                cached.setdefault("metadata", {})["cache"] = "hit"
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                cached["metadata"]["duration_ms"] = duration_ms
+                log_tool_outcome(
+                    tool_name="get_medication_safety",
+                    duration_ms=duration_ms,
+                    cache="hit",
+                    session_id=session_context.get("session_id"),
+                    patient_id=patient_id,
+                )
+                return cached
+            logger.info(
+                "medication_safety_cache_invalidated_bundle_changed",
+                extra={
+                    "patient_id": patient_id,
+                    "cached_fingerprint": cached_fp,
+                    "current_fingerprint": current_fp,
+                },
+            )
+
     # Bundle cache mirrors the briefing tool's read-through pattern so this
     # tool no longer triggers a fresh 8-search FHIR fanout per call. When the
     # user clicks Refresh (force_refresh=True) we bypass the cache and stamp a
@@ -864,12 +954,12 @@ async def get_medication_safety(
     log_tool_outcome(
         tool_name="get_medication_safety",
         duration_ms=duration_ms,
-        cache="n/a",
+        cache="miss",
         session_id=session_context.get("session_id"),
         patient_id=patient_id,
         extra={"flag_count": len(flags_out)},
     )
-    return {
+    payload: dict[str, Any] = {
         "result": {
             "patient_id": patient_id,
             "medications_reviewed": report.medications_reviewed,
@@ -894,6 +984,19 @@ async def get_medication_safety(
             ["MedicationRequest", "AllergyIntolerance", "Observation"],
         ),
     }
+    payload["metadata"]["cache"] = "miss"
+    if force_refresh:
+        payload["metadata"]["forced_refresh"] = True
+    # Stamp the underlying bundle's fingerprint so future cache reads can
+    # detect when the bundle has been refreshed and treat the safety
+    # report as stale (mirrors the briefing cache).
+    bundle_fingerprint = bundle.get("_cached_at")
+    if isinstance(bundle_fingerprint, str) and bundle_fingerprint:
+        payload["metadata"]["bundle_fingerprint"] = bundle_fingerprint
+
+    await _set_cached_medication_safety(redis_client, patient_id, payload)
+
+    return payload
 
 
 async def generate_handoff(

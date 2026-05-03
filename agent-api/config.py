@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     # and is therefore self-invalidating.
     bundle_cache_ttl_seconds: int = 7200       # 2 hours
     briefing_cache_ttl_seconds: int = 1800     # 30 minutes
+    # Medication safety output cache. Mirrors briefing's TTL because the
+    # two surfaces share the same staleness model — both are deterministic
+    # given the FHIR bundle and re-validate against the bundle's
+    # ``_cached_at`` fingerprint to invalidate when the underlying data
+    # turns over. Without this cache every Meds button click pays the
+    # full Haiku LLM round trip (~1.3s); with it, second clicks drop to
+    # ~50-100ms.
+    medication_safety_cache_ttl_seconds: int = 1800  # 30 minutes
     # Census drives every other surface (briefings warm from it, handoff
     # iterates over it), so worst-case staleness here propagates everywhere.
     # 5 minutes bounds that without making cold loads constant — the previous
