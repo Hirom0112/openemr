@@ -203,26 +203,16 @@ async def _set_cached_bundle(
     """
     if redis_client is None:
         return None
-    # Guard against caching a bundle that's a transient-failure artifact —
-    # the FHIR fanout runs ~8 searches per patient and under load OpenEMR
-    # occasionally returns empty bundles for several at once. If
-    # MedicationRequest, AllergyIntolerance, AND Condition all came back
-    # empty, the bundle is almost certainly partial — caching it for 2h
-    # would strand every downstream surface (briefing, med safety, query)
-    # with thin/empty answers until the fingerprint flips. Skip the write;
-    # the next call re-fetches.
-    resources = bundle.get("resources") or {}
-    suspicious = (
-        not (resources.get("MedicationRequest") or [])
-        and not (resources.get("AllergyIntolerance") or [])
-        and not (resources.get("Condition") or [])
-    )
-    if suspicious:
-        logger.info(
-            "bundle_cache_write_skipped_partial_fanout",
-            extra={"patient_id": patient_id},
-        )
-        return None
+    # Earlier versions of this function skipped the cache write when
+    # MedicationRequest/AllergyIntolerance/Condition were all empty
+    # (intent: avoid caching transient-FHIR-failure snapshots). That
+    # guard backfired: when a warm pass produced an empty-but-cached
+    # briefing, its bundle_fingerprint stayed None, and a subsequent warm
+    # pass that DID populate the bundle caused the briefing's cache key
+    # to invalidate on next read — making the user pay full briefing
+    # regen latency on the first Brief click. The downstream
+    # medication-safety guard in _set_cached_medication_safety still
+    # protects the click-time empty case where it actually matters.
     fingerprint = datetime.now(timezone.utc).isoformat()
     # Stamp into the dict in-place so callers using the same dict downstream
     # see the same fingerprint. Safe — we only add an underscored key.
