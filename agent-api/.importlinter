@@ -10,6 +10,26 @@ root_packages =
     auth
     checkpointer
     observability
+    audit
+
+# audit is a leaf: HIPAA-style audit emission must not depend on any
+# business sibling — it is consumed by the dispatcher and HTTP layer only.
+[importlinter:contract:audit-is-leaf]
+name = audit must not import any sibling module
+type = forbidden
+source_modules =
+    audit
+forbidden_modules =
+    agent
+    briefing
+    triage
+    query
+    verification
+    medication
+    handoff
+    auth
+    checkpointer
+    observability
 
 # observability is a leaf: cross-cutting helpers (json logging, request_id,
 # tool log helper) must not depend on any business sibling.
