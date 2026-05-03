@@ -37,6 +37,15 @@ _PATTERNS: list[tuple[re.Pattern, str, dict[str, str], float]] = [
     (re.compile(r"\b(potassium|k\+|sodium|chloride|magnesium|calcium|bicarb|bun|creatinine|glucose|hemoglobin|hgb|hematocrit|hct|wbc|platelet|inr|troponin|bnp|lactate|albumin)\b", re.I), "Observation", {"category": "laboratory"}, 0.95),
     (re.compile(r"\b(blood pressure|bp|systolic|diastolic|heart rate|hr|pulse|respiratory rate|rr|temperature|temp|spo2|oxygen sat|o2 sat|saturation|weight|bmi)\b", re.I), "Observation", {"category": "vital-signs"}, 0.95),
     (re.compile(r"\b(medications?|meds?|drugs?|prescriptions?|dosage|metoprolol|lisinopril|aspirin|furosemide|insulin|heparin|coumadin|warfarin|antibiotics?)\b", re.I), "MedicationRequest", {"status": "active"}, 0.90),
+    # Encounter pattern is intentionally placed BEFORE Condition. Condition
+    # phrasings like "admitted with sepsis" still match Condition because the
+    # disease keyword (sepsis) anchors here too — but bare temporal questions
+    # like "when was she admitted" / "last appointment" / "last visit" route
+    # to Encounter where they belong. Without this, those queries fell through
+    # to the LLM-fallback classifier which usually defaulted to Observation,
+    # which then sliced an empty list out of the bundle and returned an empty
+    # answer.
+    (re.compile(r"\b(appointments?|visits?|encounters?|seen|admitted|admission|discharged?|last seen|last visit|last encounter)\b", re.I), "Encounter", {}, 0.90),
     (re.compile(r"\b(diagnos\w*|conditions?|problems?|diseases?|disorders?|diabetes|hypertension|heart failure|copd|pneumonia|sepsis|uti|afib)\b", re.I), "Condition", {"clinical-status": "active"}, 0.90),
     (re.compile(r"\b(allerg\w*|reaction|intolerance|penicillin|sulfa|contrast|latex|nsaid)\b", re.I), "AllergyIntolerance", {}, 0.92),
     (re.compile(r"\b(procedures?|surgery|operation|catheter|intubat\w*|dialysis|transfusion|biopsy)\b", re.I), "Procedure", {}, 0.88),
@@ -56,7 +65,7 @@ def _classify(query: str) -> QueryRoute | None:
 _LLM_SYSTEM = """You are a FHIR query classifier. Given a clinical question, output JSON:
 {"resource": "<FHIR resource type>", "params": {"key": "value"}, "reasoning": "one sentence"}
 
-Valid resource types: Observation, MedicationRequest, Condition, AllergyIntolerance, Procedure, DiagnosticReport, Patient
+Valid resource types: Observation, MedicationRequest, Condition, AllergyIntolerance, Procedure, DiagnosticReport, Encounter, Patient
 For Observation, include category: "vital-signs" or "laboratory" as appropriate.
 Output only valid JSON, no preamble."""
 

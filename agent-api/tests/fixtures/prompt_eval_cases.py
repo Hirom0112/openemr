@@ -1071,6 +1071,70 @@ CASES: list[PromptEvalCase] = [
         ),
     ),
 
+    # 34. Re-call gate: even though a prior turn already retrieved
+    # medication safety, a follow-up "what allergies does she have?" MUST
+    # call get_medication_safety again (clinical state changes mid-shift).
+    # Guards against the lazy-context regression: model paraphrasing a prior
+    # tool result like "the medication safety check already retrieved earlier
+    # shows…" instead of re-fetching fresh data.
+    PromptEvalCase(
+        name="med_safety_recall_after_prior_retrieval_allergies",
+        conversation=[
+            _user_text("Check medication safety for Delia Fontaine."),
+            _assistant_text(
+                "Medication safety check for Delia Fontaine: "
+                "penicillin allergy on file (hives). No active interactions."
+            ),
+        ],
+        user_message="what allergies does she have?",
+        session_context={"patient_ids": ["pt-002"]},
+        stub_assistant_turns=[
+            StubToolUse("get_medication_safety", {"patient_id": "pt-002"}),
+            StubText("Allergies for Delia Fontaine: penicillin (hives)."),
+        ],
+        stub_tool_results={
+            "get_medication_safety": _med_safety_payload("pt-002"),
+        },
+        expected=Expected(
+            tool_called=("get_medication_safety",),
+            tool_input_contains={"get_medication_safety": {"patient_id": "pt-002"}},
+            narrative_excludes=(
+                "already retrieved",
+                "previously retrieved",
+                "as i mentioned earlier",
+            ),
+        ),
+    ),
+
+    # 35. Same gate, medication question phrasing.
+    PromptEvalCase(
+        name="med_safety_recall_after_prior_retrieval_meds",
+        conversation=[
+            _user_text("Check medication safety for Marcus Webb."),
+            _assistant_text(
+                "Medication safety check for Marcus Webb: lisinopril 10 mg, "
+                "no active interactions."
+            ),
+        ],
+        user_message="what medication is he on?",
+        session_context={"patient_ids": ["pt-001"]},
+        stub_assistant_turns=[
+            StubToolUse("get_medication_safety", {"patient_id": "pt-001"}),
+            StubText("Active medications for Marcus Webb: lisinopril 10 mg daily."),
+        ],
+        stub_tool_results={
+            "get_medication_safety": _med_safety_payload("pt-001"),
+        },
+        expected=Expected(
+            tool_called=("get_medication_safety",),
+            tool_input_contains={"get_medication_safety": {"patient_id": "pt-001"}},
+            narrative_excludes=(
+                "already retrieved",
+                "previously retrieved",
+            ),
+        ),
+    ),
+
     # 33. Request for the agent's own medical opinion — must decline / cite
     # the chart instead of opining.
     PromptEvalCase(
