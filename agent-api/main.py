@@ -310,19 +310,103 @@ class BriefingRequest(BaseModel):
     # generated_at timestamp. Default False keeps non-forced reads on the warm
     # path.
     force_refresh: bool = False
+    # When provided, persist a synthetic conversation turn so subsequent
+    # dispatcher /agent/query calls see this brief in their loaded history
+    # and can resolve pronouns ("can she have tylenol?") to this patient.
+    # Without this, button-driven actions are invisible to the conversation
+    # memory used by the LLM.
+    session_id: str | None = None
+
+
+def _briefing_button_placeholder(patient_id: str, briefing: dict[str, Any]) -> str:
+    """Mirror dispatcher's _briefing_identity_summary for button-driven briefs."""
+    name = briefing.get("name") or briefing.get("patient_name") or patient_id
+    alerts = briefing.get("alerts") or []
+    sections = briefing.get("sections") or {}
+    meds = []
+    if isinstance(sections, dict):
+        for sec in sections.values():
+            if isinstance(sec, list):
+                for item in sec:
+                    if isinstance(item, dict) and "medication" in str(item).lower():
+                        meds.append(item)
+    base = f"Briefing generated for {name} (patient_id={patient_id})."
+    fact_parts: list[str] = []
+    if alerts:
+        fact_parts.append(f"{len(alerts)} active alerts")
+    if fact_parts:
+        return base + " " + ", ".join(fact_parts) + "."
+    return base
+
+
+def _meds_button_placeholder(patient_id: str, data: dict[str, Any]) -> str:
+    """Identity line for a button-driven medication safety check."""
+    name = data.get("name") or data.get("patient_name") or patient_id
+    allergies = data.get("allergies") or []
+    current_meds = data.get("current_medications") or data.get("medications") or []
+    interactions = data.get("interactions") or []
+    base = f"Medication safety check for {name} (patient_id={patient_id})."
+    parts: list[str] = []
+    if isinstance(allergies, list):
+        parts.append(f"{len(allergies)} allergies")
+    if isinstance(current_meds, list):
+        parts.append(f"{len(current_meds)} current medications")
+    if isinstance(interactions, list) and interactions:
+        parts.append(f"{len(interactions)} interactions of concern")
+    if parts:
+        return base + " " + ", ".join(parts) + "."
+    return base
+
+
+async def _persist_button_action(
+    session_id: str,
+    user_message: str,
+    placeholder_text: str,
+) -> None:
+    """Save a synthetic user/assistant turn pair so the conversation history
+    used by the dispatcher reflects the button-driven action.
+
+    Failures are logged and swallowed — the action's response to the user
+    must not depend on persistence succeeding.
+    """
+    if not session_id:
+        return
+    try:
+        ctx = _session_ctx(session_id)
+        # Imported here (not top-level) to avoid circular import in the
+        # legacy LEGACY-marked surface that already imports dispatcher.
+        from agent.dispatcher import _save_turn
+        await _save_turn(session_id, ctx, "user", user_message)
+        await _save_turn(
+            session_id,
+            ctx,
+            "assistant",
+            [{"type": "text", "text": placeholder_text}],
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning("Button-action persistence failed", extra={"session_id": session_id, "error": str(exc)})
 
 
 @app.post("/briefing/{patient_id}", response_model=BriefingResponse)
 async def briefing(patient_id: str, body: BriefingRequest | None = None) -> BriefingResponse:
     _t0 = time.perf_counter()
     force_refresh = bool(body.force_refresh) if body is not None else False
+    session_id = body.session_id if body is not None else None
     try:
         tool_result = await get_patient_briefing(
             {"patient_id": patient_id, "provider_id": "system", "force_refresh": force_refresh},
-            session_context=_session_ctx(),
+            session_context=_session_ctx(session_id),
         )
         BRIEFING_DURATION.observe(time.perf_counter() - _t0)
-        return BriefingResponse.model_validate(tool_result["result"])
+        result = tool_result["result"]
+        if session_id:
+            name = result.get("name") or patient_id
+            await _persist_button_action(
+                session_id,
+                f"Brief {name}.",
+                _briefing_button_placeholder(patient_id, result),
+            )
+        return BriefingResponse.model_validate(result)
     except Exception as exc:
         logger.error("Briefing failed patient_id=%s error=%s", patient_id, exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Briefing generation failed") from exc
@@ -353,13 +437,27 @@ async def targeted_query(session_id: str, body: QueryRequest) -> dict:
 # ── UC-4 Medication Safety ────────────────────────────────────────────────────  LEGACY — retire after Phase 13 cutover
 
 @app.get("/medication/safety/{patient_id}")
-async def medication_safety(patient_id: str) -> dict:
+async def medication_safety(patient_id: str, session_id: str | None = None) -> dict:
+    """Button-driven medication safety surface.
+
+    Optional ?session_id= query param: when provided, the result is persisted
+    as a synthetic conversation turn so subsequent dispatcher calls see this
+    in their loaded history (allows pronoun resolution after a button click).
+    """
     try:
         tool_result = await get_medication_safety(
             {"patient_id": patient_id, "provider_id": "system"},
-            session_context=_session_ctx(),
+            session_context=_session_ctx(session_id),
         )
-        return tool_result["result"]
+        result = tool_result["result"]
+        if session_id:
+            name = result.get("name") or patient_id
+            await _persist_button_action(
+                session_id,
+                f"Medication safety for {name}.",
+                _meds_button_placeholder(patient_id, result),
+            )
+        return result
     except Exception as exc:
         raise HTTPException(status_code=502, detail="FHIR upstream error") from exc
 
