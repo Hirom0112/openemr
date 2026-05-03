@@ -77,11 +77,15 @@ if ($providerId > 0) {
         }
     }
 }
-// Deterministic session id keyed to (provider, calendar day) so the same
-// physician's conversation persists across iframe reloads but starts fresh
-// each morning. uniqid() would mint a new id on every load and orphan
-// every prior turn in the agent-api checkpointer.
-$sessionId    = 'copilot-' . hash('sha256', $providerId . '|' . date('Y-m-d'));
+// Per-OpenEMR-login session id. The nonce is minted by main.php's prefetch
+// block on first use of this $_SESSION and persists across iframe reloads
+// within the same login, so the iframe and the prefetch share the same
+// session. A fresh login mints a new nonce → new copilot session id →
+// the chat starts empty (no stale cached bubbles from yesterday).
+if (empty($_SESSION['copilot_session_nonce'])) {
+    $_SESSION['copilot_session_nonce'] = bin2hex(random_bytes(8));
+}
+$sessionId    = 'copilot-' . hash('sha256', $providerId . '|' . date('Y-m-d') . '|' . $_SESSION['copilot_session_nonce']);
 $patientIds   = $oemrSession['copilot_patient_ids'] ?? $_SESSION['copilot_patient_ids'] ?? [];
 if (empty($patientIds) && !empty($_GET['pids'])) {
     $patientIds = array_filter(array_map('intval', explode(',', $_GET['pids'])));

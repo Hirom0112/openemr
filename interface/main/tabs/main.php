@@ -606,7 +606,17 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
             }
         }
         if ($copilotProviderId > 0 && $copilotAgentUrl !== '' && $copilotPatientIds !== []) {
-            $copilotSessionId = 'copilot-' . hash('sha256', $copilotProviderId . '|' . date('Y-m-d'));
+            // Each fresh OpenEMR login starts a brand-new chat. We mint a
+            // nonce stored in $_SESSION so main.php and the iframe's
+            // index.php (same PHP session) share the SAME copilot session
+            // id within one login, but a NEW one after logout/login.
+            // Without the nonce, the per-day formula meant yesterday's
+            // chat stuck around all morning; users had to manually press
+            // Refresh on each cached bubble.
+            if (empty($_SESSION['copilot_session_nonce'])) {
+                $_SESSION['copilot_session_nonce'] = bin2hex(random_bytes(8));
+            }
+            $copilotSessionId = 'copilot-' . hash('sha256', $copilotProviderId . '|' . date('Y-m-d') . '|' . $_SESSION['copilot_session_nonce']);
             // 5-minute bucket so a page reload re-fires the prefetch after 5 min
             // (matches census_cache_ttl). Per-day debounce was too sticky — once
             // the script ran on the first reload of the morning, every subsequent
