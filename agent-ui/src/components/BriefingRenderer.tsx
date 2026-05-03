@@ -163,19 +163,32 @@ export default function BriefingRenderer({ data, narrative, citations, onBrief }
           eye lands on. Sourced from the LLM's top-level `summary` field
           which api.ts/getBriefing lifts into AgentResponse.narrative. */}
       {narrative && (
-        <div
-          style={{
-            background: NEU.bg,
-            border: `1px solid ${NEU.border}`,
-            borderRadius: 6,
-            padding: '10px 12px',
-            margin: '8px 0 12px',
-            fontSize: 13,
-            lineHeight: 1.5,
-            color: NEU.text,
-          }}
-        >
-          <Markdown narrative={narrative} citations={citations} />
+        <div style={{ margin: '8px 0 12px' }}>
+          <div
+            style={{
+              background: NEU.bg,
+              border: `1px solid ${NEU.border}`,
+              borderRadius: 6,
+              padding: '10px 12px',
+              fontSize: 13,
+              lineHeight: 1.5,
+              color: NEU.text,
+            }}
+          >
+            <Markdown narrative={narrative} citations={citations} />
+          </div>
+          <div
+            style={{
+              fontSize: 11,
+              color: MUTED,
+              marginTop: 4,
+              fontStyle: 'italic',
+              paddingLeft: 2,
+            }}
+            aria-label="AI-generated summary disclaimer"
+          >
+            AI-generated summary — verify against chart before clinical decisions
+          </div>
         </div>
       )}
 
