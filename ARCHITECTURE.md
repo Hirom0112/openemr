@@ -480,6 +480,39 @@ Pricing is based on `${CLAUDE_MODEL_ID}` (set to `claude-sonnet-4-6` at time of 
 
 UC-1 and UC-5 are one call per session regardless of census size — the context for all patients is assembled into a single prompt. UC-2 through UC-4 depend on how many queries Dr. Chen makes during rounding. A representative session with 14 patient briefings, 10 targeted record queries, and 4 medication safety surfaces produces an estimated total LLM cost of approximately $0.25 per session. The $0.02 per patient briefing cost target (USERS.md §7) is met for UC-2 individually at $0.008 per call.
 
+### 7.1.1 Force-Refresh Prewarm Cost
+
+The OpenEMR landing-page prefetch (`interface/main/tabs/main.php`) fires on `DOMContentLoaded` after login and warms census + per-patient bundles + briefings + medication safety in the background, so the physician's first interaction with the Co-Pilot iframe is read-from-cache fast.
+
+When the prewarm runs in **force-refresh** mode (the default for clinical correctness — see `PREFETCH_FORCE_REFRESH_ON_LOGIN` env var), every cache layer is bypassed and regenerated against live FHIR data. This burns Anthropic and FHIR cost on every login, even if the physician never opens the Co-Pilot tab afterward.
+
+Per-login force-refresh cost (10-patient census):
+
+| Component | Calls | Approx LLM cost |
+|---|---|---|
+| Census ranking + one-line explanations | 1 (UC-1) | $0.020 |
+| Per-patient briefing × 10 | 10 (UC-2) | $0.080 |
+| Per-patient medication safety × 10 | 10 (UC-4) | $0.050 |
+| Per-patient bundle FHIR fetch | 10 | $0 (FHIR, not LLM) |
+| **Total per login** | — | **~$0.15** |
+
+At scale:
+
+| Deployment | Logins/day | Daily prewarm cost | Annual prewarm cost |
+|---|---|---|---|
+| Single physician demo (Sara) | 1-3 | ~$0.45 | ~$165 |
+| 10-physician unit | 30-50 | ~$5-8 | ~$2,000-3,000 |
+| 100-physician hospital | 300-500 | ~$50-75 | ~$18,000-27,000 |
+| 1,000-physician health system | 3,000-5,000 | ~$500-750 | ~$180,000-270,000 |
+
+This is on top of the per-session interactive cost in §7.1. For Sara's demo it's negligible. For real deployment it justifies thinking carefully about when force-refresh fires (`PREFETCH_FORCE_REFRESH_ON_LOGIN=false` falls back to TTL-based cache reuse, dropping prewarm cost by ~80% but accepting up to 5 minutes of staleness on cached data).
+
+Recommendations for production:
+
+- **Pilot phase**: keep `PREFETCH_FORCE_REFRESH_ON_LOGIN=true`. Cost is bounded and clinical-correctness matters more than $50/day.
+- **Post-pilot**: switch to `=false` and add a shift-aware warming cron — e.g. force-refresh census for every provider 5 minutes before their shift starts, then rely on TTL + bundle-fingerprint invalidation for the rest of the shift. This captures the freshness benefit at shift boundaries without the per-login multiplier.
+- **Cost guardrail**: add a Prometheus alert when daily prewarm cost exceeds 20% of total LLM spend — that signals either overly aggressive force-refresh or excessive login churn.
+
 ### 7.2 Scaling Cost Projections
 
 | Scale | Daily Sessions | Monthly LLM Cost | Infrastructure Notes |
