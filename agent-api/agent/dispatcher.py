@@ -68,9 +68,17 @@ _MODEL = getattr(settings, "anthropic_model", "claude-sonnet-4-6")
 _STRUCTURED_RESPONSE_TYPES: frozenset[str] = frozenset({
     "census",
     "briefing",
-    "medication_safety",
     "handoff",
     "query_answer",
+    # NOTE: medication_safety intentionally NOT in this set. It's the only
+    # tool that benefits from the LLM framing turn — physicians want the
+    # contextual prose analysis ("This could mean: no allergies have been
+    # documented, or reconciliation has not been completed for this
+    # admission") alongside the structured tables. Skipping the framing
+    # turn (which we tried) leaves only a thin placeholder narrative; the
+    # MedicationSafetyRenderer's "Analysis" section then has nothing to
+    # show. Costs ~2-3s extra per med-safety call but the prose is exactly
+    # what the user asked for.
 })
 
 
