@@ -72,7 +72,18 @@ def _briefing() -> BriefingResponse:
     )
 
 
-def _cached_payload() -> dict[str, Any]:
+_BUNDLE_FINGERPRINT = "2026-04-30T00:00:00+00:00"
+
+
+def _cached_payload(bundle_fingerprint: str | None = _BUNDLE_FINGERPRINT) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "tool": "get_patient_briefing",
+        "patient_id": "pt-001",
+        "duration_ms": 42,
+        "fhir_resources_accessed": ["Patient"],
+    }
+    if bundle_fingerprint is not None:
+        metadata["bundle_fingerprint"] = bundle_fingerprint
     return {
         "result": {
             "patient_id": "pt-001",
@@ -82,13 +93,12 @@ def _cached_payload() -> dict[str, Any]:
             "generated_at": "2026-04-30T00:00:00+00:00",
         },
         "citations": [],
-        "metadata": {
-            "tool": "get_patient_briefing",
-            "patient_id": "pt-001",
-            "duration_ms": 42,
-            "fhir_resources_accessed": ["Patient"],
-        },
+        "metadata": metadata,
     }
+
+
+def _cached_bundle(fingerprint: str = _BUNDLE_FINGERPRINT) -> dict[str, Any]:
+    return {"resources": {}, "_cached_at": fingerprint}
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -98,8 +108,17 @@ def _cached_payload() -> dict[str, Any]:
 def test_cache_hit_returns_cached_payload_without_calling_generator():
     """Redis returns a stored payload → generator never runs; metadata.cache == 'hit'."""
     cached = _cached_payload()
+    bundle_payload = _cached_bundle()
+
+    async def fake_get(key: str) -> str | None:
+        if key == "copilot:briefing:pt-001":
+            return json.dumps(cached)
+        if key == "copilot:bundle:pt-001":
+            return json.dumps(bundle_payload)
+        return None
+
     redis_client = MagicMock()
-    redis_client.get = AsyncMock(return_value=json.dumps(cached))
+    redis_client.get = AsyncMock(side_effect=fake_get)
     redis_client.setex = AsyncMock()
 
     fhir_mock = MagicMock()
@@ -115,7 +134,9 @@ def test_cache_hit_returns_cached_payload_without_calling_generator():
             {"redis_client": redis_client},
         ))
 
-    redis_client.get.assert_awaited_once_with("copilot:briefing:pt-001")
+    # Cache hit path now also peeks the bundle key to validate freshness.
+    redis_client.get.assert_any_await("copilot:briefing:pt-001")
+    redis_client.get.assert_any_await("copilot:bundle:pt-001")
     gen_mock.assert_not_awaited()
     fhir_mock.get_patient.assert_not_awaited()
     fhir_mock.get_bundle_for_patient.assert_not_awaited()
@@ -213,3 +234,48 @@ def test_redis_error_is_non_fatal(caplog):
         if "Briefing cache" in r.getMessage() and "pt-001" in r.getMessage()
     ]
     assert len(cache_warnings) >= 1
+
+
+@pytest.mark.hard_failure
+def test_cached_briefing_invalidated_when_bundle_fingerprint_changes():
+    """Bundle refresh (new _cached_at) makes the cached briefing stale → regenerate.
+
+    This is the freshness-mismatch bug fix: census refresh updates the bundle
+    cache; the briefing's stored bundle_fingerprint no longer matches; the
+    cache hit path treats it as a miss and regenerates so the briefing's
+    generated_at tracks the underlying bundle's freshness.
+    """
+    cached = _cached_payload(bundle_fingerprint="2026-04-01T00:00:00+00:00")
+    bundle_payload = _cached_bundle(fingerprint="2026-05-01T12:00:00+00:00")
+
+    async def fake_get(key: str) -> str | None:
+        if key == "copilot:briefing:pt-001":
+            return json.dumps(cached)
+        if key == "copilot:bundle:pt-001":
+            return json.dumps(bundle_payload)
+        return None
+
+    redis_client = MagicMock()
+    redis_client.get = AsyncMock(side_effect=fake_get)
+    redis_client.setex = AsyncMock()
+
+    fhir_mock = MagicMock()
+    fhir_mock.get_patient = AsyncMock(return_value=_patient())
+    fhir_mock.get_bundle_for_patient = AsyncMock(return_value=_bundle())
+
+    gen_mock = AsyncMock(return_value=_briefing())
+
+    with patch("agent.tools.fhir_client", fhir_mock), \
+            patch("agent.tools.generate_briefing", new=gen_mock), \
+            patch("agent.tools.build_briefing_context", return_value=_ctx()), \
+            patch("agent.tools.verify_briefing", return_value=_briefing()):
+        result = _run(get_patient_briefing(
+            {"patient_id": "pt-001"},
+            {"redis_client": redis_client},
+        ))
+
+    # Bundle fingerprint mismatched → generator ran, stale cached "from cache"
+    # alerts payload was discarded.
+    gen_mock.assert_awaited_once()
+    assert result["metadata"]["cache"] == "miss"
+    assert result["result"]["alerts"] != ["from cache"]

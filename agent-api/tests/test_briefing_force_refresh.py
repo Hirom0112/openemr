@@ -74,6 +74,9 @@ def _briefing() -> BriefingResponse:
     )
 
 
+_BUNDLE_FINGERPRINT = "2026-04-30T00:00:00+00:00"
+
+
 def _cached_payload() -> dict[str, Any]:
     return {
         "result": {
@@ -89,8 +92,13 @@ def _cached_payload() -> dict[str, Any]:
             "patient_id": "pt-001",
             "duration_ms": 42,
             "fhir_resources_accessed": ["Patient"],
+            "bundle_fingerprint": _BUNDLE_FINGERPRINT,
         },
     }
+
+
+def _cached_bundle(fingerprint: str = _BUNDLE_FINGERPRINT) -> dict[str, Any]:
+    return {"resources": {}, "_cached_at": fingerprint}
 
 
 @pytest.mark.hard_failure
@@ -169,8 +177,17 @@ def test_force_refresh_writes_fresh_briefing_to_cache():
 def test_default_behavior_uses_cache_hit_path():
     """Without force_refresh the cache hit path is preserved (regression guard)."""
     cached = _cached_payload()
+    bundle_payload = _cached_bundle()
+
+    async def fake_get(key: str) -> str | None:
+        if key == "copilot:briefing:pt-001":
+            return json.dumps(cached)
+        if key == "copilot:bundle:pt-001":
+            return json.dumps(bundle_payload)
+        return None
+
     redis_client = MagicMock()
-    redis_client.get = AsyncMock(return_value=json.dumps(cached))
+    redis_client.get = AsyncMock(side_effect=fake_get)
     redis_client.setex = AsyncMock()
 
     fhir_mock = MagicMock()
