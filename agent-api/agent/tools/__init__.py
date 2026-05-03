@@ -257,12 +257,43 @@ async def get_census_summary(
 
     cache_key = census_cache_key(provider_id, patient_ids)
 
-    census_result = await build_census(
-        patient_ids,
-        redis_client=redis_client,
-        cache_key=cache_key,
-        provider_id=provider_id,
-    )
+    try:
+        census_result = await build_census(
+            patient_ids,
+            redis_client=redis_client,
+            cache_key=cache_key,
+            provider_id=provider_id,
+        )
+    except Exception as exc:
+        # Auto-discovery (empty patient_ids) issues a bulk Patient query that
+        # currently 500s on OpenEMR's FHIR endpoint due to a
+        # SearchFieldOrder type bug. If the dispatcher has already supplied
+        # the active session's patient_ids in session_context, fall back to
+        # rebuilding the census against those — same idiom as the
+        # /agent/prefetch warmer in main.py:_warm().
+        session_patient_ids: list[str] = list(session_context.get("patient_ids") or [])
+        if not patient_ids and session_patient_ids:
+            logger.warning(
+                "census_auto_discovery_failed_falling_back_to_session_ids",
+                extra={
+                    "error": str(exc),
+                    "session_patient_count": len(session_patient_ids),
+                    "request_id": session_context.get("request_id"),
+                },
+            )
+            agent_prewarm_runs_total.labels(
+                outcome="census_auto_discovery_failed_fallback"
+            ).inc()
+            cache_key = census_cache_key(provider_id, session_patient_ids)
+            census_result = await build_census(
+                session_patient_ids,
+                redis_client=redis_client,
+                cache_key=cache_key,
+                provider_id=provider_id,
+            )
+            patient_ids = session_patient_ids
+        else:
+            raise
     entries = census_result.verified
     dropped_ids = census_result.dropped_ids
     annotated = await explain_census(entries, langfuse=langfuse, redis_client=redis_client)
