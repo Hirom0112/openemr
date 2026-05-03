@@ -13,13 +13,20 @@ Output: list[HandoffSummary] sorted by triage level (most urgent first).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 import anthropic
+import redis.asyncio as aioredis
 from langfuse import Langfuse
 
+from agent.metrics import (
+    agent_data_cache_hits_total,
+    agent_data_cache_misses_total,
+)
 from agent.response_schemas import PRODUCE_HANDOFF
 from auth.fhir_client import fhir_client
 from briefing.context_builder import build as build_context
@@ -52,18 +59,87 @@ class HandoffSummary:
     error: str | None = None
 
 
+async def _get_cached_bundle(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+) -> dict[str, Any] | None:
+    """Read ``copilot:bundle:{patient_id}`` from Redis. Treats errors as miss.
+
+    Inlined here (not shared with ``agent.tools``) because ``handoff`` must
+    remain a leaf module per ``agent-api/.importlinter`` —
+    ``no-upward-into-agent-tools``.
+    """
+    if redis_client is None:
+        return None
+    key = f"copilot:bundle:{patient_id}"
+    try:
+        raw = await redis_client.get(key)
+    except Exception as exc:
+        logger.debug(
+            "Handoff bundle cache read failed",
+            extra={"cache": "miss", "site": "handoff_bundle", "patient_id": patient_id, "error": str(exc)},
+        )
+        agent_data_cache_misses_total.labels(cache="bundle").inc()
+        return None
+    if raw:
+        try:
+            bundle = json.loads(raw)
+        except Exception as exc:
+            logger.debug(
+                "Handoff bundle cache decode failed",
+                extra={"cache": "miss", "site": "handoff_bundle", "patient_id": patient_id, "error": str(exc)},
+            )
+            agent_data_cache_misses_total.labels(cache="bundle").inc()
+            return None
+        logger.info(
+            "Handoff bundle cache hit",
+            extra={"cache": "hit", "site": "handoff_bundle", "patient_id": patient_id},
+        )
+        agent_data_cache_hits_total.labels(cache="bundle").inc()
+        return bundle
+    logger.info(
+        "Handoff bundle cache miss",
+        extra={"cache": "miss", "site": "handoff_bundle", "patient_id": patient_id},
+    )
+    agent_data_cache_misses_total.labels(cache="bundle").inc()
+    return None
+
+
+async def _set_cached_bundle(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+    bundle: dict[str, Any],
+) -> None:
+    if redis_client is None:
+        return
+    try:
+        await redis_client.setex(
+            f"copilot:bundle:{patient_id}",
+            settings.bundle_cache_ttl_seconds,
+            json.dumps(bundle),
+        )
+    except Exception as exc:
+        logger.debug(
+            "Handoff bundle cache write failed",
+            extra={"site": "handoff_bundle", "patient_id": patient_id, "error": str(exc)},
+        )
+
+
 async def _generate_one(
     patient_id: str,
     client: anthropic.AsyncAnthropic,
     langfuse: Langfuse | None = None,
+    redis_client: aioredis.Redis | None = None,
 ) -> HandoffSummary:
-    import json
     from dataclasses import asdict
 
     generated_at = datetime.now(timezone.utc).isoformat()
     try:
         patient = await fhir_client.get_patient(patient_id)
-        bundle = await fhir_client.get_bundle_for_patient(patient_id)
+        bundle = await _get_cached_bundle(redis_client, patient_id)
+        if bundle is None:
+            bundle = await fhir_client.get_bundle_for_patient(patient_id)
+            await _set_cached_bundle(redis_client, patient_id, bundle)
     except Exception as exc:
         logger.warning("FHIR fetch failed for handoff", extra={"patient_id": patient_id, "error": str(exc)})
         return HandoffSummary(
@@ -137,6 +213,7 @@ _PATIENT_TIMEOUT = 25.0   # seconds per patient before returning error stub
 async def generate_handoffs(
     patient_ids: list[str],
     langfuse: Langfuse | None = None,
+    redis_client: aioredis.Redis | None = None,
 ) -> list[HandoffSummary]:
     """Generate handoff summaries for all patients in parallel."""
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -146,7 +223,7 @@ async def generate_handoffs(
         async with sem:
             try:
                 return await asyncio.wait_for(
-                    _generate_one(pid, client, langfuse),
+                    _generate_one(pid, client, langfuse, redis_client),
                     timeout=_PATIENT_TIMEOUT,
                 )
             except asyncio.TimeoutError:

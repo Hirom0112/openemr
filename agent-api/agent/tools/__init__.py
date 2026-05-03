@@ -552,6 +552,29 @@ async def get_medication_safety(
     if medication_name:
         flags_out = [f for f in flags_out if medication_name.lower() in f["medication"].lower()] or flags_out
 
+    # Renderer-friendly string lists — match `MedicationSafetyData` in
+    # agent-ui/src/types.ts so the structured renderer has content to display
+    # for both the dispatcher path and the direct GET /medication/safety/{id}
+    # endpoint.  Derived from the same FHIR resources we just loaded.
+    def _med_display(res: dict[str, Any]) -> str:
+        cc = res.get("medicationCodeableConcept", {}) or {}
+        coding = (cc.get("coding") or [{}])[0]
+        return coding.get("display") or cc.get("text") or "Unknown medication"
+
+    def _allergy_display(res: dict[str, Any]) -> str:
+        code = res.get("code", {}) or {}
+        coding = (code.get("coding") or [{}])[0]
+        return coding.get("display") or code.get("text") or "Unknown allergen"
+
+    current_medications = [_med_display(m) for m in meds]
+    allergy_list = [_allergy_display(a) for a in allergies]
+    # Interactions surface non-allergy safety flags (lab interactions and
+    # high-alert medication notices) so the renderer's "Interactions of
+    # concern" section conveys the deterministic safety output.
+    interactions = [
+        f["message"] for f in flags_out if f.get("code") != "ALLERGY_CONFLICT"
+    ]
+
     citations: list[dict[str, Any]] = [
         Citation(
             patient_id=patient_id,
@@ -580,6 +603,11 @@ async def get_medication_safety(
             "flag_count": len(flags_out),
             "flags": flags_out,
             "summary": report.summary,
+            # Renderer fields (string lists) — see MedicationSafetyData in
+            # agent-ui/src/types.ts.
+            "current_medications": current_medications,
+            "allergies": allergy_list,
+            "interactions": interactions,
         },
         "citations": citations,
         "metadata": _empty_metadata(
@@ -599,7 +627,7 @@ async def generate_handoff(
     patient_ids: list[str] = input["patient_ids"]
     langfuse = session_context.get("langfuse")
 
-    summaries = await generate_handoffs(patient_ids, langfuse=langfuse)
+    summaries = await generate_handoffs(patient_ids, langfuse=langfuse, redis_client=session_context.get("redis_client"))
 
     # Map I-PASS fields → HandoffPatient shape expected by the frontend renderer:
     #   illness_severity → status
