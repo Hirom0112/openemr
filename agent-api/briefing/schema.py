@@ -27,6 +27,7 @@ class BriefingSection(BaseModel):
 class BriefingResponse(BaseModel):
     patient_id: str
     name: str
+    openemr_pid: str = ""
     # The LLM occasionally omits `sections` entirely when the only thing it has to
     # report are alerts (e.g., a patient with no documented vitals or labs visible
     # via FHIR). Default to [] rather than rejecting the response — the alerts list
