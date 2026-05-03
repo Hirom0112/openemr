@@ -165,35 +165,18 @@ export default function HandoffRenderer({ data, narrative, citations }: HandoffR
 
   const patients = data?.patients;
 
+  // Default behavior: every patient renders EXPANDED. The earlier
+  // collapse-by-default + auto-expand-on-data approach made cards LOOK
+  // like the stream was broken — patients appeared as collapsed name
+  // rows and stayed that way until the auto-expand fired (or didn't,
+  // for any patient whose chunk landed atypically). Just render
+  // expanded; the user can manually collapse via the chevron, and the
+  // bulk Collapse all / Expand all controls still work.
   useEffect(() => {
     if (!patients?.length) return;
-    setCollapsedPatients((prev) => {
-      const next = new Set(prev);
-      let changed = false;
-      for (const p of patients) {
-        const id = p.patient_id;
-        if (!seenPatientsRef.current.has(id)) {
-          seenPatientsRef.current.add(id);
-          if (!userTouchedIdsRef.current.has(id)) {
-            // First sighting — collapse by default unless data is already
-            // present in the very first render (then leave expanded).
-            if (!isDataReady(p)) {
-              if (!next.has(id)) {
-                next.add(id);
-                changed = true;
-              }
-            }
-          }
-        } else if (isDataReady(p) && !userTouchedIdsRef.current.has(id)) {
-          // Data just arrived — auto-expand.
-          if (next.has(id)) {
-            next.delete(id);
-            changed = true;
-          }
-        }
-      }
-      return changed ? next : prev;
-    });
+    for (const p of patients) {
+      seenPatientsRef.current.add(p.patient_id);
+    }
   }, [patients]);
 
   const togglePatient = useCallback((patientId: string) => {
