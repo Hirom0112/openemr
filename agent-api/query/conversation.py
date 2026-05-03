@@ -31,6 +31,30 @@ logger = logging.getLogger(__name__)
 
 _MODEL = "claude-sonnet-4-6"
 
+_EMPTY_NARRATIVES: dict[str, str] = {
+    "Condition": "No active or documented conditions are on file in the chart.",
+    "MedicationRequest": "No active or documented medication orders are on file in the chart.",
+    "AllergyIntolerance": "No documented allergies or intolerances are on file in the chart.",
+    "Observation": "No matching observations are on file for the time window searched.",
+    "Procedure": "No documented procedures are on file in the chart.",
+    "DiagnosticReport": "No diagnostic reports are on file for the time window searched.",
+    "Patient": "No patient demographics could be retrieved.",
+}
+
+
+def _empty_records_narrative(resource: str) -> str:
+    """Honest, action-oriented message when a query returns zero records.
+
+    Replaces the prior generic "I was unable to retrieve an answer" string,
+    which read as a tool failure and prompted the user to retry instead of
+    moving on. Falls back to a clear no-match message for unknown resources.
+    """
+    return _EMPTY_NARRATIVES.get(
+        resource,
+        f"No matching {resource} records found in the chart.",
+    )
+
+
 _SYSTEM = """You are a clinical record assistant for a rounding hospitalist.
 You have access to a patient's FHIR records.  Use the produce_query_answer tool
 to answer the physician's question using only the records provided.
@@ -68,58 +92,85 @@ class ConversationHandler:
             logger.warning("Redis save failed, using SQLite", extra={"error": str(exc)})
             await self._sqlite_saver.append(session_id, role=role, content=content)
 
-    async def answer(self, session_id: str, patient_id: str, query: str) -> dict[str, Any]:
+    async def answer(
+        self,
+        session_id: str,
+        patient_id: str,
+        query: str,
+        records_override: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Process one turn of a multi-turn conversation.
 
         Returns: {"answer": str, "sources": list, "route": str, "turn": int}
+
+        ``records_override`` lets the caller hand in pre-fetched FHIR resources
+        (e.g. sliced from the cached patient bundle).  When supplied the live
+        FHIR search is skipped — this is the preferred path because OpenEMR's
+        FHIR endpoint (a) requires a UUID for the ``patient`` parameter (the
+        bundle cache layer already resolved it) and (b) returns 0 results when
+        ``clinical-status=active`` / ``status=active`` filters are applied to
+        Condition / MedicationRequest searches even when matching resources
+        exist.  See ``auth/fhir_client.get_bundle_for_patient`` for the same
+        workaround on the briefing path.
         """
         trace = self._langfuse.trace(name="uc3-query", session_id=session_id, user_id=patient_id) if self._langfuse else None
 
         # Route the query
         query_route = await route_query(query, patient_id)
 
-        # Fetch FHIR records
-        extended = bool(any(w in query.lower() for w in ("history", "last month", "last year", "prior", "trend", "over time")))
-        fhir_records = await search_for_patient(patient_id, query_route, extended=extended)
+        # Fetch FHIR records — prefer the caller-supplied bundle slice so we
+        # don't re-hit the FHIR endpoint with filters that are known to break.
+        if records_override is not None:
+            fhir_records = records_override
+        else:
+            extended = bool(any(w in query.lower() for w in ("history", "last month", "last year", "prior", "trend", "over time")))
+            fhir_records = await search_for_patient(patient_id, query_route, extended=extended)
 
         # Build conversation messages
         history = await self._load_history(session_id)
+        generation = None
 
-        fhir_context = json.dumps(fhir_records[:30], indent=2)  # cap at 30 records per turn
-        user_content = (
-            f"<patient_data>\n"
-            f"FHIR {query_route.resource} records (patient {patient_id}):\n"
-            f"{fhir_context}\n"
-            f"</patient_data>\n\n"
-            f"Question: {query}"
-        )
-
-        messages = [{"role": t["role"], "content": t["content"]} for t in history if t["role"] in ("user", "assistant")]
-        messages.append({"role": "user", "content": user_content})
-
-        # LLM call via tool_use
-        generation = trace.generation(name="uc3-llm", model=_MODEL, input=user_content) if trace else None
-        answer_text: str
-        try:
-            response = await self._client.messages.create(
-                model=_MODEL,
-                max_tokens=300,
-                system=_SYSTEM,
-                messages=messages,
-                tools=[PRODUCE_QUERY_ANSWER],
-                tool_choice={"type": "any"},
+        # Short-circuit when the search returned nothing — calling the LLM
+        # only burns tokens to produce a generic "no records" string and tends
+        # to phrase it as a tool failure ("I was unable to retrieve…") instead
+        # of an honest "no matching records on file".
+        if not fhir_records:
+            answer_text = _empty_records_narrative(query_route.resource)
+        else:
+            fhir_context = json.dumps(fhir_records[:30], indent=2)  # cap at 30 records per turn
+            user_content = (
+                f"<patient_data>\n"
+                f"FHIR {query_route.resource} records (patient {patient_id}):\n"
+                f"{fhir_context}\n"
+                f"</patient_data>\n\n"
+                f"Question: {query}"
             )
-            tool_block = next((b for b in response.content if b.type == "tool_use"), None)
-            if tool_block is None:
-                logger.error("No tool_use block in UC-3 response", extra={"session_id": session_id})
-                answer_text = "I was unable to retrieve an answer from the records. Please review the chart directly."
-            else:
-                answer_text = tool_block.input.get("answer", "").strip()
-                if not answer_text:
+
+            messages = [{"role": t["role"], "content": t["content"]} for t in history if t["role"] in ("user", "assistant")]
+            messages.append({"role": "user", "content": user_content})
+
+            # LLM call via tool_use
+            generation = trace.generation(name="uc3-llm", model=_MODEL, input=user_content) if trace else None
+            try:
+                response = await self._client.messages.create(
+                    model=_MODEL,
+                    max_tokens=300,
+                    system=_SYSTEM,
+                    messages=messages,
+                    tools=[PRODUCE_QUERY_ANSWER],
+                    tool_choice={"type": "any"},
+                )
+                tool_block = next((b for b in response.content if b.type == "tool_use"), None)
+                if tool_block is None:
+                    logger.error("No tool_use block in UC-3 response", extra={"session_id": session_id})
                     answer_text = "I was unable to retrieve an answer from the records. Please review the chart directly."
-        except Exception as exc:
-            logger.error("UC-3 LLM call failed", extra={"session_id": session_id, "error": str(exc)})
-            answer_text = "I was unable to retrieve an answer from the records. Please review the chart directly."
+                else:
+                    answer_text = tool_block.input.get("answer", "").strip()
+                    if not answer_text:
+                        answer_text = "I was unable to retrieve an answer from the records. Please review the chart directly."
+            except Exception as exc:
+                logger.error("UC-3 LLM call failed", extra={"session_id": session_id, "error": str(exc)})
+                answer_text = "I was unable to retrieve an answer from the records. Please review the chart directly."
 
         answer_text = verify_conversation_answer(answer_text, patient_id)
 
