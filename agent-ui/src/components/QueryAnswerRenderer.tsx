@@ -42,7 +42,12 @@ function CitationsList({ citations }: { citations: Citation[] }) {
 }
 
 export default function QueryAnswerRenderer({ data, narrative, citations, patientName }: QueryAnswerRendererProps) {
-  const text = narrative || data.answer || '';
+  // Prefer the structured `data.answer` from the tool — it is the
+  // authoritative response. The LLM narrative typically restates the same
+  // information and would otherwise render twice. Fall back to narrative
+  // only when no structured answer is present.
+  const hasAnswer = typeof data.answer === 'string' && data.answer.trim().length > 0;
+  const text = hasAnswer ? data.answer : (narrative || '');
   const count = citations?.length ?? 0;
 
   const windowPill = data.window_months != null

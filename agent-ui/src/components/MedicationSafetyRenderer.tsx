@@ -2,6 +2,38 @@ import type { Citation, MedicationSafetyData } from '../types';
 import { RED, AMB, NEU } from '../styles/tokens';
 import { Header, SectionHeading, ClaimRow, Markdown, CitationFooter } from './primitives';
 
+/**
+ * Canary phrases the LLM narrative may carry that the structured
+ * allergies/interactions/current_medications arrays do not capture (e.g.
+ * "no allergies recorded — verify in chart", "code status not documented").
+ * When we suppress the narrative because structured data is present, we
+ * still want these safety phrases to surface, so we extract them as
+ * top-of-card claim rows. Match is case-insensitive and substring-based.
+ */
+const CANARY_PATTERNS: ReadonlyArray<RegExp> = [
+  /allerg[^.\n]*\b(incomplete|not (?:documented|recorded|verified)|verify in (?:the )?chart|unknown)\b[^.\n]*/i,
+  /code status[^.\n]*\b(not (?:documented|recorded|verified)|unknown|verify)\b[^.\n]*/i,
+  /\bverify in (?:the )?chart\b[^.\n]*/i,
+];
+
+function extractCanaries(narrative: string): string[] {
+  if (!narrative) return [];
+  const found: string[] = [];
+  const seen = new Set<string>();
+  for (const pat of CANARY_PATTERNS) {
+    const m = narrative.match(pat);
+    if (m && m[0]) {
+      const phrase = m[0].trim().replace(/^[-*•\s]+/, '');
+      const key = phrase.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        found.push(phrase);
+      }
+    }
+  }
+  return found;
+}
+
 interface MedicationSafetyRendererProps {
   data: MedicationSafetyData;
   narrative: string;
@@ -29,7 +61,13 @@ export default function MedicationSafetyRenderer({ data, narrative, citations, p
   const hasAllergies = data.allergies && data.allergies.length > 0;
   const hasInteractions = data.interactions && data.interactions.length > 0;
   const hasMeds = data.current_medications && data.current_medications.length > 0;
+  const hasStructured = hasAllergies || hasInteractions || hasMeds;
   const count = citations?.length ?? 0;
+  // When structured data is present we suppress the LLM narrative to avoid
+  // duplicating the same facts (vancomycin appearing 3x bug). Surface any
+  // safety canary phrases the narrative carried as top-of-card alert rows
+  // so they don't get lost with the rest of the prose.
+  const canaries = hasStructured ? extractCanaries(narrative) : [];
   // Prefer the explicit patientName prop (from metadata.patient_name); fall
   // back to a name field on data if the tool surfaces one in-line. Don't
   // fabricate — render no banner if neither is present.
@@ -52,6 +90,15 @@ export default function MedicationSafetyRenderer({ data, narrative, citations, p
         >
           {displayName}
         </div>
+      )}
+
+      {canaries.length > 0 && (
+        <>
+          <SectionHeading color={AMB}>Safety flags</SectionHeading>
+          {canaries.map((c, i) => (
+            <ClaimRow key={i} color={AMB}>{c}</ClaimRow>
+          ))}
+        </>
       )}
 
       {hasAllergies && (
@@ -81,7 +128,7 @@ export default function MedicationSafetyRenderer({ data, narrative, citations, p
         </>
       )}
 
-      {narrative && (
+      {!hasStructured && narrative && (
         <div style={{ marginTop: 8 }}>
           <Markdown narrative={narrative} citations={citations} />
         </div>
