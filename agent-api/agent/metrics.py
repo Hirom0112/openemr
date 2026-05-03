@@ -117,6 +117,18 @@ agent_pid_normalization_total = Counter(
     ["form"],
 )
 
+# ── Patient-id resolution counter (dispatcher scope check) ───────────────────
+# Increments each time the dispatcher's census-scope guard rewrites a
+# tool_input.patient_id from a non-canonical form to an in-census pid before
+# invoking the tool. Labels:
+#   normalize   → ``pt-001`` → ``"1"`` via _normalize_patient_id
+#   name_match  → ``"Marcus Webb"`` → ``"pt-001"`` via _resolve_patient_from_census
+agent_pid_resolution_total = Counter(
+    "agent_pid_resolution_total",
+    "Dispatcher patient_id resolutions performed before census scope check",
+    ["method"],
+)
+
 # ── Census fan-out drop counter ──────────────────────────────────────────────
 # Increments every time _build_entry returns None for a patient (transient
 # FHIR failure). Surfaces silent census shrinkage that previously caused
