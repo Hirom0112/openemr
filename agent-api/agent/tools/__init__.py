@@ -137,9 +137,19 @@ async def _set_cached_bundle(
     redis_client: aioredis.Redis | None,
     patient_id: str,
     bundle: dict[str, Any],
-) -> None:
+) -> str | None:
+    """Cache the bundle and return its fingerprint (UTC iso timestamp).
+
+    The fingerprint lets downstream caches (briefing) detect when the
+    underlying FHIR bundle has been refreshed and invalidate themselves.
+    Returns None when no Redis client is available or the write failed.
+    """
     if redis_client is None:
-        return
+        return None
+    fingerprint = datetime.now(timezone.utc).isoformat()
+    # Stamp into the dict in-place so callers using the same dict downstream
+    # see the same fingerprint. Safe — we only add an underscored key.
+    bundle["_cached_at"] = fingerprint
     try:
         await redis_client.setex(
             _bundle_cache_key(patient_id),
@@ -148,6 +158,37 @@ async def _set_cached_bundle(
         )
     except Exception as exc:
         logger.warning("Bundle cache write failed", extra={"patient_id": patient_id, "error": str(exc)})
+        return None
+    return fingerprint
+
+
+async def _peek_bundle_fingerprint(
+    redis_client: aioredis.Redis | None,
+    patient_id: str,
+) -> str | None:
+    """Read the current bundle's cache fingerprint without disturbing metrics.
+
+    Used by the briefing cache to detect whether the underlying bundle has
+    turned over since the briefing was last generated. Returns None on miss
+    or any error — callers treat None as "cannot validate, regenerate".
+    """
+    if redis_client is None:
+        return None
+    try:
+        raw = await redis_client.get(_bundle_cache_key(patient_id))
+    except Exception as exc:
+        logger.warning(
+            "Bundle fingerprint peek failed patient_id=%s error=%s", patient_id, exc
+        )
+        return None
+    if not raw:
+        return None
+    try:
+        bundle = json.loads(raw)
+    except Exception:
+        return None
+    fp = bundle.get("_cached_at")
+    return fp if isinstance(fp, str) else None
 
 
 async def _get_cached_briefing(
@@ -434,30 +475,52 @@ async def get_patient_briefing(
     if not force_refresh:
         cached = await _get_cached_briefing(redis_client, patient_id)
         if cached is not None:
-            cached.setdefault("metadata", {})["cache"] = "hit"
-            duration_ms = int((time.monotonic() - t0) * 1000)
-            cached["metadata"]["duration_ms"] = duration_ms
-            log_tool_outcome(
-                tool_name="get_patient_briefing",
-                duration_ms=duration_ms,
-                cache="hit",
-                session_id=session_context.get("session_id"),
-                patient_id=patient_id,
+            # Bundle-fingerprint validation: a briefing's freshness IS its
+            # bundle's freshness. If the bundle cache has turned over since
+            # this briefing was generated (e.g. census refresh repopulated
+            # FHIR data), the cached briefing is stale even if its TTL has
+            # not elapsed. Treat as a miss so the caller sees a generated_at
+            # that matches the underlying bundle.
+            cached_fp = cached.get("metadata", {}).get("bundle_fingerprint")
+            current_fp = await _peek_bundle_fingerprint(redis_client, patient_id)
+            stale = (current_fp is None) or (cached_fp != current_fp)
+            if not stale:
+                cached.setdefault("metadata", {})["cache"] = "hit"
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                cached["metadata"]["duration_ms"] = duration_ms
+                log_tool_outcome(
+                    tool_name="get_patient_briefing",
+                    duration_ms=duration_ms,
+                    cache="hit",
+                    session_id=session_context.get("session_id"),
+                    patient_id=patient_id,
+                )
+                return cached
+            logger.info(
+                "briefing_cache_invalidated_bundle_changed",
+                extra={
+                    "patient_id": patient_id,
+                    "cached_fingerprint": cached_fp,
+                    "current_fingerprint": current_fp,
+                },
             )
-            return cached
 
     patient = await fhir_client.get_patient(patient_id)
 
     if force_refresh:
         bundle = await fhir_client.get_bundle_for_patient(patient_id)
         bundle_cache_state: CacheState = "miss"
-        await _set_cached_bundle(redis_client, patient_id, bundle)
+        bundle_fingerprint = await _set_cached_bundle(redis_client, patient_id, bundle)
     else:
         bundle = await _get_cached_bundle(redis_client, patient_id)
         bundle_cache_state = "hit" if bundle is not None else "miss"
         if bundle is None:
             bundle = await fhir_client.get_bundle_for_patient(patient_id)
-            await _set_cached_bundle(redis_client, patient_id, bundle)
+            bundle_fingerprint = await _set_cached_bundle(redis_client, patient_id, bundle)
+        else:
+            # Bundle came from cache — its fingerprint is already stamped.
+            fp = bundle.get("_cached_at")
+            bundle_fingerprint = fp if isinstance(fp, str) else None
 
     ctx = build_briefing_context(patient, bundle)
     raw_briefing = await generate_briefing(ctx, langfuse=langfuse)
@@ -482,6 +545,11 @@ async def get_patient_briefing(
     payload["metadata"]["cache"] = "miss"
     if force_refresh:
         payload["metadata"]["forced_refresh"] = True
+    # Stamp the underlying bundle's fingerprint so future cache reads can
+    # detect when the bundle has been refreshed and treat the briefing as
+    # stale. See _peek_bundle_fingerprint and the cache-hit branch above.
+    if bundle_fingerprint is not None:
+        payload["metadata"]["bundle_fingerprint"] = bundle_fingerprint
 
     await _set_cached_briefing(redis_client, patient_id, payload)
 

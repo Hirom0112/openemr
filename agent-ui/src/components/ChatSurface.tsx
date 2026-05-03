@@ -744,20 +744,54 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       }));
     };
 
+    // In-order populate: even though SSE chunks arrive in completion order
+    // (Linda may finish before Marcus), the user wants to read the handoff
+    // top-down. Buffer out-of-order chunks until the next-in-line patient
+    // lands, then flush sequentially. This matches the "read rounds in
+    // order" mental model and avoids a P5 summary appearing while P1 is
+    // still pending.
+    const pendingChunks = new Map<string, HandoffPatient>();
+    let nextIdx = 0;
+    const flushInOrder = (): void => {
+      while (nextIdx < orderedPatientIds.length) {
+        const id = orderedPatientIds[nextIdx];
+        const ready = pendingChunks.get(id);
+        if (!ready) break;
+        replaceEntry(id, ready);
+        pendingChunks.delete(id);
+        nextIdx++;
+      }
+    };
+    const enqueue = (patientId: string, next: HandoffPatient): void => {
+      pendingChunks.set(patientId, next);
+      flushInOrder();
+    };
+
     const cancel = streamHandoff(orderedPatientIds, sessionId, {
       onChunk: (patientId, summary) => {
         const next: HandoffPatient = ipassToHandoffPatient(summary);
         if (summary.error) next.error = summary.error;
-        replaceEntry(patientId, next);
+        enqueue(patientId, next);
       },
       onError: (patientId, errorMsg, summary) => {
         const next: HandoffPatient = {
           ...ipassToHandoffPatient(summary),
           error: errorMsg,
         };
-        replaceEntry(patientId, next);
+        enqueue(patientId, next);
       },
       onDone: () => {
+        // Flush any remaining buffered chunks (e.g. if a head-of-line
+        // patient errored without producing a chunk, the rest are still
+        // in the buffer — drain them now so the user sees the full list).
+        for (let i = nextIdx; i < orderedPatientIds.length; i++) {
+          const id = orderedPatientIds[i];
+          const stuck = pendingChunks.get(id);
+          if (stuck) {
+            replaceEntry(id, stuck);
+            pendingChunks.delete(id);
+          }
+        }
         handoffStreamRef.current = null;
         setHandoffStreaming(false);
         setLoading(false);
