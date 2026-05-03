@@ -94,12 +94,20 @@ echo "  Dispatching queries with required session_id, provider_id, patient_ids..
 
 # Each entry: "expected_tool|message"
 # Messages are deterministic strings that should reliably route to the expected tool.
+#
+# Some queries have multiple acceptable target tools because the system
+# prompt's auto-discovery rule (resolving a patient name → calling
+# get_census_summary first) is intentional clinical behavior. For those
+# queries, EITHER the named target tool OR get_census_summary is correct.
+# See agent-api/agent/system_prompt.py:46-60 for the auto-discovery contract.
+# Multi-tool entries use a comma-separated list in the expected field, e.g.:
+#   "get_patient_briefing,get_census_summary|Brief me on Marcus Webb in bed 501."
 QUERIES=(
   "get_census_summary|__census_summary__"
   "get_census_summary|Give me the morning triage list."
-  "get_patient_briefing|Brief me on Marcus Webb in bed 501."
+  "get_patient_briefing,get_census_summary|Brief me on Marcus Webb in bed 501."
   "get_patient_briefing|What is going on with patient pt-001?"
-  "get_patient_briefing|Pre-encounter briefing for Delia Fontaine."
+  "get_patient_briefing,get_census_summary|Pre-encounter briefing for Delia Fontaine."
   "get_patient_briefing|What happened overnight with patient pt-002?"
   "query_patient_records|What was the last potassium on patient pt-001?"
   "query_patient_records|When was the last chest X-ray for Fontaine?"
@@ -110,7 +118,7 @@ QUERIES=(
   "get_medication_safety|What chart data is relevant to metoprolol for pt-002?"
   "generate_handoff|Generate handoff notes for all my patients."
   "generate_handoff|Give me handoff for the full census."
-  "get_patient_briefing|Tell me about the patient in bed 502."
+  "get_patient_briefing,get_census_summary|Tell me about the patient in bed 502."
   "query_patient_records|What did the last echo show for patient pt-001?"
   "get_medication_safety|Medication safety surface for patient pt-002."
   "generate_handoff|Prepare end-of-rounds handoff for all patients."
@@ -135,11 +143,28 @@ for entry in "${QUERIES[@]}"; do
 
   TOOL_CALLED=$(echo "${RESP}" | resolve_tool)
 
-  if [[ "${TOOL_CALLED}" == "${EXPECTED}" ]]; then
-    ((CORRECT++)) || true
-    echo "    MATCH  [${EXPECTED}] ← \"${MSG:0:55}\""
+  if [[ "${EXPECTED}" == *,* ]]; then
+    IS_MATCH=0
+    IFS=',' read -ra ACCEPTED <<< "${EXPECTED}"
+    for E in "${ACCEPTED[@]}"; do
+      if [[ "${TOOL_CALLED}" == "${E}" ]]; then
+        IS_MATCH=1
+        break
+      fi
+    done
+    if (( IS_MATCH == 1 )); then
+      ((CORRECT++)) || true
+      echo "    MATCH (any of: ${EXPECTED}) [${TOOL_CALLED}] ← \"${MSG:0:55}\""
+    else
+      echo "    MISS   expected=any-of=${EXPECTED} got=${TOOL_CALLED} ← \"${MSG:0:55}\""
+    fi
   else
-    echo "    MISS   expected=${EXPECTED} got=${TOOL_CALLED} ← \"${MSG:0:55}\""
+    if [[ "${TOOL_CALLED}" == "${EXPECTED}" ]]; then
+      ((CORRECT++)) || true
+      echo "    MATCH  [${EXPECTED}] ← \"${MSG:0:55}\""
+    else
+      echo "    MISS   expected=${EXPECTED} got=${TOOL_CALLED} ← \"${MSG:0:55}\""
+    fi
   fi
 done
 
