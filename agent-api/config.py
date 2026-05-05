@@ -65,6 +65,23 @@ class Settings(BaseSettings):
     # App
     log_level: str = "INFO"
 
+    # ── Auth / CORS ──────────────────────────────────────────────────────────
+    # HS256 secret used to verify JWTs minted by the OpenEMR PHP layer.
+    # Empty string disables JWT verification (middleware logs a startup
+    # warning and becomes a no-op) — keeps dev + tests green without
+    # threading a token through every fixture.
+    copilot_jwt_secret: str = ""
+    # Single browser origin allowed by CORSMiddleware. Empty falls back to
+    # ``*`` with a startup warning (dev only).
+    openemr_origin: str = ""
+
+    # PHI audit log — Postgres DSN for ``copilot_audit_events`` /
+    # ``copilot_audit_destructions``.  Empty string disables the writer
+    # entirely (no pool init, no DB calls); keeps tests + dev cheap and
+    # makes it explicit which deployments are subject to the §9.7
+    # 6-year retention contract.
+    audit_db_url: str = ""
+
     # When set (truthy), exposes GET /diag/fhir for live FHIR connectivity probes.
     # Disabled by default; enable on Railway via COPILOT_DIAG=1 for one-curl
     # confirmation after a deploy.

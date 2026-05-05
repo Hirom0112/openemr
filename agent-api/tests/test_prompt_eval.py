@@ -348,8 +348,8 @@ class _NullPatch:
 
 
 def test_case_set_is_nonempty_and_unique() -> None:
-    """Sanity: the case file ships ≥12 cases and case names are unique."""
-    assert len(CASES) >= 12, f"expected ≥12 cases, got {len(CASES)}"
+    """Sanity: the case file ships ≥45 cases and case names are unique."""
+    assert len(CASES) >= 45, f"expected ≥45 cases, got {len(CASES)}"
     names = [c.name for c in CASES]
     assert len(names) == len(set(names)), f"duplicate case names: {names}"
 

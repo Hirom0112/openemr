@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import type { CopilotConfig } from './types';
+import { initAuthToken } from './auth/jwt';
 
 function readConfig(): CopilotConfig {
   // index.php injects config as a JSON script tag (CSP-safe, no eval).
@@ -22,9 +23,14 @@ function readConfig(): CopilotConfig {
 
 const root = document.getElementById('copilot-root');
 if (root) {
+  const config = readConfig();
+  // Seed the in-memory token holder before any API call fires. Absent jwt
+  // (server-side COPILOT_JWT_SECRET unset) leaves the holder null and api.ts
+  // skips the Authorization header — preserves dev-mode parity.
+  initAuthToken(config.jwt);
   createRoot(root).render(
     <StrictMode>
-      <App config={readConfig()} />
+      <App config={config} />
     </StrictMode>
   );
 }

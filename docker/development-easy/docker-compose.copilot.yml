@@ -18,6 +18,13 @@
 
 services:
 
+  # ── OpenEMR override ──────────────────────────────────────────────────────
+  # The base openemr service is defined in docker-compose.yml. Extend it here
+  # so PHP can read COPILOT_JWT_SECRET when minting JWTs for the iframe.
+  openemr:
+    environment:
+      COPILOT_JWT_SECRET: "${COPILOT_JWT_SECRET:-}"
+
   # ── Agent API ─────────────────────────────────────────────────────────────
   agent-api:
     build:
@@ -42,8 +49,12 @@ services:
       LANGFUSE_PUBLIC_KEY: "${LANGFUSE_PUBLIC_KEY:-}"
       LANGFUSE_HOST: "${LANGFUSE_HOST:-https://cloud.langfuse.com}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      COPILOT_JWT_SECRET: "${COPILOT_JWT_SECRET:-}"
+      AUDIT_DB_URL: "${AUDIT_DB_URL:-postgresql://copilot:copilot@copilot-audit-postgres:5432/copilot_audit}"
     depends_on:
       redis:
+        condition: service_healthy
+      copilot-audit-postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8400/health"]
@@ -51,6 +62,30 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  # ── Postgres for PHI audit log ────────────────────────────────────────────
+  # Append-only audit table for the Clinical Co-Pilot (§9.7 6-year retention).
+  # Partitioned by ts so rolling out an old year is one DROP PARTITION.
+  # Host port 5433 is intentional — keeps it clear of any other Postgres a
+  # developer might already have on 5432.
+  copilot-audit-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "${COPILOT_AUDIT_PG_PORT:-5433}:5432"
+    environment:
+      POSTGRES_USER: copilot
+      POSTGRES_PASSWORD: copilot
+      POSTGRES_DB: copilot_audit
+    volumes:
+      - copilot-audit-pgdata:/var/lib/postgresql/data
+      - ../../agent-api/audit/schema.sql:/docker-entrypoint-initdb.d/01-copilot-audit-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U copilot -d copilot_audit"]
+      start_period: 10s
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   # ── Redis ──────────────────────────────────────────────────────────────────
   redis:
@@ -115,3 +150,4 @@ volumes:
   agent-sqlite: {}
   prometheus-data: {}
   grafana-data: {}
+  copilot-audit-pgdata: {}

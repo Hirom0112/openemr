@@ -1,5 +1,15 @@
 """Pytest configuration and shared fixtures for Clinical Co-Pilot eval suite."""
 
+# Bypass JWT and audit-DB before any test module imports ``config`` or ``main``.
+# pydantic-settings reads env once at module import; if a sibling test imports
+# main first with the real secret set, every subsequent test inherits it and
+# /document/ingest tests fail with 401. Setting these here — at conftest top —
+# guarantees the override lands before pytest collects any test file.
+import os
+
+os.environ["COPILOT_JWT_SECRET"] = ""
+os.environ.setdefault("AUDIT_DB_URL", "")
+
 import json
 from pathlib import Path
 from typing import Any

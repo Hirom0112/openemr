@@ -1,6 +1,44 @@
 import type { AgentResponse, TriageRationaleData } from './types';
+import { withAuth, requestRefreshedToken, notifyAuthFailure, getAuthToken } from './auth/jwt';
 
 const cfg = () => window.__COPILOT_CONFIG__;
+
+/**
+ * Centralised authed fetch. Attaches Authorization (when a token is held),
+ * and on 401 silently asks the parent window for a fresh token then replays
+ * the request ONCE. After 3 consecutive 401s on a single call (rare — bug or
+ * compromised secret) we toast and return the failed response so callers'
+ * existing error paths still trip.
+ *
+ * SSE NOTE: EventSource has no header support and the agent-api SSE route at
+ * POST /handoff/generate/stream does NOT accept a query-string token. So
+ * `streamHandoff` uses fetch+ReadableStream (it already does) and routes
+ * through this helper — no separate code path needed.
+ */
+async function authedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  let attempt = 0;
+  // Cap retries: 1 normal try + 1 post-refresh replay. A second 401 after a
+  // successful refresh means the new token is also bad — give up and toast.
+  const MAX_ATTEMPTS = 3;
+  let res = await fetch(input, withAuth(init));
+  while (res.status === 401 && attempt < MAX_ATTEMPTS - 1) {
+    attempt += 1;
+    // Skip refresh entirely when no token was ever set (auth disabled).
+    if (!getAuthToken() && attempt === 1) {
+      break;
+    }
+    const refreshed = await requestRefreshedToken();
+    if (!refreshed) {
+      notifyAuthFailure();
+      break;
+    }
+    res = await fetch(input, withAuth(init));
+  }
+  if (res.status === 401) {
+    notifyAuthFailure();
+  }
+  return res;
+}
 
 interface ClientTimingPayload {
   action: string;
@@ -22,12 +60,12 @@ function generateRequestId(): string {
 export function postClientTiming(payload: ClientTimingPayload): void {
   try {
     const url = `${cfg().agentApiUrl}/agent/client-timing`;
-    void fetch(url, {
+    void fetch(url, withAuth({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
       keepalive: true,
-    }).catch((err: unknown) => {
+    })).catch((err: unknown) => {
       console.debug('[copilot] postClientTiming failed', err);
     });
   } catch (err: unknown) {
@@ -60,7 +98,7 @@ async function postWithMeta<T>(
     if (isAgentPath) {
       headers['X-Request-ID'] = clientRequestId;
     }
-    const res = await fetch(`${cfg().agentApiUrl}${path}`, {
+    const res = await authedFetch(`${cfg().agentApiUrl}${path}`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -79,7 +117,7 @@ async function postWithMeta<T>(
 }
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${cfg().agentApiUrl}${path}`);
+  const res = await authedFetch(`${cfg().agentApiUrl}${path}`);
   if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
   return res.json();
 }
@@ -123,7 +161,7 @@ export interface PrefetchStatusResult {
 export async function getPrefetchStatus(sessionId: string): Promise<PrefetchStatusResult> {
   try {
     const url = `${cfg().agentApiUrl}/agent/prefetch/status?session_id=${encodeURIComponent(sessionId)}`;
-    const res = await fetch(url, { method: 'GET' });
+    const res = await authedFetch(url, { method: 'GET' });
     if (!res.ok) return { patients: {} };
     const data = (await res.json()) as { patients?: Record<string, string> };
     return { patients: (data.patients ?? {}) as Record<string, WarmStatus> };
@@ -286,7 +324,7 @@ export async function getMedicationSafety(
     const params = new URLSearchParams({ session_id: sessionId });
     if (forceRefresh) params.set('force_refresh', 'true');
     const url = `${cfg().agentApiUrl}/medication/safety/${patientId}?${params.toString()}`;
-    const res = await fetch(url, {
+    const res = await authedFetch(url, {
       method: 'GET',
       headers: { 'X-Request-ID': clientRequestId },
       signal: controller.signal,
@@ -403,7 +441,11 @@ export function streamHandoff(
   const run = async (): Promise<void> => {
     let res: Response;
     try {
-      res = await fetch(`${cfg().agentApiUrl}/handoff/generate/stream`, {
+      // SSE auth: POST + ReadableStream lets us reuse the Authorization
+      // header (EventSource cannot). Backend's /handoff/generate/stream does
+      // not currently honour an `auth_token` query param, so the only path
+      // that works through JWT middleware is this fetch-based stream.
+      res = await authedFetch(`${cfg().agentApiUrl}/handoff/generate/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
         body: JSON.stringify({ patient_ids: patientIds }),
