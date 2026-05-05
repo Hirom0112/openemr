@@ -25,7 +25,8 @@ from typing import Any
 
 import redis.asyncio as aioredis
 from dataclasses import asdict
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langfuse import Langfuse
@@ -63,11 +64,16 @@ from agent.tools import (
     warm_bundle_for_patient,
     warm_medication_safety_for_patient,
 )
+from audit import writer as audit_writer
+from audit.middleware import audit_middleware
+from audit.models import AuditEvent
+from auth import request_principal_var
 from auth.fhir_client import (
     fhir_client,
     get_access_token,
     invalidate_token_cache,
 )
+from auth.jwt_middleware import jwt_middleware
 from briefing.schema import BriefingResponse
 from checkpointer.redis_saver import RedisSaver
 from checkpointer.sqlite_saver import SqliteSaver
@@ -94,13 +100,25 @@ BRIEFING_DURATION = Histogram(
 
 app = FastAPI(title="Clinical Co-Pilot API", version="0.1.0")
 
+# CORS: lock to a single configured browser origin. Empty falls back to "*"
+# with a startup warning so local dev keeps working without env churn, but
+# any real deployment must set OPENEMR_ORIGIN.
+if settings.openemr_origin:
+    _cors_origins = [settings.openemr_origin]
+else:
+    logger.warning(
+        "CORS origin not configured (OPENEMR_ORIGIN empty) — falling back to '*'. "
+        "Do not run this in production."
+    )
+    _cors_origins = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
-
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Per-request request_id: read X-Request-ID or mint uuid4, propagate via ContextVar."""
@@ -117,6 +135,45 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# ── Middleware stack ─────────────────────────────────────────────────────────
+# Starlette runs the LAST-REGISTERED middleware OUTERMOST. Registration
+# order below is therefore intentional and from INNER (runs near handler)
+# to OUTER (runs first on the request).
+#
+#   CORSMiddleware                       — already registered above (innermost)
+#   audit_middleware                     — needs request_id + principal in scope
+#   _audit_principal_stash               — copies principal ContextVar → request.state
+#   jwt_middleware                       — verifies JWT, sets principal ContextVar
+#   RequestIdMiddleware                  — sets request_id ContextVar (outermost)
+#
+# When a request arrives: RequestId → JWT → stash → audit → CORS → handler.
+# This guarantees both ContextVars are bound during audit's call_next, AND
+# the principal stash has run before audit reads request.state.
+
+# The ``audit`` package is a leaf in .importlinter and cannot import from
+# ``auth``; the stash bridges that boundary by copying ``request_principal_var``
+# onto ``request.state.audit_principal`` here in main.py.
+
+app.middleware("http")(audit_middleware)
+
+
+@app.middleware("http")
+async def _audit_principal_stash(request: Request, call_next: Any) -> Response:
+    """Copy the verified JWT principal onto request.state for the audit middleware."""
+    try:
+        principal = request_principal_var.get()
+    except LookupError:
+        principal = None
+    if principal is not None:
+        request.state.audit_principal = principal
+    return await call_next(request)
+
+
+# JWT verification + provider-id scope check. Registered as an HTTP middleware
+# (not Depends) so it runs once per request and can short-circuit with 401/403
+# before any route handler executes. Bypasses entirely when COPILOT_JWT_SECRET
+# is empty — see auth/jwt_middleware.py for the bypass-list and scope rules.
+app.middleware("http")(jwt_middleware)
 app.add_middleware(RequestIdMiddleware)
 
 Instrumentator().instrument(app).expose(app)
@@ -168,6 +225,103 @@ async def shutdown() -> None:
         await _redis.aclose()
     if _langfuse:
         _langfuse.flush()
+    await audit_writer.close_pool()
+
+
+# ── PHI audit destruction-record API ─────────────────────────────────────────
+#
+# Compliance-driven destruction of audit / PHI records is performed out of
+# band by DB tooling (DROP PARTITION, manual purge scripts, etc).  This
+# endpoint NEVER deletes anything itself — it records that destruction
+# happened in the immutable ``copilot_audit_destructions`` table so the
+# §9.7 retention policy has a tamper-evident receipt trail.
+
+class DestructionRecordRequest(BaseModel):
+    target_session: str | None = None
+    target_patient: str | None = None
+    target_window_start: Any | None = None  # datetime (ISO-8601) or None
+    target_window_end: Any | None = None
+    rows_affected: int = 0
+    reason: str
+
+
+class DestructionRecordResponse(BaseModel):
+    destruction_id: int
+    ts: str
+
+
+@app.post("/audit/destruction-record", response_model=DestructionRecordResponse)
+async def post_destruction_record(body: DestructionRecordRequest) -> DestructionRecordResponse:
+    """Record (don't perform) a compliance-driven PHI destruction.
+
+    Auth required (enforced upstream by ``jwt_middleware``).  ``requested_by``
+    is taken from the verified JWT's ``sub`` — the body cannot override it.
+    """
+    if not body.reason or not body.reason.strip():
+        raise HTTPException(status_code=400, detail="reason must not be empty")
+
+    principal = request_principal_var.get()
+    if principal is None:
+        # In bypass mode (empty JWT secret) we still need a stable
+        # ``requested_by`` value so the receipt is queryable.  Use a
+        # sentinel rather than NULL so consumers can grep for it.
+        requested_by = "unauthenticated"
+    else:
+        requested_by = str(principal.get("provider_id") or "unknown")
+
+    # Parse optional ISO-8601 datetimes for the destruction window.
+    import datetime as _dt
+    def _parse(v: Any) -> _dt.datetime | None:
+        if v is None or v == "":
+            return None
+        if isinstance(v, _dt.datetime):
+            return v
+        try:
+            return _dt.datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="invalid datetime") from exc
+
+    rid = request_id_var.get()
+    try:
+        destruction_id, ts = await audit_writer.record_destruction(
+            requested_by=requested_by,
+            request_id=rid,
+            target_session=body.target_session,
+            target_patient=body.target_patient,
+            target_window_start=_parse(body.target_window_start),
+            target_window_end=_parse(body.target_window_end),
+            rows_affected=int(body.rows_affected),
+            reason=body.reason.strip(),
+        )
+    except RuntimeError as exc:
+        # Surfaces "audit_db_url not configured" or pool-create failure
+        # so operators see why the receipt could not be written.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("destruction_record_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="destruction record write failed") from exc
+
+    # Best-effort: also emit a row to copilot_audit_events so the
+    # destruction event itself is queryable in the same timeline.
+    try:
+        await audit_writer.emit(
+            AuditEvent(
+                event_type="destruction",
+                request_id=rid,
+                provider_id=requested_by,
+                session_id=body.target_session,
+                patient_id=body.target_patient,
+                outcome="success",
+                detail_json={
+                    "destruction_id": destruction_id,
+                    "rows_affected": int(body.rows_affected),
+                },
+            )
+        )
+    except Exception:
+        pass
+
+    return DestructionRecordResponse(destruction_id=destruction_id, ts=ts.isoformat())
 
 
 def _session_ctx(session_id: str | None = None) -> dict:
@@ -1023,3 +1177,362 @@ async def get_history(session_id: str) -> dict:
         turns = await _sqlite_saver.load(session_id) if _sqlite_saver else []
 
     return {"session_id": session_id, "turns": turns}
+
+
+# ── Document ingest (W2 Slices 1.6 + 1.7) ────────────────────────────────────
+#
+# POST /document/ingest — Path B inline ingestion (W2_ARCHITECTURE.md §4.2).
+# Wires together fhir_writer (Binary + DocumentReference), documents.store
+# (idempotent claim by content hash), and the lab extractor.  JWT-protected
+# via the global middleware: this endpoint is NOT on the bypass list.
+#
+# Soft-warns (Slice 1.7) are computed inline by ``_build_soft_warns`` and
+# returned alongside the extraction so the UI can surface confidence
+# caveats without re-deriving them.
+
+# Inline upload size + page guards (W2 §4.2 / §4.5). Beyond these the user
+# is routed to Path A (overnight Documents-tab processing). The constants
+# are module-level so tests can monkeypatch them down to a small value
+# without crafting a 25 MB payload.
+_DOC_INGEST_MAX_BYTES: int = 25 * 1024 * 1024
+_DOC_INGEST_HARD_READ_CAP: int = 26 * 1024 * 1024
+_DOC_INGEST_MAX_PAGES: int = 50
+_DOC_INGEST_TOO_LARGE_MSG: str = (
+    "Document too large for inline upload — attach via OpenEMR Documents tab "
+    "so it processes overnight, or split into a smaller upload."
+)
+
+
+def _flatten_citations(extraction: Any) -> list[dict[str, Any]]:
+    """Walk an ExtractionResult and collect every ``Citation`` it carries.
+
+    Lab values and key-facts each own a ``citations`` list; the UI wants a
+    single flat list per response so the badge renderer doesn't have to
+    discriminate on ``kind``.
+    """
+    out: list[dict[str, Any]] = []
+    kind = getattr(extraction, "kind", None)
+    if kind == "lab_report":
+        for value in getattr(extraction, "values", []) or []:
+            for cit in getattr(value, "citations", []) or []:
+                out.append(cit.model_dump(mode="json"))
+    elif kind == "unknown":
+        for fact in getattr(extraction, "key_facts", []) or []:
+            for cit in getattr(fact, "citations", []) or []:
+                out.append(cit.model_dump(mode="json"))
+    return out
+
+
+def _count_extracted_fields(extraction: Any) -> int:
+    """Count of values / key_facts in an ExtractionResult — for audit only.
+
+    NEVER returns the underlying clinical text; only the cardinality so the
+    audit row can record "n_fields=12" without leaking a single value.
+    """
+    kind = getattr(extraction, "kind", None)
+    if kind == "lab_report":
+        return len(getattr(extraction, "values", []) or [])
+    if kind == "unknown":
+        return len(getattr(extraction, "key_facts", []) or [])
+    return 0
+
+
+def _build_soft_warns_from_dict(
+    *,
+    kind: str | None,
+    ocr_confidence_range: Any,
+    classifier_confidence: Any,
+) -> list[dict[str, Any]]:
+    """Compute soft-warns from raw values (used by both Pydantic and cached paths)."""
+    warns: list[dict[str, Any]] = []
+    if ocr_confidence_range is not None:
+        try:
+            ocr_min = float(ocr_confidence_range[0])
+        except (TypeError, ValueError, IndexError):
+            ocr_min = 1.0
+        if ocr_min < 0.6:
+            warns.append({
+                "code": "ocr_confidence_low",
+                "message": (
+                    "Scan quality low — citations are best-effort, "
+                    "value-fidelity check disabled. Verify against source."
+                ),
+                "fields": [],
+            })
+
+    if kind == "unknown":
+        warns.append({
+            "code": "unknown_document_class",
+            "message": (
+                "We're not sure this is a structured document type — "
+                "verify before acting."
+            ),
+            "fields": [],
+        })
+    elif kind == "lab_report":
+        try:
+            confidence = float(classifier_confidence)
+        except (TypeError, ValueError):
+            confidence = 1.0
+        if confidence < 0.7:
+            warns.append({
+                "code": "classifier_low_confidence",
+                "message": (
+                    "We're not sure this is a lab_report — verify before acting."
+                ),
+                "fields": [],
+            })
+    return warns
+
+
+def _build_soft_warns(extraction: Any) -> list[dict[str, Any]]:
+    """Return the Slice 1.7 soft-warn list for an extraction.
+
+    Pure function — no I/O — so the rule set is unit-testable in isolation
+    from the FastAPI handler. Codes are stable string IDs the UI keys off.
+    """
+    return _build_soft_warns_from_dict(
+        kind=getattr(extraction, "kind", None),
+        ocr_confidence_range=getattr(extraction, "ocr_confidence_range", None),
+        classifier_confidence=getattr(extraction, "classifier_confidence", 1.0),
+    )
+
+
+def _flatten_citations_from_dict(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Walk a serialized ExtractionResult dict for embedded citations."""
+    out: list[dict[str, Any]] = []
+    kind = payload.get("kind")
+    if kind == "lab_report":
+        for value in payload.get("values") or []:
+            for cit in (value or {}).get("citations") or []:
+                if isinstance(cit, dict):
+                    out.append(cit)
+    elif kind == "unknown":
+        for fact in payload.get("key_facts") or []:
+            for cit in (fact or {}).get("citations") or []:
+                if isinstance(cit, dict):
+                    out.append(cit)
+    return out
+
+
+@app.post("/document/ingest")
+async def document_ingest(
+    request: Request,
+    file: UploadFile = File(...),
+    patient_id: str = Form(...),
+    doc_type_hint: str | None = Form(None),
+) -> Any:
+    """Path B: inline upload of a clinical PDF (W2 §4.2 / §4.5 / §4.7).
+
+    Pipeline: size/page guard → FHIR write → idempotent claim → extract →
+    persist → audit. Soft-warns are returned inline (Slice 1.7).
+    """
+    # Imports are local so the route's module-level surface stays small and
+    # so the pytest fixtures that monkeypatch these symbols can target the
+    # canonical module path.
+    from documents import fhir_writer as _fhir_writer
+    from documents import store as _store
+    from extractors import lab as _lab
+
+    rid = request_id_var.get()
+    try:
+        principal = request_principal_var.get()
+    except LookupError:
+        principal = None
+    provider_id = "system"
+    if principal is not None:
+        provider_id = str(principal.get("provider_id") or principal.get("sub") or "system")
+
+    # 1) Size guard — read with a hard cap above the 25 MB limit so we can
+    #    distinguish "exactly at limit" from "well over". The +1 MB allows
+    #    PDFs that grow slightly during multipart re-encoding to pass.
+    pdf_bytes = await file.read(_DOC_INGEST_HARD_READ_CAP + 1)
+    size_bytes = len(pdf_bytes)
+    if size_bytes > _DOC_INGEST_MAX_BYTES:
+        raise HTTPException(status_code=413, detail=_DOC_INGEST_TOO_LARGE_MSG)
+
+    # 2) Page guard — open via PyMuPDF. A non-PDF body raises here; we
+    #    convert to a 400 so the client sees a clear error rather than a 500.
+    try:
+        import pymupdf as _fitz
+        doc = _fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as exc:
+        logger.warning(
+            "document_ingest_invalid_pdf",
+            extra={"request_id": rid, "size_bytes": size_bytes, "error": str(exc)},
+        )
+        raise HTTPException(status_code=400, detail="Invalid PDF upload") from exc
+
+    try:
+        page_count = int(doc.page_count)
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+    if page_count > _DOC_INGEST_MAX_PAGES:
+        raise HTTPException(status_code=413, detail=_DOC_INGEST_TOO_LARGE_MSG)
+
+    # 3) FHIR write FIRST so we always have a document_reference_id even
+    #    when extraction fails downstream.
+    try:
+        write_result = await _fhir_writer.write_document(
+            patient_id=patient_id,
+            pdf_bytes=pdf_bytes,
+            doc_type_hint=doc_type_hint,
+        )
+    except _fhir_writer.FhirWriteError as exc:
+        logger.error(
+            "document_ingest_fhir_write_failed",
+            extra={"request_id": rid, "patient_id": patient_id, "error": str(exc)},
+        )
+        raise HTTPException(status_code=502, detail="Document upload to chart failed") from exc
+
+    # 4) Idempotent claim.
+    content_sha256 = _store.compute_sha256(pdf_bytes)
+    try:
+        claim = await _store.claim_or_get(
+            document_reference_id=write_result.document_reference_id,
+            content_sha256=content_sha256,
+            patient_id=patient_id,
+        )
+    except Exception as exc:
+        logger.error(
+            "document_ingest_claim_failed",
+            extra={"request_id": rid, "error": str(exc)},
+        )
+        raise HTTPException(status_code=500, detail="Document claim failed") from exc
+
+    # 4a) Cached payload — re-ingest of an identical PDF. Walk the dict
+    #     directly: re-validating through pydantic's strict mode rejects
+    #     ISO datetimes / list-from-tuple coercions that ``model_dump`` emits.
+    if claim.cached_payload is not None:
+        cached = claim.cached_payload
+        kind_value = cached.get("kind", "unknown")
+        ocr_range_value = cached.get("ocr_confidence_range") or [1.0, 1.0]
+        classifier_conf_value = cached.get("classifier_confidence", 1.0)
+        soft_warns = _build_soft_warns_from_dict(
+            kind=kind_value,
+            ocr_confidence_range=ocr_range_value,
+            classifier_confidence=classifier_conf_value,
+        )
+        return {
+            "document_reference_id": write_result.document_reference_id,
+            "extraction_id": claim.extraction_id,
+            "extraction": cached,
+            "citations": _flatten_citations_from_dict(cached),
+            "soft_warns": soft_warns,
+            "metadata": {
+                "cached": True,
+                "fhir_write_path": write_result.path,
+                "request_id": rid,
+                "size_bytes": size_bytes,
+                "page_count": page_count,
+            },
+        }
+
+    # 4b) Another worker holds the claim — return 202.
+    if not claim.owns_claim:
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "processing",
+                "document_reference_id": write_result.document_reference_id,
+                "extraction_id": claim.extraction_id,
+            },
+        )
+
+    # 5) Run extraction.
+    try:
+        extraction = await _lab.extract(
+            pdf_bytes,
+            patient_id=patient_id,
+            document_reference_id=write_result.document_reference_id,
+        )
+    except _lab.ExtractionFailed as exc:
+        try:
+            await _store.fail(extraction_id=claim.extraction_id, error="extraction failed")
+        except Exception as fail_exc:  # pragma: no cover — best-effort
+            logger.error(
+                "document_ingest_fail_record_failed",
+                extra={"request_id": rid, "error": str(fail_exc)},
+            )
+        logger.error(
+            "document_ingest_extraction_failed",
+            extra={"request_id": rid, "extraction_id": claim.extraction_id, "error": str(exc)},
+        )
+        raise HTTPException(status_code=500, detail="Document extraction failed") from exc
+
+    # 6) Persist.
+    try:
+        await _store.complete(
+            extraction_id=claim.extraction_id,
+            kind=extraction.kind,
+            payload=extraction.model_dump(mode="json"),
+            classifier_confidence=float(extraction.classifier_confidence),
+            ocr_confidence_range=tuple(extraction.ocr_confidence_range),  # type: ignore[arg-type]
+        )
+    except Exception as exc:
+        logger.error(
+            "document_ingest_persist_failed",
+            extra={"request_id": rid, "extraction_id": claim.extraction_id, "error": str(exc)},
+        )
+        raise HTTPException(status_code=500, detail="Document persist failed") from exc
+
+    # 7) Audit — two events. detail_json is structured codes only; never
+    #    extraction values, never raw OCR.
+    try:
+        await audit_writer.emit(
+            AuditEvent(
+                event_type="document_ingested",
+                request_id=rid,
+                provider_id=provider_id,
+                patient_id=patient_id,
+                outcome="success",
+                detail_json={
+                    "path": write_result.path,
+                    "size_bytes": size_bytes,
+                    "page_count": page_count,
+                },
+            )
+        )
+        await audit_writer.emit(
+            AuditEvent(
+                event_type="document_extracted",
+                request_id=rid,
+                provider_id=provider_id,
+                patient_id=patient_id,
+                outcome="success",
+                detail_json={
+                    "kind": extraction.kind,
+                    "classifier_confidence": float(extraction.classifier_confidence),
+                    "ocr_confidence_range": [
+                        float(extraction.ocr_confidence_range[0]),
+                        float(extraction.ocr_confidence_range[1]),
+                    ],
+                    "n_fields": _count_extracted_fields(extraction),
+                },
+            )
+        )
+    except Exception as exc:  # pragma: no cover — audit must never break the request
+        logger.warning(
+            "document_ingest_audit_emit_failed",
+            extra={"request_id": rid, "error": str(exc)},
+        )
+
+    soft_warns = _build_soft_warns(extraction)
+    return {
+        "document_reference_id": write_result.document_reference_id,
+        "extraction_id": claim.extraction_id,
+        "extraction": extraction.model_dump(mode="json"),
+        "citations": _flatten_citations(extraction),
+        "soft_warns": soft_warns,
+        "metadata": {
+            "cached": False,
+            "fhir_write_path": write_result.path,
+            "request_id": rid,
+            "size_bytes": size_bytes,
+            "page_count": page_count,
+        },
+    }
