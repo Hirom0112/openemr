@@ -281,15 +281,22 @@ async def test_critic_emits_audit_row() -> None:
         "graph.nodes.critic.audit_writer.emit", new=AsyncMock()
     ) as mock_emit:
         await critic_node(state)
-    assert mock_emit.await_count == 1
-    event = mock_emit.await_args.args[0]
-    assert event.event_type == "node_handoff"
-    assert event.detail_json["from_node"] == "critic"
-    assert event.detail_json["to_node"] == "finalize"
-    assert event.detail_json["decision"] in ("pass", "soft_warn", "hard_block")
-    assert "violation_codes" in event.detail_json
-    # Sanity: no clinical text strings in the detail payload (block-list
-    # words from audit.writer would also catch this in production).
-    serialized = str(event.detail_json).lower()
-    for forbidden in ("lactate", "patient", "narrative", "complaint"):
-        assert forbidden not in serialized
+    # Two rows: one node_handoff (critic → finalize) plus one critic_decision
+    # (W2 §9.4). Both required by the dual-target audit contract.
+    assert mock_emit.await_count == 2
+    events = [c.args[0] for c in mock_emit.await_args_list]
+    types = {e.event_type for e in events}
+    assert types == {"node_handoff", "critic_decision"}
+    handoff = next(e for e in events if e.event_type == "node_handoff")
+    assert handoff.detail_json["from_node"] == "critic"
+    assert handoff.detail_json["to_node"] == "finalize"
+    assert handoff.detail_json["decision"] in ("pass", "soft_warn", "hard_block")
+    assert "violation_codes" in handoff.detail_json
+    decision = next(e for e in events if e.event_type == "critic_decision")
+    assert decision.detail_json["decision"] in ("pass", "soft_warn", "hard_block")
+    assert "violation_codes" in decision.detail_json
+    # Sanity: no clinical text strings in either detail payload.
+    for event in events:
+        serialized = str(event.detail_json).lower()
+        for forbidden in ("lactate", "narrative", "complaint", "patient"):
+            assert forbidden not in serialized

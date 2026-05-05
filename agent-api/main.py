@@ -52,6 +52,10 @@ from agent.metrics import (
     agent_prompt_cache_misses_total,
     agent_tool_calls_total,
     agent_tool_misroute_total,
+    agent_w2_classifier_confidence,
+    agent_w2_document_ingest_total,
+    agent_w2_extraction_duration_seconds,
+    agent_w2_ocr_confidence,
 )
 from agent.tools import (
     generate_handoff,
@@ -1203,6 +1207,24 @@ _DOC_INGEST_TOO_LARGE_MSG: str = (
 )
 
 
+def _bucket(confidence: float) -> str:
+    """Map a 0..1 confidence float to a low|medium|high bucket label.
+
+    Bucket thresholds match the soft-warn cutoffs in
+    :func:`_build_soft_warns` so the metric label aligns with the user-visible
+    severity. Used to label ``agent_w2_extraction_duration_seconds``.
+    """
+    try:
+        c = float(confidence)
+    except (TypeError, ValueError):
+        return "low"
+    if c < 0.6:
+        return "low"
+    if c < 0.85:
+        return "medium"
+    return "high"
+
+
 def _flatten_citations(extraction: Any) -> list[dict[str, Any]]:
     """Walk an ExtractionResult and collect every ``Citation`` it carries.
 
@@ -1389,6 +1411,17 @@ async def document_ingest(
     pdf_bytes = await file.read(_DOC_INGEST_HARD_READ_CAP + 1)
     size_bytes = len(pdf_bytes)
     if size_bytes > _DOC_INGEST_MAX_BYTES:
+        agent_w2_document_ingest_total.labels(
+            path="unknown", doc_type=(doc_type_hint or "unknown"), outcome="too_large"
+        ).inc()
+        logger.info(
+            "document_ingest_metric",
+            extra={
+                "request_id": rid,
+                "outcome": "too_large",
+                "size_bytes": size_bytes,
+            },
+        )
         raise HTTPException(status_code=413, detail=_DOC_INGEST_TOO_LARGE_MSG)
 
     # 2) Page guard — open via PyMuPDF. A non-PDF body raises here; we
@@ -1412,6 +1445,17 @@ async def document_ingest(
             pass
 
     if page_count > _DOC_INGEST_MAX_PAGES:
+        agent_w2_document_ingest_total.labels(
+            path="unknown", doc_type=(doc_type_hint or "unknown"), outcome="too_large"
+        ).inc()
+        logger.info(
+            "document_ingest_metric",
+            extra={
+                "request_id": rid,
+                "outcome": "too_large",
+                "page_count": page_count,
+            },
+        )
         raise HTTPException(status_code=413, detail=_DOC_INGEST_TOO_LARGE_MSG)
 
     # 3) FHIR write FIRST so we always have a document_reference_id even
@@ -1426,6 +1470,13 @@ async def document_ingest(
         logger.error(
             "document_ingest_fhir_write_failed",
             extra={"request_id": rid, "patient_id": patient_id, "error": str(exc)},
+        )
+        agent_w2_document_ingest_total.labels(
+            path="fhir", doc_type=(doc_type_hint or "unknown"), outcome="fhir_failed"
+        ).inc()
+        logger.info(
+            "document_ingest_metric",
+            extra={"request_id": rid, "outcome": "fhir_failed"},
         )
         raise HTTPException(status_code=502, detail="Document upload to chart failed") from exc
 
@@ -1486,6 +1537,8 @@ async def document_ingest(
     # 5) Run extraction. Classifier-first dispatch: intake_form goes to the
     #    intake extractor; everything else (lab_report, unknown, no-verdict)
     #    flows through the lab extractor's existing fallback logic.
+    import time as _time
+    _extract_t0 = _time.monotonic()
     try:
         _layout_blocks = _extract_layout(pdf_bytes)
         _verdict = _classify_keywords(_layout_blocks) if _layout_blocks else None
@@ -1512,6 +1565,15 @@ async def document_ingest(
         logger.error(
             "document_ingest_extraction_failed",
             extra={"request_id": rid, "extraction_id": claim.extraction_id, "error": str(exc)},
+        )
+        agent_w2_document_ingest_total.labels(
+            path=write_result.path,
+            doc_type=(doc_type_hint or "unknown"),
+            outcome="extraction_failed",
+        ).inc()
+        logger.info(
+            "document_ingest_metric",
+            extra={"request_id": rid, "outcome": "extraction_failed"},
         )
         raise HTTPException(status_code=500, detail="Document extraction failed") from exc
 
@@ -1569,6 +1631,43 @@ async def document_ingest(
     except Exception as exc:  # pragma: no cover — audit must never break the request
         logger.warning(
             "document_ingest_audit_emit_failed",
+            extra={"request_id": rid, "error": str(exc)},
+        )
+
+    # ── Metrics — success path. Pair each metric with one structured log
+    #    event per CLAUDE.md "Observability" rule. NO clinical values.
+    try:
+        _classifier_conf = float(extraction.classifier_confidence)
+        _bucket_label = _bucket(_classifier_conf)
+        _ocr_low = float(extraction.ocr_confidence_range[0])
+        agent_w2_document_ingest_total.labels(
+            path=write_result.path,
+            doc_type=extraction.kind,
+            outcome="success",
+        ).inc()
+        agent_w2_extraction_duration_seconds.labels(
+            doc_type=extraction.kind,
+            classifier_confidence_bucket=_bucket_label,
+        ).observe(max(0.0, _time.monotonic() - _extract_t0))
+        agent_w2_classifier_confidence.labels(doc_type=extraction.kind).observe(
+            _classifier_conf
+        )
+        agent_w2_ocr_confidence.labels(doc_type=extraction.kind).observe(_ocr_low)
+        logger.info(
+            "document_ingest_metric",
+            extra={
+                "request_id": rid,
+                "outcome": "success",
+                "doc_type": extraction.kind,
+                "classifier_confidence_bucket": _bucket_label,
+                "duration_ms": int(
+                    max(0.0, _time.monotonic() - _extract_t0) * 1000
+                ),
+            },
+        )
+    except Exception as exc:  # pragma: no cover — metrics must never break the request
+        logger.warning(
+            "document_ingest_metric_emit_failed",
             extra={"request_id": rid, "error": str(exc)},
         )
 

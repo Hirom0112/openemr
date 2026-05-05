@@ -24,6 +24,7 @@ import logging
 import time
 from typing import Any, Awaitable, Callable
 
+from agent.metrics import agent_w2_demographic_checks_total
 from audit import writer as audit_writer
 from audit.models import AuditEvent
 from demographics.check import check_demographics
@@ -183,6 +184,22 @@ async def demographics_node(
     except Exception as exc:  # pragma: no cover — fire-and-forget
         logger.warning(
             "graph_demographics_audit_emit_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+
+    # ── Metric inc (paired with one structured log event) ───────────────────
+    try:
+        agent_w2_demographic_checks_total.labels(outcome=result.decision).inc()
+        logger.info(
+            "graph_demographics_metric",
+            extra={
+                "outcome": result.decision,
+                "reason_code": result.reason_code,
+            },
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.warning(
+            "graph_demographics_metric_emit_failed",
             extra={"error_type": type(exc).__name__},
         )
 
