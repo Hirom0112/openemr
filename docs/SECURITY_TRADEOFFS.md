@@ -257,6 +257,39 @@ left in place dormant or removed entirely.
 
 ---
 
+## 4.X Known false-positive on `no_phi_in_logs` cascade
+
+The W2 eval runner (`agent-api/evals/runner.py`) attaches a capture handler
+to the **root** logger at `DEBUG` so every first-party graph event is
+available to the rubric layer. That decision has a side-effect: third-party
+libraries pulled into the request path — `httpx`, `httpcore`,
+`anthropic._base_client`, `langgraph`, `langchain` — emit DEBUG-level
+records that include the **raw HTTP request and response bodies**. For a
+clinical-document pipeline the request body is the source document text,
+and the synthetic PHI used by the eval fixtures (`Marcus Webb`, `100847`,
+`1962-03-14`, `Jane Doe`, ...) ends up in the captured set. The
+`no_phi_in_logs` rubric then — correctly — flags those emissions and the
+gate drops below its 1.00 floor (e.g. 0.84 on the
+`regression/seed-strip-citations` regression branch run, where every lab
+case fanned out an extractor vision call that left a debug body in the
+capture).
+
+This is a runner-side artifact, not a real leak in agent-api code: none of
+our first-party `logger.*` call sites log raw clinical values (verified
+against `agent-api/graph/`, `agent-api/extractors/`,
+`agent-api/documents/`, and `agent-api/audit/`). The mitigation is to
+suppress the third-party loggers for the lifetime of the capture: the
+runner pins them to `WARNING` in `_attach_capture` and restores their
+prior level in `_detach_capture`. The
+`agent-api/tests/test_evals_no_phi_real_bug.py` regression test guards
+that contract.
+
+Tradeoff: if a future eval-time bug surfaces in `httpx` or `langgraph`,
+its DEBUG diagnostic will not be in `captured_logs`. That is acceptable —
+the rubric's contract is about agent-api emissions, not third-party
+internals; an actual transport failure would surface as an exception or a
+WARNING from those same loggers, both of which still flow through.
+
 ## 5. Cross-references
 
 - `W2_ARCHITECTURE.md §4.2` — Path B (the documented upload path)

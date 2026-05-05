@@ -119,6 +119,11 @@ else
             KIND=$(python3 -c "import json,sys; d=json.load(open('${INGEST_OUT}')); print((d.get('extraction') or {}).get('kind',''))" 2>/dev/null || echo "")
             N_VALUES=$(python3 -c "import json,sys; d=json.load(open('${INGEST_OUT}')); print(len((d.get('extraction') or {}).get('values') or []))" 2>/dev/null || echo "0")
             FHIR_PATH=$(python3 -c "import json,sys; d=json.load(open('${INGEST_OUT}')); print((d.get('metadata') or {}).get('fhir_write_path',''))" 2>/dev/null || echo "")
+            # Capture the SAME ingest's observation_ids so Check 5 doesn't
+            # re-POST and trigger a fresh write_document with a new doc_id
+            # (Document::createDocument on the OpenEMR side isn't deduping
+            # on content_sha256; each call mints a new documents row).
+            OBS_IDS=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(" ".join((d.get("metadata") or {}).get("observation_ids") or []))' "${INGEST_OUT}" 2>/dev/null || echo "")
 
             ok "HTTP ${HTTP_CODE} | kind=${KIND} | n_values=${N_VALUES} | doc_ref=${DOC_REF} | path=${FHIR_PATH}"
 
@@ -134,6 +139,7 @@ else
         else
             fail "ingest returned HTTP ${HTTP_CODE}: $(head -c 200 "${INGEST_OUT}")"
             DOC_REF=""
+            OBS_IDS=""
         fi
         rm -f "${INGEST_OUT}"
         unset JWT
@@ -248,7 +254,7 @@ PY
         if [[ "${DOCREF_CODE}" == "200" ]]; then
             TOTAL=$(python3 -c "import json,sys; d=json.load(open('${DOCREF_OUT}')); print(d.get('total','?'))" 2>/dev/null || echo "?")
             if [[ "${TOTAL}" == "0" ]] || [[ "${TOTAL}" == "?" ]]; then
-                echo "  [INFO] FHIR DocumentReference total=${TOTAL} for patient ${PATIENT_ID} — DocumentService::search filters by ACL (line 282-286 in OpenEMR core); the OAuth user lacks the patients/docs ACL grant on this deploy. Granting it via Administration UI activates the FHIR read path without code changes. The doc IS in the chart and reachable via Postgres copilot_doc_extractions (see W2_ARCHITECTURE §4.2.3)."
+                echo "  [INFO] FHIR DocumentReference total=${TOTAL} for patient ${PATIENT_ID} — DocumentService::search filters via can_access(\$_SESSION['authUser']) (line 282-286 in OpenEMR core); OAuth-bearer requests don't bind authUser into the session on this OpenEMR build. ACL chain itself resolves cleanly (admin -> Administrators ARO -> ACL 10 with patients/docs grant). The doc IS in the chart and the chain is queryable via the agent-api response envelope + copilot_observations (see W2_ARCHITECTURE §4.2.1)."
             else
                 ok "FHIR DocumentReference search returned ${DOCREF_CODE}, total=${TOTAL}"
             fi
@@ -289,24 +295,13 @@ if [[ -z "${EXPECTED_DOC_NUM:-}" ]] || [[ -z "${DOC_REF:-}" ]]; then
 elif ! command -v railway >/dev/null 2>&1; then
     echo "  [SKIP] railway CLI unavailable; provenance chain cannot probe MySQL"
 else
-    JWT2="$(mint_jwt)" || JWT2=""
-    if [[ -z "${JWT2}" ]]; then
-        fail "could not mint JWT for Check 5"
+    # Reuse OBS_IDS captured from the SAME ingest as Check 2 — re-POSTing
+    # would mint a new documents row (Document::createDocument doesn't
+    # dedupe on content_sha256 today) and the resulting observation ids
+    # would reference a different doc than EXPECTED_DOC_NUM.
+    if [[ -z "${OBS_IDS:-}" ]]; then
+        fail "Check 2 captured no observation_ids — provenance chain not produced (or Check 2 didn't run)"
     else
-        INGEST5_OUT="$(mktemp)"
-        HTTP_CODE5="$(curl -sS -m 90 -o "${INGEST5_OUT}" -w '%{http_code}' \
-            -X POST \
-            -H "Authorization: Bearer ${JWT2}" \
-            -F "file=@${FIXTURE}" \
-            -F "patient_id=${PATIENT_ID}" \
-            -F "doc_type_hint=lab_report" \
-            "${AGENT_API}/document/ingest" 2>/dev/null || echo 000)"
-        unset JWT2
-
-        if [[ "${HTTP_CODE5}" != "200" ]]; then
-            fail "Check 5 ingest re-probe returned HTTP ${HTTP_CODE5}"
-        else
-            OBS_IDS=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(" ".join((d.get("metadata") or {}).get("observation_ids") or []))' "${INGEST5_OUT}" 2>/dev/null || echo "")
             N_OBS="$(echo "${OBS_IDS}" | tr ' ' '\n' | grep -cE '^.+$' || echo 0)"
 
             if [[ "${N_OBS}" -lt 1 ]]; then
@@ -413,8 +408,6 @@ PY
                 # Restore service link.
                 railway service copilot-agent-api >/dev/null 2>&1 || true
             fi
-        fi
-        rm -f "${INGEST5_OUT}"
     fi
 fi
 

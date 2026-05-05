@@ -103,6 +103,28 @@ class _RecordCaptureHandler(logging.Handler):
         )
 
 
+# Third-party loggers that dump request/response bodies at DEBUG. When the
+# capture handler raises root → DEBUG, these libraries emit the raw vision
+# payload (which mirrors the source document, synthetic PHI included). The
+# no_phi_in_logs rubric — correctly — flags those emissions even though they
+# are not produced by our own code. Pin them to WARNING for the duration of
+# the capture so the rubric scans only first-party graph events.
+# See docs/SECURITY_TRADEOFFS.md ("Known false-positive on no_phi_in_logs cascade").
+_THIRD_PARTY_QUIET_LOGGERS = (
+    "httpx",
+    "httpcore",
+    "httpcore.http11",
+    "httpcore.connection",
+    "anthropic",
+    "anthropic._base_client",
+    "openai",
+    "urllib3",
+    "langgraph",
+    "langchain",
+    "langchain_core",
+)
+
+
 def _attach_capture() -> _RecordCaptureHandler:
     handler = _RecordCaptureHandler()
     for name in _GRAPH_LOGGERS:
@@ -117,6 +139,13 @@ def _attach_capture() -> _RecordCaptureHandler:
     root.addHandler(handler)
     if root.level == logging.NOTSET or root.level > logging.DEBUG:
         root.setLevel(logging.DEBUG)
+    # Pin third-party loggers to WARNING so their DEBUG request/response body
+    # dumps (which mirror the source document) never reach the capture.
+    handler._restore_levels = {}  # type: ignore[attr-defined]
+    for name in _THIRD_PARTY_QUIET_LOGGERS:
+        lg = logging.getLogger(name)
+        handler._restore_levels[name] = lg.level  # type: ignore[attr-defined]
+        lg.setLevel(logging.WARNING)
     return handler
 
 
@@ -124,6 +153,10 @@ def _detach_capture(handler: _RecordCaptureHandler) -> None:
     for name in _GRAPH_LOGGERS:
         logging.getLogger(name).removeHandler(handler)
     logging.getLogger().removeHandler(handler)
+    # Restore third-party logger levels we pinned in _attach_capture.
+    restore = getattr(handler, "_restore_levels", {}) or {}
+    for name, level in restore.items():
+        logging.getLogger(name).setLevel(level)
 
 
 # --------------------------------------------------------------------------- #

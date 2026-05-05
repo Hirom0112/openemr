@@ -36,6 +36,18 @@ The 50-case W2 eval suite is wired into GitHub Actions and hard-fails on regress
 - 49 agent-ui Jest tests, 0 failures.
 - 0 import-linter contract violations (`agent-api/.importlinter`).
 
+**Live verification (`scripts/verify_mvp.sh` against deploy):**
+
+```
+1. Agent API health                       PASS
+2. Document ingest end-to-end             PASS  doc_ref=copilot:124, n_values=4, path=copilot_custom
+3. Chart round-trip                       PASS  OpenEMR.documents id=124 visible
+   FHIR DocumentReference (info)          INFO  OAuth-bearer/PHP-session bind upstream
+5. Provenance chain (Observation→Doc)     PASS  4 ids, derivedFrom→DocumentReference/copilot-124
+4. Eval gate (CI)                         PASS  clinical-copilot=success | regression=failure (by design)
+VERIFY: PASS
+```
+
 **Gate mechanics:** 50 cases × 7 boolean rubrics → per-rubric pass rates compared against `evals/baseline.json`. `evals/diff_baseline.py` enforces the per-rubric floor. CI workflow: `.github/workflows/copilot-eval.yml` (job `w2-eval`). The seventh rubric — `provenance_chain` — asserts that every extracted LabValue produces a FHIR-shaped `Observation` row with a non-empty `derivedFrom` array referencing the source `DocumentReference`, and that every citation's `bbox_id` resolves into the extraction's OCR layout. See `EVAL.md` for the full rubric set.
 
 ---
