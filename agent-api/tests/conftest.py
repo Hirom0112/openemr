@@ -25,6 +25,26 @@ def load_fixture(name: str) -> Any:
     return json.loads((FIXTURE_DIR / name).read_text())
 
 
+@pytest.fixture(autouse=True)
+def _reset_main_globals():
+    """Reset ``main`` module-level connection globals after every test.
+
+    ``with TestClient(app) as client`` triggers the FastAPI shutdown hook,
+    which calls ``await _redis.aclose()`` but leaves the module-level
+    ``_redis`` attribute non-None. Subsequent tests then see a closed
+    Redis client and exception paths fire on every call. Reset to ``None``
+    after each test so the next one starts cold.
+    """
+    yield
+    try:
+        import main
+    except Exception:
+        return
+    for attr in ("_redis", "_redis_saver", "_sqlite_saver", "_langfuse"):
+        if hasattr(main, attr):
+            setattr(main, attr, None)
+
+
 def pytest_collection_finish(session: pytest.Session) -> None:
     """Fail if any test is missing a required marker (hard_failure or clinical_accuracy).
 

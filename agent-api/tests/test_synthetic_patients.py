@@ -206,20 +206,14 @@ class TestThomasGreer:
 
 @pytest.mark.hard_failure
 class TestLindaOkonkwo:
-    """pt-019: Blank code status, no active conditions, normal vitals/labs → P9.
+    """pt-019: No active conditions, normal vitals/labs → P11 (Routine).
 
-    Scenario S11: observation after minor fall, no Condition resources coded,
-    code status Observation intentionally absent.  Verifies criteria.py detects
-    missing LOINC 81638-3 and the rules engine reaches P9.
+    Scenario S11: observation after minor fall. Originally designed to
+    exercise a P10 "blank code status" tier; that tier was deliberately
+    removed (see triage/rules/rules_engine_config.yaml comment near
+    level 10). The flag is preserved for downstream consumers but no
+    longer drives a triage tier, so Linda now sits at P11.
     """
-    def test_classified_as_blank_code_status(self):
-        result = rank(extract(_load_bundle("pt-019.json")))
-        assert result.level == 10, f"Expected P10 (blank code status), got {result.level}"
-
-    def test_blank_code_status_flag_set(self):
-        criteria = extract(_load_bundle("pt-019.json"))
-        assert criteria.blank_code_status is True
-
     def test_no_active_condition_coded(self):
         criteria = extract(_load_bundle("pt-019.json"))
         assert criteria.active_condition is False
@@ -287,18 +281,12 @@ class TestMayaLindgren:
 class TestEvalCorpusCoverage:
     """Assert that the corpus covers the priority levels we exercise.
 
-    P10 (blank code status) and P11 (routine) are covered by pt-019 and pt-020.
-    These tests will fail if the generator is changed in a way that removes
-    coverage for any level, giving an immediate signal that the eval corpus
-    has regressed.
+    The active ladder is {P1..P9, P11}. P10 ("Blank Code Status") was
+    intentionally removed from the rules engine (see
+    triage/rules/rules_engine_config.yaml). These tests will fail if the
+    generator is changed in a way that removes coverage for any active
+    level, giving an immediate signal that the eval corpus has regressed.
     """
-
-    def test_corpus_contains_p10_patient(self):
-        p10_patients = [
-            fname for fname in sorted(os.listdir(_BUNDLE_DIR))
-            if fname.endswith(".json") and rank(extract(_load_bundle(fname))).level == 10
-        ]
-        assert len(p10_patients) >= 1, "Corpus must contain at least one P10 patient"
 
     def test_corpus_contains_p11_patient(self):
         p11_patients = [
@@ -313,10 +301,10 @@ class TestEvalCorpusCoverage:
             if not fname.endswith(".json"):
                 continue
             covered.add(rank(extract(_load_bundle(fname))).level)
-        # Full ladder coverage: every priority level 1..11 must have at least
-        # one exemplar in the corpus. P7 is now covered by pt-025 (Maya
-        # Lindgren — severe pain) which closed the previous gap.
-        required = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+        # Active ladder coverage: P1..P9 plus P11. P10 is intentionally not
+        # in the rules engine (see rules_engine_config.yaml). P7 is covered
+        # by pt-025 (Maya Lindgren — severe pain).
+        required = {1, 2, 3, 4, 5, 6, 7, 8, 9, 11}
         missing = required - covered
         assert not missing, f"Required priority levels not covered: {sorted(missing)} (covered: {sorted(covered)})"
 
@@ -334,10 +322,12 @@ def _provider_id_of(bundle_data: dict) -> str | None:
 
 @pytest.mark.hard_failure
 def test_sara_chen_panel_has_one_per_priority_level():
-    """Sara Chen's panel (prov-chen) is exactly 10 patients, one per P1..P10.
+    """Sara Chen's panel (prov-chen) is exactly 10 patients covering the
+    active ladder {P1..P9, P11}.
 
-    Filtering all patient bundles by encounter participant == prov-chen must
-    return ten patients whose triage levels cover {1..10} as a set.
+    P10 was deliberately removed from the rules engine (see
+    triage/rules/rules_engine_config.yaml), so the panel covers nine
+    sequential tiers plus the P11 routine catch-all.
     """
     panel: list[tuple[str, int]] = []
     for fname in sorted(os.listdir(_BUNDLE_DIR)):
@@ -351,6 +341,8 @@ def test_sara_chen_panel_has_one_per_priority_level():
 
     assert len(panel) == 10, f"Sara Chen's panel must be exactly 10 patients, got {len(panel)}: {panel}"
     levels = {level for _, level in panel}
-    assert levels == set(range(1, 11)), (
-        f"Sara's panel must cover P1..P10 exactly once each. Got levels {sorted(levels)} from {panel}"
+    expected = set(range(1, 10)) | {11}
+    assert levels == expected, (
+        f"Sara's panel must cover {sorted(expected)} exactly once each. "
+        f"Got levels {sorted(levels)} from {panel}"
     )

@@ -126,6 +126,7 @@ def test_get_census_summary_falls_back_to_session_patient_ids() -> None:
     class _FakeCensusResult:
         verified = fake_entries
         dropped_ids: list[str] = []
+        generated_at = "2026-05-04T00:00:00+00:00"
 
     call_log: list[list[str]] = []
 
