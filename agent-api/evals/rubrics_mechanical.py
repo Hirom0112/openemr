@@ -351,25 +351,163 @@ def _coerce_bbox(b: Any) -> Optional[tuple[float, float, float, float]]:
     return None
 
 
-def citation_iou(extracted_bbox: Any, gt_bbox: Any) -> bool:
-    """Wave 2C — boolean rubric: IoU(extracted, gt) >= 0.5.
+def _coerce_polygon(p: Any) -> Optional[List[tuple[float, float]]]:
+    """Accept a list/tuple of (x, y) pairs and return ``[(x, y), ...]``.
 
-    Both inputs accept either ``{"x","y","w","h"}`` dicts or 4-tuples.
-    Returns ``False`` when either bbox is missing/malformed (a fail-loud
-    semantic — half-populated GT is a generator bug, not a vacuous pass).
-
-    The 0.5 threshold is the standard COCO/PASCAL VOC detection floor.
-    Numerically zero-area bboxes are treated as a fail (no overlap is
-    possible with a degenerate rectangle).
+    Returns ``None`` for missing/invalid input OR for degenerate polygons
+    (fewer than 3 distinct points). Degenerate polygons should fall back
+    to the bbox path — never silently treat a 2-point line as a region.
     """
-    a = _coerce_bbox(extracted_bbox)
-    b = _coerce_bbox(gt_bbox)
-    if a is None or b is None:
-        return False
+    if not isinstance(p, (list, tuple)):
+        return None
+    out: List[tuple[float, float]] = []
+    for pt in p:
+        if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+            return None
+        try:
+            out.append((float(pt[0]), float(pt[1])))
+        except (TypeError, ValueError):
+            return None
+    # Reject degenerate shapes (per Wave 2B contract §3).
+    distinct = {(round(x, 6), round(y, 6)) for (x, y) in out}
+    if len(distinct) < 3:
+        return None
+    return out
+
+
+def _polygon_bbox(poly: List[tuple[float, float]]) -> tuple[float, float, float, float]:
+    xs = [p[0] for p in poly]
+    ys = [p[1] for p in poly]
+    x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
+def _shoelace_area(poly: List[tuple[float, float]]) -> float:
+    """Pure-Python shoelace area for a simple polygon. Returns absolute area."""
+    n = len(poly)
+    if n < 3:
+        return 0.0
+    s = 0.0
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        s += x1 * y2 - x2 * y1
+    return abs(s) / 2.0
+
+
+def _sutherland_hodgman_clip(
+    subject: List[tuple[float, float]], clip: List[tuple[float, float]]
+) -> List[tuple[float, float]]:
+    """Sutherland-Hodgman polygon clip. ``clip`` must be a CONVEX polygon
+    (with consistent winding). For axis-aligned bbox-as-polygon use this
+    is sufficient; for general polygon-vs-polygon we prefer Shapely when
+    available. Returns the clipped polygon as a list of points."""
+    output = list(subject)
+    if not output or not clip:
+        return []
+    # Determine clip winding (signed area).
+    n = len(clip)
+    signed = 0.0
+    for i in range(n):
+        x1, y1 = clip[i]
+        x2, y2 = clip[(i + 1) % n]
+        signed += x1 * y2 - x2 * y1
+    # Reverse if clockwise so "inside" = left side of edge.
+    if signed < 0:
+        clip = list(reversed(clip))
+        n = len(clip)
+
+    def inside(p: tuple[float, float], a: tuple[float, float], b: tuple[float, float]) -> bool:
+        return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) >= 0
+
+    def intersect(
+        p1: tuple[float, float],
+        p2: tuple[float, float],
+        a: tuple[float, float],
+        b: tuple[float, float],
+    ) -> tuple[float, float]:
+        # Line p1-p2 intersected with line a-b.
+        x1, y1 = p1
+        x2, y2 = p2
+        x3, y3 = a
+        x4, y4 = b
+        denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if denom == 0:
+            return p2
+        t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+        return (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+
+    for i in range(n):
+        if not output:
+            return []
+        a = clip[i]
+        b = clip[(i + 1) % n]
+        new_output: List[tuple[float, float]] = []
+        s = output[-1]
+        for e in output:
+            if inside(e, a, b):
+                if not inside(s, a, b):
+                    new_output.append(intersect(s, e, a, b))
+                new_output.append(e)
+            elif inside(s, a, b):
+                new_output.append(intersect(s, e, a, b))
+            s = e
+        output = new_output
+    return output
+
+
+def _polygon_iou(
+    a: List[tuple[float, float]], b: List[tuple[float, float]]
+) -> float:
+    """IoU(a, b) for two polygons. Prefers Shapely when available
+    (handles non-convex / self-intersecting cases); otherwise falls back
+    to a pure-Python Sutherland-Hodgman clip + shoelace. The fallback
+    assumes the clipping polygon is convex — for axis-aligned bboxes-as-
+    polygons (the common UI case) that's true; for arbitrary OCR
+    polygons it's a best-effort approximation."""
+    try:
+        from shapely.geometry import Polygon  # type: ignore
+
+        pa = Polygon(a)
+        pb = Polygon(b)
+        if not pa.is_valid:
+            pa = pa.buffer(0)
+        if not pb.is_valid:
+            pb = pb.buffer(0)
+        if pa.is_empty or pb.is_empty:
+            return 0.0
+        inter = pa.intersection(pb).area
+        union = pa.union(pb).area
+        if union <= 0:
+            return 0.0
+        return float(inter / union)
+    except ImportError:
+        pass
+    # Pure-Python fallback.
+    area_a = _shoelace_area(a)
+    area_b = _shoelace_area(b)
+    if area_a <= 0 or area_b <= 0:
+        return 0.0
+    # Clip a against b; if b isn't convex this is approximate. We try
+    # both directions and keep the smaller intersection (more conservative).
+    clipped_ab = _sutherland_hodgman_clip(a, b)
+    inter1 = _shoelace_area(clipped_ab) if clipped_ab else 0.0
+    clipped_ba = _sutherland_hodgman_clip(b, a)
+    inter2 = _shoelace_area(clipped_ba) if clipped_ba else 0.0
+    inter = min(inter1, inter2) if (inter1 > 0 and inter2 > 0) else max(inter1, inter2)
+    union = area_a + area_b - inter
+    if union <= 0:
+        return 0.0
+    return inter / union
+
+
+def _bbox_iou_value(
+    a: tuple[float, float, float, float], b: tuple[float, float, float, float]
+) -> float:
     ax, ay, aw, ah = a
     bx, by, bw, bh = b
     if aw <= 0 or ah <= 0 or bw <= 0 or bh <= 0:
-        return False
+        return 0.0
     ix1 = max(ax, bx)
     iy1 = max(ay, by)
     ix2 = min(ax + aw, bx + bw)
@@ -379,9 +517,99 @@ def citation_iou(extracted_bbox: Any, gt_bbox: Any) -> bool:
     inter = iw * ih
     union = (aw * ah) + (bw * bh) - inter
     if union <= 0:
+        return 0.0
+    return inter / union
+
+
+def citation_iou(extracted: Any, gt: Any) -> bool:
+    """Wave 2B — polygon-aware boolean rubric: IoU(extracted, gt) >= 0.5.
+
+    Each side accepts EITHER:
+      * a bbox: ``{"x","y","w","h"}`` dict or 4-tuple/list, OR
+      * a polygon: a list of ``[x, y]`` pairs (≥3 distinct points), OR
+      * a Citation-shaped dict carrying ``bbox`` and/or ``polygon``.
+
+    Polygon precedence (per Wave 2B contract §1): when polygon is present
+    on a side it wins over bbox on that side. Mixed-mode (polygon vs
+    bbox, contract §2): we do NOT spuriously favor the polygon side —
+    we degrade to bbox-IoU using the polygon-side's axis-aligned bounding
+    box. Degenerate polygons (<3 distinct points) fall through to the
+    bbox path on that side (contract §3).
+
+    Returns ``False`` when neither side has a usable shape — half-
+    populated GT is a generator bug, not a vacuous pass.
+    """
+    a_poly, a_bbox = _shape_for_side(extracted)
+    b_poly, b_bbox = _shape_for_side(gt)
+    # Both sides have polygons → polygon-vs-polygon.
+    if a_poly is not None and b_poly is not None:
+        return _polygon_iou(a_poly, b_poly) >= _IOU_PASS_THRESHOLD
+    # Mixed: collapse the polygon side to its axis-aligned bbox and use
+    # bbox-vs-bbox IoU. Never favor polygon spuriously.
+    if a_poly is not None and b_bbox is not None:
+        a_bbox = _polygon_bbox(a_poly)
+    elif b_poly is not None and a_bbox is not None:
+        b_bbox = _polygon_bbox(b_poly)
+    if a_bbox is None or b_bbox is None:
         return False
-    iou = inter / union
-    return iou >= _IOU_PASS_THRESHOLD
+    return _bbox_iou_value(a_bbox, b_bbox) >= _IOU_PASS_THRESHOLD
+
+
+def _shape_for_side(
+    side: Any,
+) -> tuple[
+    Optional[List[tuple[float, float]]], Optional[tuple[float, float, float, float]]
+]:
+    """Resolve either (polygon, bbox) for a side. Side may be a bbox dict
+    {x,y,w,h}, a 4-tuple bbox, a list of (x,y) pairs (polygon), or a
+    Citation-shaped dict with ``bbox`` and/or ``polygon`` keys."""
+    if side is None:
+        return (None, None)
+    # Citation-shaped dict (has the keys we recognize).
+    if isinstance(side, dict) and ("polygon" in side or "bbox" in side):
+        # Avoid false-positive on bbox-dicts: if it has x/y/w/h treat as bbox.
+        if {"x", "y", "w", "h"}.issubset(side.keys()):
+            return (None, _coerce_bbox(side))
+        poly = _coerce_polygon(side.get("polygon"))
+        bbox = _coerce_bbox(side.get("bbox"))
+        return (poly, bbox)
+    # List of pairs → polygon. (4-tuple bboxes match `len == 4` but their
+    # elements are scalars, not pairs, so `_coerce_polygon` returns None.)
+    poly = _coerce_polygon(side)
+    if poly is not None:
+        return (poly, None)
+    return (None, _coerce_bbox(side))
+
+
+def citation_polygon_used(extraction: Any) -> Optional[tuple[int, int]]:
+    """Wave 2B — INFO-only rubric: count citations rendered as polygon vs bbox.
+
+    Walks every cited item in the extraction and returns
+    ``(n_polygon, n_total_with_bbox_or_polygon)``. The "polygon used"
+    rate is ``n_polygon / n_total``. Returns ``None`` when the
+    extraction is missing or has no document citations — info-only
+    callers should skip the case rather than count it as 0%.
+
+    Not in baseline.json (purely diagnostic — measures source-shape
+    fidelity over time as paddle adoption grows)."""
+    if not isinstance(extraction, dict):
+        return None
+    n_poly = 0
+    n_total = 0
+    for item in _iter_cited_items(extraction):
+        for cit in _iter_citations_for_item(item):
+            if str(cit.get("source_type") or "document") != "document":
+                continue
+            poly = cit.get("polygon")
+            bbox = cit.get("bbox")
+            if poly is None and bbox is None:
+                continue
+            n_total += 1
+            if _coerce_polygon(poly) is not None:
+                n_poly += 1
+    if n_total == 0:
+        return None
+    return (n_poly, n_total)
 
 
 def citation_pixel_distance(extracted_bbox: Any, gt_bbox: Any) -> Optional[float]:

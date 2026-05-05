@@ -27,6 +27,7 @@ import pymupdf
 
 from documents.ocr import LayoutBlock, extract_layout
 from extractors.classifier import classify_keywords
+from extractors.prompt_registry import get_prompt
 from extractors.schemas import (
     Citation,
     ExtractionResult,
@@ -43,37 +44,8 @@ _MODEL_CANDIDATES: Tuple[str, ...] = (
     "claude-3-5-sonnet-20241022",
 )
 
-_PROMPT = """You are extracting structured lab data from an outside-hospital
-laboratory report. You have two inputs:
-
-1. One image per page of the PDF.
-2. A JSON layout produced by deterministic OCR. Each block has a `bbox_id`
-   (e.g. "p2-b005"), the page number, and the OCR text inside that region.
-
-Your job: fill the LabReport schema by calling the `submit_lab_report` tool.
-
-HARD RULES (the agent will reject your output otherwise):
-
-- Use ONLY values you can locate in the OCR layout. Do NOT invent bbox_ids.
-- For EVERY filled clinical field, attach a Citation with:
-    source_type      = "document"
-    source_id        = the document_reference_id passed to you
-    page_or_section  = the page number as a string ("1", "2", ...)
-    field_or_chunk_id = the bbox_id from the OCR layout (e.g. "p2-b005")
-    quote_or_value   = the exact substring from THAT bbox's text that
-                       contains the value. Do NOT rephrase.
-- Each LabValue.citations must have at least one citation.
-- For abnormal_flag, map: "HH"->"critical_high", "LL"->"critical_low",
-  "H"->"high", "L"->"low", blank->"normal".
-- normalized_test_name: lowercase test name (e.g. "lactate", "wbc",
-  "creatinine", "sodium").
-- Set kind="lab_report", schema_version="1.0".
-- Set classifier_confidence to a float in [0,1] reflecting your certainty.
-- Set ocr_confidence_range to (min_conf, max_conf) across cited blocks.
-- Set extracted_at to the current UTC ISO 8601 timestamp.
-
-Inputs follow.
-"""
+# Wave 2D: prompt sourced from the per-class registry.
+_PROMPT = get_prompt("lab_report_tabular")
 
 
 class ExtractionFailed(Exception):
@@ -199,7 +171,18 @@ def _hydrate_citation(cit: Citation, block_index: dict[str, LayoutBlock]) -> Cit
             },
         )
         return cit
-    return cit.model_copy(update={"bbox": block.bbox, "page": block.page})
+    # Wave 2B: propagate the LayoutBlock's polygon (if any) onto the
+    # citation. ``LayoutBlock.polygon`` is a tuple-of-tuples; convert to
+    # a list-of-tuples so the pydantic schema (which uses List) is happy.
+    poly = getattr(block, "polygon", None)
+    polygon_list = [tuple(p) for p in poly] if poly else None
+    return cit.model_copy(
+        update={
+            "bbox": block.bbox,
+            "page": block.page,
+            "polygon": polygon_list,
+        }
+    )
 
 
 def _hydrate_lab_report_citations(

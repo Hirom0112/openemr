@@ -38,6 +38,19 @@ paddleocr==2.8.1
 # python:3.12-slim does not ship it, so pin it explicitly.
 setuptools>=68.0.0
 
+# Phase 3 Wave 2A — photo preprocessing pipeline (deskew / perspective unwarp
+# / CLAHE / bilateral denoise) pre-OCR. Headless build (no GTK / Qt deps);
+# runtime libs (libgl1, libglib2.0-0) already in the Dockerfile for paddleocr.
+# Gated by ``PHOTO_PREPROCESS={off,auto,force}`` — default off, so cold-start
+# cost is paid only when the flag is enabled.
+opencv-python-headless==4.10.0.84
+
+# Phase 3 Wave 2B — polygon-vs-polygon IoU for the citation_iou rubric.
+# Optional at runtime: rubrics_mechanical falls back to a pure-Python
+# Sutherland-Hodgman + shoelace path when shapely isn't installed (so
+# isolated test runs without the wheel still pass).
+shapely>=2.0,<3
+
 # Week-2 LangGraph skeleton (Slice 3.1+).
 langgraph==0.2.60
 langchain-core==0.3.28

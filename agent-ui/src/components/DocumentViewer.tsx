@@ -207,6 +207,20 @@ export default function DocumentViewer(props: DocumentViewerProps): ReactElement
     return block.bbox;
   }, [activeCitation, bboxLayout]);
 
+  // Wave 2B: resolve polygon for the active citation. Polygon precedence
+  // (contract §1) is enforced INSIDE BboxOverlay — we just pass both
+  // shapes through. Inline `polygon` on the Citation wins; fall back to
+  // the layout block's polygon when only the layout table has it.
+  const activePolygon = useMemo<Array<[number, number]> | null>(() => {
+    if (!activeCitation) return null;
+    if (activeCitation.polygon && activeCitation.polygon.length >= 3) {
+      return activeCitation.polygon;
+    }
+    const block = bboxLayout.find((b) => b.bbox_id === activeCitation.field_or_chunk_id);
+    if (!block || !block.polygon || block.polygon.length < 3) return null;
+    return block.polygon;
+  }, [activeCitation, bboxLayout]);
+
   // Look up the granularity for the active citation from the layout table.
   // Citations themselves don't carry granularity on the wire — only the
   // layout blocks do — so we resolve by `field_or_chunk_id -> bbox_id`.
@@ -364,6 +378,7 @@ export default function DocumentViewer(props: DocumentViewerProps): ReactElement
                 pdfPageWidth={pageInfo.pageWidth}
                 pdfPageHeight={pageInfo.pageHeight}
                 bbox={activeBbox}
+                polygon={activePolygon}
                 granularity={activeGranularity}
               />
             )}
@@ -383,6 +398,7 @@ export default function DocumentViewer(props: DocumentViewerProps): ReactElement
                 pdfPageWidth={pageInfo.pageWidth}
                 pdfPageHeight={pageInfo.pageHeight}
                 bbox={activeBbox}
+                polygon={activePolygon}
                 granularity={activeGranularity}
               />
             )}

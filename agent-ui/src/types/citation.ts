@@ -29,6 +29,14 @@ export interface Citation {
    */
   page?: number | null;
   /**
+   * Optional polygon (Wave 2B) — list of [x, y] pairs in the SAME coord
+   * frame as `bbox`. When present and non-degenerate (≥3 distinct points)
+   * the viewer renders the polygon shape rather than the bbox rectangle.
+   * Null/undefined means the OCR engine had no polygon source (tesseract,
+   * PDF text-layer) — fall back to `bbox`.
+   */
+  polygon?: Array<[number, number]> | null;
+  /**
    * Frontend-only human-readable description (e.g. "Sodium 138 mEq/L") used
    * by {@link CitationChip} to disambiguate sibling chips. Derived in
    * `ChatSurface` from the extraction shape; never sent on the wire.
@@ -52,6 +60,13 @@ export interface BboxLayoutBlock {
    * before this field was introduced.
    */
   granularity?: 'word' | 'line';
+  /**
+   * Optional polygon (Wave 2B) — list of [x, y] pairs in the same coord
+   * frame as `bbox`. Mirrors `LayoutBlock.polygon` on the Python side.
+   * Optional for backwards-compatibility: tesseract / PDF text-layer
+   * blocks have no polygon source.
+   */
+  polygon?: Array<[number, number]> | null;
 }
 
 /** A non-fatal extraction warning the UI surfaces as a yellow banner. */

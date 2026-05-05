@@ -18,6 +18,30 @@ from pydantic import BaseModel, ConfigDict, Field
 # --------------------------------------------------------------------------- #
 
 
+class VerificationResult(BaseModel):
+    """Outcome of the optional Wave-2C ``citation_verifier`` second pass.
+
+    Attached to a :class:`Citation` when the verifier ran for that citation
+    (see ``agent.citation_verifier``). ``status`` follows the contract:
+
+    * ``yes``     — Claude vision confirmed the value is visible in the crop.
+    * ``partial`` — only a fragment was visible; the upstream pipeline
+                    downgrades WORD-granularity citations to LINE.
+    * ``no``      — Claude reported the value is NOT in the crop. The
+                    pipeline repoints once with the rejected bbox excluded;
+                    if the second pass also returns ``no`` the citation is
+                    dropped and the parent value is flagged ``needs_review``.
+
+    ``rationale`` is the verifier's one-line justification, capped at
+    100 chars by the prompt and re-asserted here.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    status: Literal["yes", "no", "partial"]
+    rationale: str = Field(min_length=1, max_length=100)
+
+
 class Citation(BaseModel):
     """A single citation tying a clinical claim back to a source region."""
 
@@ -36,12 +60,26 @@ class Citation(BaseModel):
     # — (x, y, w, h) in PDF user-space points — and ``page`` is 1-indexed.
     bbox: Optional[Tuple[float, float, float, float]] = None
     page: Optional[int] = None
+    # Wave 2B (polygon-aware citations) — when the source LayoutBlock carries
+    # a polygon (e.g. paddle line-level shape), we propagate it onto the
+    # Citation so the UI can render the true shape and the IoU rubric can
+    # compute polygon-vs-polygon overlap rather than falling back to bbox.
+    # Coordinates share the SAME frame as ``bbox``. ``None`` when the source
+    # engine has no polygon (tesseract, PDF text-layer) or the block was
+    # synthesized via approximation. We use a list-of-pairs (rather than a
+    # tuple-of-tuples) so it round-trips cleanly through pydantic JSON.
+    polygon: Optional[List[Tuple[float, float]]] = None
     # Wave 2B tiebreaker hint: short text label (1-3 words) the LLM saw
     # immediately preceding the value. Used by the y-band repointer ONLY
     # to break ties between candidate blocks at equal |Δy| to the anchor —
     # never to veto a block that already won on |Δy|. Optional and
     # additive; older payloads without this field still validate.
     nearest_label: Optional[str] = None
+    # Wave 2C — optional self-verification result attached by
+    # ``agent.citation_verifier``. ``None`` when the verifier did not run for
+    # this citation (flag off, sampled-out, or cap-skipped). Older payloads
+    # without this field still validate.
+    verification: Optional[VerificationResult] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -68,6 +106,10 @@ class LabValue(BaseModel):
         "unknown",
     ]
     citations: List[Citation] = Field(min_length=1)
+    # Wave 2C — set by ``agent.citation_verifier`` when every citation it
+    # could attach to this value came back ``no`` (twice, after one repoint
+    # attempt). The UI surfaces a "needs review" affordance for the value.
+    needs_review: bool = False
 
 
 class LabReport(BaseModel):
@@ -94,6 +136,9 @@ class KeyFact(BaseModel):
 
     text: str
     citations: List[Citation] = Field(min_length=1)
+    # Wave 2C — see :class:`VerificationResult`. ``True`` when the verifier
+    # rejected every citation for this fact even after a single repoint.
+    needs_review: bool = False
 
 
 class UnknownDocument(BaseModel):
@@ -121,6 +166,8 @@ class TextField(BaseModel):
 
     value: str
     citations: List[Citation] = Field(min_length=1)
+    # Wave 2C — see :class:`VerificationResult`.
+    needs_review: bool = False
 
 
 class Demographics(BaseModel):
@@ -139,6 +186,7 @@ class MedicationItem(BaseModel):
     name: str
     dose: Optional[str] = None
     citations: List[Citation] = Field(min_length=1)
+    needs_review: bool = False
 
 
 class AllergyItem(BaseModel):
@@ -147,6 +195,7 @@ class AllergyItem(BaseModel):
     substance: str
     reaction: Optional[str] = None
     citations: List[Citation] = Field(min_length=1)
+    needs_review: bool = False
 
 
 class FamilyHistoryItem(BaseModel):
@@ -155,6 +204,7 @@ class FamilyHistoryItem(BaseModel):
     relation: str
     condition: str
     citations: List[Citation] = Field(min_length=1)
+    needs_review: bool = False
 
 
 class CodeStatus(BaseModel):
@@ -162,6 +212,7 @@ class CodeStatus(BaseModel):
 
     value: Literal["full_code", "DNR", "DNI", "comfort_care", "POLST", "unknown"]
     citations: List[Citation] = Field(min_length=1)
+    needs_review: bool = False
 
 
 class IntakeForm(BaseModel):

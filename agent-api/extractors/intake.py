@@ -32,6 +32,7 @@ from agent.metrics import agent_citation_repoint_total
 from documents.ocr import LayoutBlock, extract_layout
 from extractors.classifier import classify_keywords
 from extractors.lab import ExtractionFailed  # re-export single failure class
+from extractors.prompt_registry import get_prompt
 from extractors.schemas import (
     Citation,
     IntakeForm,
@@ -46,55 +47,10 @@ _MODEL_CANDIDATES: Tuple[str, ...] = (
     "claude-3-5-sonnet-20241022",
 )
 
-_PROMPT = """You are extracting structured intake-form data from a hospital
-admission / intake document. You have two inputs:
-
-1. One image per page of the PDF.
-2. A JSON layout produced by deterministic OCR. Each block has a `bbox_id`
-   (e.g. "p2-b005"), the page number, and the OCR text inside that region.
-
-Your job: fill the IntakeForm schema by calling the `submit_intake_form` tool.
-
-HARD RULES (the agent will reject your output otherwise):
-
-- Use ONLY values you can locate in the OCR layout. Do NOT invent bbox_ids.
-- For EVERY filled clinical field, attach a Citation with:
-    source_type      = "document"
-    source_id        = the document_reference_id passed to you
-    page_or_section  = the page number as a string ("1", "2", ...)
-    field_or_chunk_id = the bbox_id from the OCR layout (e.g. "p2-b005")
-    quote_or_value   = the exact substring from THAT bbox's text that
-                       contains the value. Do NOT rephrase.
-    nearest_label    = (OPTIONAL, recommended) 1-3 words from the OCR
-                       layout that name the field this value belongs to,
-                       as they appear in the document immediately before
-                       or above the value. Examples: "DOB", "Date of
-                       Birth", "Allergies", "Medications". Used only as
-                       a TIE-BREAKER when multiple bboxes contain the
-                       same value text — never as a primary signal.
-                       Omit if uncertain; do NOT invent labels.
-- The cited bbox MUST contain the field's actual VALUE text — never a
-  section header, column name, or row label. Concretely: if the value
-  is "06/08/1971", the cited bbox's text must contain "06/08/1971"
-  (or a substring of it). NEVER cite a bbox whose text is just
-  "DEMOGRAPHICS", "DOB", "Address", "Chief Concern", "Medications",
-  "Allergies", or any other heading.
-- Each demographic / medication / allergy / family-history item MUST
-  cite a different bbox_id where its specific value appears. Do NOT
-  reuse one section-header bbox across multiple fields.
-- Each TextField / MedicationItem / AllergyItem / FamilyHistoryItem /
-  CodeStatus must have at least one citation.
-- code_status.value must be one of:
-    "full_code", "DNR", "DNI", "comfort_care", "POLST", "unknown".
-  Map common phrases: "Full Code"->"full_code", "DNR/DNI"->"DNR".
-- Omit any optional field you cannot ground in the OCR (do not fabricate).
-- Set kind="intake_form", schema_version="1.0".
-- Set classifier_confidence to a float in [0,1] reflecting your certainty.
-- Set ocr_confidence_range to (min_conf, max_conf) across cited blocks.
-- Set extracted_at to the current UTC ISO 8601 timestamp.
-
-Inputs follow.
-"""
+# Wave 2D: prompt sourced from the per-class registry. Kept as a
+# module attribute (not a constant) so test suites that reference
+# ``extractors.intake._PROMPT`` continue to work.
+_PROMPT = get_prompt("intake_form")
 
 
 # --------------------------------------------------------------------------- #
@@ -185,6 +141,16 @@ def _unknown_summary(blocks: List[LayoutBlock]) -> str:
 
 def _index_blocks(blocks: List[LayoutBlock]) -> dict[str, LayoutBlock]:
     return {b.bbox_id: b for b in blocks}
+
+
+def _block_polygon_list(block: LayoutBlock) -> Optional[List[Tuple[float, float]]]:
+    """Convert a LayoutBlock.polygon (tuple-of-tuples or None) into the
+    list-of-pairs shape the Citation pydantic schema expects. ``None`` when
+    the source engine has no polygon — never fabricate one."""
+    poly = getattr(block, "polygon", None)
+    if not poly:
+        return None
+    return [tuple(p) for p in poly]
 
 
 _NORMALIZE_RE = re.compile(r"\W+")
@@ -641,7 +607,13 @@ def _repoint_citation(
                 "nearest_label_used": False,
             },
         )
-        return cit.model_copy(update={"bbox": cited_block.bbox, "page": cited_block.page})
+        return cit.model_copy(
+            update={
+                "bbox": cited_block.bbox,
+                "page": cited_block.page,
+                "polygon": _block_polygon_list(cited_block),
+            }
+        )
 
     if value:
         cands = _candidate_blocks_for_value(value, blocks)
@@ -696,6 +668,7 @@ def _repoint_citation(
                     "quote_or_value": target.text or cit.quote_or_value,
                     "bbox": target.bbox,
                     "page": target.page,
+                    "polygon": _block_polygon_list(target),
                 }
             )
         # No candidate cleared the floor: emit a no_match observation so
@@ -737,7 +710,13 @@ def _repoint_citation(
             },
         )
         return cit
-    return cit.model_copy(update={"bbox": cited_block.bbox, "page": cited_block.page})
+    return cit.model_copy(
+        update={
+            "bbox": cited_block.bbox,
+            "page": cited_block.page,
+            "polygon": _block_polygon_list(cited_block),
+        }
+    )
 
 
 def _hydrate_citation(cit: Citation, block_index: dict[str, LayoutBlock]) -> Citation:
@@ -754,7 +733,13 @@ def _hydrate_citation(cit: Citation, block_index: dict[str, LayoutBlock]) -> Cit
             },
         )
         return cit
-    return cit.model_copy(update={"bbox": block.bbox, "page": block.page})
+    return cit.model_copy(
+        update={
+            "bbox": block.bbox,
+            "page": block.page,
+            "polygon": _block_polygon_list(block),
+        }
+    )
 
 
 def _hydrate_citations_list(
