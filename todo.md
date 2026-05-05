@@ -4,6 +4,35 @@
 
 **Test path convention:** all Week 2 Python tests live under `agent-api/tests/` (the existing Week 1 convention). The repo-root `tests/` directory is reserved for OpenEMR's PHP/PHPStan suites and is not used by the agent-api.
 
+## Live status (last updated mid-build)
+
+Legend: ✅ done & committed · ⏳ in flight · ⬜ not started · ⚪ optional / Phase-8 conditional
+
+| Phase | Status | Notes |
+|---|---|---|
+| **Phase 1** — ingest end-to-end | ✅ | spike + 7 slices, 6 commits, end-to-end on local |
+| **Phase 2** — Railway deploy | ⏳ | code deployed; W2 routes live; final `/document/ingest` smoke waiting on OpenEMR PHP rebuild |
+| **Phase 3** — LangGraph orchestration | ✅ | 9 slices, supervisor + 4 workers + critic + finalize |
+| **Phase 4** — Hybrid RAG + intake + UI | ✅ | 6 slices; pgvector + Cohere fallback + pdf.js viewer |
+| **Phase 5** — Eval gate | ✅ | 50 cases · 6 rubrics · baseline.json · diff_baseline · GH workflow · advisory pre-push · **5.8 seeded regression VERIFIED on PR #1 (citation_present 100%→74% → GATE: FAIL)** |
+| **Phase 6.1 + 6.2** — W2 metrics + audit dual-target | ✅ | 9 metrics + 6 event types live |
+| **Phase 6.3** — re-deploy + smoke against deployed URL | ⏳ | blocked on Phase 2.2 |
+| **Phase 7** — demo video + Early Submission | ⬜ | needs green deploy + manual recording (Thu) |
+| **Phase 8.1** — cost/latency report | ✅ | empty-cell scaffold; fills from /metrics + vendor consoles |
+| **Phase 8.2** — README W1/W2 split + ARCH §5.5 | ✅ | catalog matches code, not spec wishlist |
+| **Phase 8.3** — Path A passive ingest | ⚪ | conditional; requires Phases 1–7 green |
+| **Phase 8.4** — APScheduler watchdog | ⚪ | conditional |
+| **Phase 8.5** — intra-doc + retrieval-vs-record conflict passes | ⚪ | conditional |
+| **Phase 8.6** — judge meta-eval baseline | ⚪ | conditional |
+
+## Submission readiness
+
+- [x] Public deploy URL exists (https://copilot-agent-api-production.up.railway.app)
+- [ ] `/document/ingest` returns a real LabReport end-to-end (waiting on OpenEMR rebuild)
+- [x] Seeded regression hard-fails CI on a feature branch (PR #1)
+- [ ] Demo video recorded
+- [ ] SUBMISSION.md with deploy URL + video + CI red-screenshot
+
 ---
 
 ## PHASE 1 — Ingest path, one document type, end-to-end
