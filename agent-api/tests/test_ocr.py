@@ -64,3 +64,39 @@ def test_document_confidence_text_pdf_is_one() -> None:
 
 def test_document_confidence_empty_is_zero() -> None:
     assert document_confidence([]) == 0.0
+
+
+def test_extract_layout_accepts_png() -> None:
+    """``extract_layout`` should auto-detect PNG bytes and return at least
+    one LayoutBlock. Without Tesseract installed, the fallback emits a
+    single page-level block with confidence 0.0 — which is exactly what the
+    critic's degradation path consumes (W2_ARCHITECTURE §8.7).
+    """
+    png_path = (
+        ROOT
+        / "tests"
+        / "fixtures"
+        / "eval"
+        / "real-examples"
+        / "p03-reyes-intake.png"
+    )
+    if not png_path.exists():
+        pytest.skip(f"png fixture missing: {png_path}")
+
+    png_bytes = png_path.read_bytes()
+    assert png_bytes.startswith(b"\x89PNG"), "fixture is not a PNG"
+
+    blocks = extract_layout(png_bytes)
+    assert blocks, "expected at least one block from PNG"
+    assert all(isinstance(b, LayoutBlock) for b in blocks)
+    # Single-page synthetic doc.
+    assert all(b.page == 1 for b in blocks)
+    # bbox_id format invariant holds for image inputs too.
+    for b in blocks:
+        assert BBOX_ID_RE.match(b.bbox_id), f"bad bbox_id: {b.bbox_id}"
+    # Confidence is bounded; the no-tesseract fallback path puts it at 0.0.
+    for b in blocks:
+        assert 0.0 <= b.ocr_confidence <= 1.0
+    # Document-level confidence stays in [0, 1].
+    conf = document_confidence(blocks)
+    assert 0.0 <= conf <= 1.0

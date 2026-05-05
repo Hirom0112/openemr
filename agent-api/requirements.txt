@@ -20,6 +20,13 @@ pymupdf==1.24.13
 reportlab==4.2.5
 python-multipart==0.0.20
 
+# Optional OCR fallback for raster-image inputs (PNG/JPEG). The tesseract
+# binary itself must be present in the deploy image; without it
+# documents/ocr.py falls back to a single page-level block with confidence
+# 0.0 and the critic degradation path soft-warns.
+pytesseract==0.3.13
+Pillow>=10.0.0
+
 # Week-2 LangGraph skeleton (Slice 3.1+).
 langgraph==0.2.60
 langchain-core==0.3.28

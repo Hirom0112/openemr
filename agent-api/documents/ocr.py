@@ -5,8 +5,11 @@ anti-hallucination defense (W2_ARCHITECTURE.md §5.3). This module is the
 deterministic location half: PyMuPDF enumerates where text lives on the page
 and emits stable bbox IDs.
 
-For text-PDFs, per-block OCR confidence is 1.0. For scanned PDFs (future:
-pytesseract), per-block confidence reflects the OCR engine's reported score.
+For text-PDFs, per-block OCR confidence is 1.0. For raw-image inputs (PNG),
+PyMuPDF rasterizes a single page from the image. If pytesseract is available
+we run OCR and emit per-word LayoutBlocks with the engine's reported
+confidence; otherwise we emit a single page-level block with confidence 0.0
+so the critic's degradation path (W2_ARCHITECTURE §8.7) can soft-warn.
 """
 
 from __future__ import annotations
@@ -38,30 +41,28 @@ def _format_bbox_id(page: int, idx: int) -> str:
     return f"p{page}-b{idx:03d}"
 
 
-def extract_layout(pdf_bytes: bytes) -> List[LayoutBlock]:
-    """Extract layout blocks from a PDF.
+# Magic-byte signatures for the image formats we accept as "image input".
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_JPEG_MAGIC_PREFIX = b"\xff\xd8\xff"
 
-    Uses PyMuPDF's natural per-page block ordering for deterministic
-    bbox IDs. For text-PDFs, blocks come from the embedded text layer
-    and ocr_confidence is 1.0.
 
-    Args:
-        pdf_bytes: raw PDF bytes.
+def _is_png(data: bytes) -> bool:
+    return data.startswith(_PNG_MAGIC)
 
-    Returns:
-        List of LayoutBlock, ordered page-then-block-index.
-    """
+
+def _is_jpeg(data: bytes) -> bool:
+    return data.startswith(_JPEG_MAGIC_PREFIX)
+
+
+def _extract_pdf_layout(pdf_bytes: bytes) -> List[LayoutBlock]:
     blocks: List[LayoutBlock] = []
     with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
         for page_index, page in enumerate(doc, start=1):
             # get_text("blocks") returns: (x0, y0, x1, y1, text, block_no, block_type)
             raw_blocks = page.get_text("blocks")
-            # Stable order: PyMuPDF returns blocks in reading order. We keep that
-            # and assign deterministic indices per page.
             idx = 0
             for rb in raw_blocks:
                 x0, y0, x1, y1, text, _block_no, block_type = rb[:7]
-                # block_type 0 == text; skip image blocks for now.
                 if block_type != 0:
                     continue
                 cleaned = (text or "").strip()
@@ -82,6 +83,118 @@ def extract_layout(pdf_bytes: bytes) -> List[LayoutBlock]:
                     )
                 )
                 idx += 1
+    return blocks
+
+
+def _extract_image_layout(image_bytes: bytes, *, filetype: str) -> List[LayoutBlock]:
+    """Extract layout from a single-page raster image (PNG/JPEG).
+
+    PyMuPDF rasterizes the image into a one-page synthetic doc. The text-layer
+    path is empty (it's a raw image). We attempt Tesseract via ``pytesseract``;
+    if unavailable we emit a single page-level block with confidence 0.0 so
+    callers can degrade gracefully.
+    """
+    # Determine page dimensions deterministically from the image.
+    with pymupdf.open(stream=image_bytes, filetype=filetype) as doc:
+        page = doc[0]
+        rect = page.rect
+        page_w = float(rect.width)
+        page_h = float(rect.height)
+
+    try:
+        import pytesseract  # type: ignore
+        from PIL import Image  # type: ignore
+        import io
+
+        img = Image.open(io.BytesIO(image_bytes))
+        # Force load and a sane RGB-ish mode for Tesseract.
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+    except Exception as exc:  # noqa: BLE001 — tesseract optional
+        logger.info(
+            "ocr_image_no_tesseract",
+            extra={
+                "filetype": filetype,
+                "error_type": type(exc).__name__,
+            },
+        )
+        return [
+            LayoutBlock(
+                bbox_id=_format_bbox_id(1, 0),
+                page=1,
+                bbox=(0.0, 0.0, page_w, page_h),
+                text="",
+                ocr_confidence=0.0,
+            )
+        ]
+
+    blocks: List[LayoutBlock] = []
+    idx = 0
+    n = len(data.get("text", []))
+    for i in range(n):
+        word = (data["text"][i] or "").strip()
+        if not word:
+            continue
+        try:
+            conf_raw = float(data["conf"][i])
+        except (TypeError, ValueError):
+            conf_raw = -1.0
+        if conf_raw < 0:
+            # Tesseract uses -1 to mean "no word here". Skip.
+            continue
+        # pytesseract conf is 0-100; normalize.
+        conf = max(0.0, min(1.0, conf_raw / 100.0))
+        x = float(data["left"][i])
+        y = float(data["top"][i])
+        w = float(data["width"][i])
+        h = float(data["height"][i])
+        blocks.append(
+            LayoutBlock(
+                bbox_id=_format_bbox_id(1, idx),
+                page=1,
+                bbox=(x, y, w, h),
+                text=word,
+                ocr_confidence=conf,
+            )
+        )
+        idx += 1
+
+    if not blocks:
+        # Tesseract ran but found nothing — degrade like the no-tesseract path.
+        return [
+            LayoutBlock(
+                bbox_id=_format_bbox_id(1, 0),
+                page=1,
+                bbox=(0.0, 0.0, page_w, page_h),
+                text="",
+                ocr_confidence=0.0,
+            )
+        ]
+    return blocks
+
+
+def extract_layout(doc_bytes: bytes) -> List[LayoutBlock]:
+    """Extract layout blocks from a PDF or raster image.
+
+    Auto-detects content type from magic bytes:
+      * PDF: per-block text from the embedded text layer (confidence 1.0).
+      * PNG / JPEG: rasterized via PyMuPDF, OCR'd via pytesseract if available;
+        otherwise a single page-level block with confidence 0.0 is returned
+        (the critic's degradation path will soft-warn on low confidence).
+
+    Args:
+        doc_bytes: raw PDF or image bytes.
+
+    Returns:
+        List of LayoutBlock, ordered page-then-block-index.
+    """
+    if _is_png(doc_bytes):
+        blocks = _extract_image_layout(doc_bytes, filetype="png")
+    elif _is_jpeg(doc_bytes):
+        blocks = _extract_image_layout(doc_bytes, filetype="jpeg")
+    else:
+        blocks = _extract_pdf_layout(doc_bytes)
 
     logger.info(
         "ocr_layout_extracted",
