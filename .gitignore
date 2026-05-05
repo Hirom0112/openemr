@@ -51,3 +51,6 @@ tmp-phpstan/*
 docker/development-easy/docker-compose.override.yml
 docker/development-easy-light/docker-compose.override.yml
 docker/development-easy-redis/docker-compose.override.yml
+
+# Personal/working plan — keep local
+todo.md
