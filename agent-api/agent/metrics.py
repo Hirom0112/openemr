@@ -250,3 +250,23 @@ agent_eval_cases_completed_total = Counter(
     "Eval-suite cases completed by outcome (success|error)",
     ["outcome"],
 )
+
+# ── Citation verifier (Wave 2C) ──────────────────────────────────────────────
+# Emitted by ``agent.citation_verifier`` once per Claude verifier call.
+# ``outcome`` ∈ {"yes", "no", "partial"}. The verifier is the optional
+# second-pass node; when off, neither metric increments.
+agent_citation_verifier_outcome_total = Counter(
+    "agent_citation_verifier_outcome_total",
+    "Citation verifier per-call outcomes (yes|no|partial)",
+    ["outcome"],
+)
+
+# Increments when the per-request verifier-call cap (default 20) trips and a
+# remaining citation is skipped. ``reason`` ∈ {"cap"} today; the label is
+# kept so future skip reasons (e.g. "budget_exhausted") can be added without
+# reshaping the metric.
+agent_verifier_capped_total = Counter(
+    "agent_verifier_capped_total",
+    "Citation verifier skips driven by the per-request cap",
+    ["reason"],
+)

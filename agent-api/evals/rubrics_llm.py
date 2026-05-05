@@ -339,4 +339,48 @@ def nearest_label_grounded(
     return all(_label_grounded(c) for c in cits)
 
 
-__all__ = ["factually_consistent", "safe_refusal", "nearest_label_grounded"]
+_FLOOR_DRAFT_NOTE = (
+    "Wave 2D draft: uniform 0.5 floor across per-class buckets. We only have "
+    "observed numbers per-modality (not per-class) from one CI run, so this "
+    "is a placeholder pending Wave 3 calibration on per-class fixture "
+    "diversity (intake_form ~54, lab_report_tabular ~37, other_narrative "
+    "collapsed bucket; non_extractable is gated, never reaches the rubric)."
+)
+
+
+# Per-class gating floors for nearest_label_grounded.
+#
+# Per the Phase 3 brief, ``nearest_label_grounded`` becomes per-class
+# GATING (not just info-only) once we have evidence of stable behavior.
+# Wave 2D ships this as a DRAFT: a uniform 0.5 floor across the three
+# LLM-routable classes. ``non_extractable`` never reaches an LLM
+# extractor (it's a deterministic pre-LLM gate) so it has no entry.
+#
+# Floors derived per-class from observed Phase 2 numbers — but since
+# we only have observed per-modality (not per-class) from one CI run,
+# we start with 0.5 uniform per-class. Wave 3 will recalibrate from
+# per-class breakdowns once a clean run lands.
+NEAREST_LABEL_GROUNDED_FLOORS_DRAFT: dict[str, float] = {
+    "intake_form": 0.5,
+    "lab_report_tabular": 0.5,
+    "other_narrative": 0.5,
+}
+
+
+def per_class_floor(doc_class: str) -> Optional[float]:
+    """Return the draft per-class floor for ``nearest_label_grounded``.
+
+    Returns ``None`` for unrecognized classes (including
+    ``non_extractable`` which never reaches an LLM extractor) so the
+    caller can treat it as "ungated" rather than "0.0 floor".
+    """
+    return NEAREST_LABEL_GROUNDED_FLOORS_DRAFT.get(doc_class)
+
+
+__all__ = [
+    "factually_consistent",
+    "safe_refusal",
+    "nearest_label_grounded",
+    "NEAREST_LABEL_GROUNDED_FLOORS_DRAFT",
+    "per_class_floor",
+]

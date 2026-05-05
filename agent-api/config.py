@@ -145,6 +145,29 @@ class Settings(BaseSettings):
     # Override via ``PREFETCH_FORCE_REFRESH_ON_LOGIN=0`` to disable.
     prefetch_force_refresh_on_login: bool = True
 
+    # ── Citation verifier (Wave 2C) ──────────────────────────────────────────
+    # Optional second-pass graph node ``citation_verifier``. For each cited
+    # value it crops the cited region and asks Claude vision whether the
+    # value is visible. Outcomes:
+    #   yes     → log only.
+    #   partial → downgrade WORD-granularity citations to LINE.
+    #   no      → repoint once with the rejected bbox excluded; if still no,
+    #             drop the citation and flag the value ``needs_review``.
+    #
+    # ``verify_citations`` ∈ {"off", "sample", "all"}.
+    #   off    — verifier never runs (free).
+    #   sample — verify a deterministic ``verify_citations_sample_rate``
+    #            slice of citations (default 10%, picked by hash of
+    #            citation_id so reruns hit the same set).
+    #   all    — verify every citation, subject to the per-request cap.
+    #
+    # ``verify_citations_per_request_cap`` is enforced PRE-call: once the
+    # cap is reached for a request, remaining citations are skipped and
+    # ``agent_verifier_capped_total{reason="cap"}`` increments.
+    verify_citations: str = "sample"
+    verify_citations_sample_rate: float = 0.1
+    verify_citations_per_request_cap: int = 20
+
     @property
     def resolved_fhir_token_url(self) -> str:
         if self.fhir_token_url:

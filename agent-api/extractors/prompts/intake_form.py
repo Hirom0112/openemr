@@ -1,0 +1,82 @@
+"""Per-class extraction prompt + section-header dictionary for intake_form.
+
+R3 fixture coverage: ~54 cases across multiple intake / admission /
+triage layouts. Strong enough to ship a per-class prompt (vs the
+generic narrative fallback). The header dict feeds the y-band
+repointer (``extractors.intake._FIELD_ANCHOR_HINTS``) — values are
+case-insensitive substrings matched against detected anchor blocks.
+"""
+
+from __future__ import annotations
+
+PROMPT = """You are extracting structured intake-form data from a hospital
+admission / intake / triage document. You have two inputs:
+
+1. One image per page of the PDF.
+2. A JSON layout produced by deterministic OCR. Each block has a `bbox_id`
+   (e.g. "p2-b005"), the page number, and the OCR text inside that region.
+
+Your job: fill the IntakeForm schema by calling the `submit_intake_form` tool.
+
+HARD RULES (the agent will reject your output otherwise):
+
+- Use ONLY values you can locate in the OCR layout. Do NOT invent bbox_ids.
+- For EVERY filled clinical field, attach a Citation with:
+    source_type      = "document"
+    source_id        = the document_reference_id passed to you
+    page_or_section  = the page number as a string ("1", "2", ...)
+    field_or_chunk_id = the bbox_id from the OCR layout (e.g. "p2-b005")
+    quote_or_value   = the exact substring from THAT bbox's text that
+                       contains the value. Do NOT rephrase.
+    nearest_label    = (OPTIONAL, recommended) 1-3 words from the OCR
+                       layout that name the field this value belongs to,
+                       as they appear in the document immediately before
+                       or above the value. Examples: "DOB", "Date of
+                       Birth", "Allergies", "Medications". Used only as
+                       a TIE-BREAKER when multiple bboxes contain the
+                       same value text — never as a primary signal.
+                       Omit if uncertain; do NOT invent labels.
+- The cited bbox MUST contain the field's actual VALUE text — never a
+  section header, column name, or row label. Concretely: if the value
+  is "06/08/1971", the cited bbox's text must contain "06/08/1971"
+  (or a substring of it). NEVER cite a bbox whose text is just
+  "DEMOGRAPHICS", "DOB", "Address", "Chief Concern", "Medications",
+  "Allergies", or any other heading.
+- Each demographic / medication / allergy / family-history item MUST
+  cite a different bbox_id where its specific value appears. Do NOT
+  reuse one section-header bbox across multiple fields.
+- Each TextField / MedicationItem / AllergyItem / FamilyHistoryItem /
+  CodeStatus must have at least one citation.
+- code_status.value must be one of:
+    "full_code", "DNR", "DNI", "comfort_care", "POLST", "unknown".
+  Map common phrases: "Full Code"->"full_code", "DNR/DNI"->"DNR".
+- Omit any optional field you cannot ground in the OCR (do not fabricate).
+- Set kind="intake_form", schema_version="1.0".
+- Set classifier_confidence to a float in [0,1] reflecting your certainty.
+- Set ocr_confidence_range to (min_conf, max_conf) across cited blocks.
+- Set extracted_at to the current UTC ISO 8601 timestamp.
+
+Inputs follow.
+"""
+
+
+# Field-name → tuple of substrings (matched case-insensitively against
+# anchor text) registering the section-header dictionary for the y-band
+# anchor scorer. Same shape as ``extractors.intake._FIELD_ANCHOR_HINTS``
+# (the canonical runtime copy still lives in intake.py — registry entries
+# here are the source of truth for new classes; extending this map is
+# the documented way to add new spatial hints for intake fixtures).
+SECTION_HEADERS: dict[str, tuple[str, ...]] = {
+    "name": ("DEMOGRAPHIC", "PATIENT"),
+    "dob": ("DEMOGRAPHIC", "PATIENT"),
+    "sex": ("DEMOGRAPHIC", "PATIENT"),
+    "mrn": ("DEMOGRAPHIC", "PATIENT"),
+    "address": ("DEMOGRAPHIC", "PATIENT", "ADDRESS"),
+    "chief_concern": ("CHIEF", "COMPLAINT", "REASON"),
+    "medication": ("MEDICATION", "MEDS", "RX"),
+    "allergy": ("ALLERG", "NKDA"),
+    "family": ("FAMILY",),
+}
+
+
+__all__ = ["PROMPT", "SECTION_HEADERS"]

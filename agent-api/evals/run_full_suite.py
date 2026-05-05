@@ -63,6 +63,46 @@ def _serialize(obj):
     return obj
 
 
+def _iter_extraction_citations(extraction: dict) -> Any:
+    """Yield every citation dict embedded in an extraction payload.
+
+    Walks both list-shaped containers (``values``, ``key_facts``,
+    ``current_medications``, …) and the demographic ``TextField`` shapes
+    so the Wave 2C ``verification_pass_rate`` rubric sees every cited
+    item without owning a copy of the schema topology.
+    """
+    if not isinstance(extraction, dict):
+        return
+    list_keys = (
+        "values",
+        "key_facts",
+        "current_medications",
+        "allergies",
+        "family_history",
+    )
+    for key in list_keys:
+        items = extraction.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for citation in item.get("citations") or []:
+                yield citation
+    for key in ("chief_concern", "code_status"):
+        item = extraction.get(key)
+        if isinstance(item, dict):
+            for citation in item.get("citations") or []:
+                yield citation
+    demographics = extraction.get("demographics") or {}
+    if isinstance(demographics, dict):
+        for sub_key in ("name", "dob", "sex", "mrn", "address"):
+            item = demographics.get(sub_key)
+            if isinstance(item, dict):
+                for citation in item.get("citations") or []:
+                    yield citation
+
+
 def _markdown_report(case_rows: list[dict], aggregates: dict) -> str:
     lines: list[str] = []
     lines.append("# W2 Eval Suite Results")
@@ -204,6 +244,7 @@ async def _process_one_case(
     """
     case_id = getattr(case, "case_id", "?")
     request_id = uuid.uuid4().hex[:12]
+    _token = _REPOINT_CASE_ID.set(case_id)
     try:
         outcome = await _call_with_retry(
             run_case,
@@ -250,6 +291,77 @@ async def _process_one_case(
             "ok": False,
             "error": str(exc),
         }
+    finally:
+        _REPOINT_CASE_ID.reset(_token)
+
+
+# ---------------------------------------------------------------------------
+# Wave 2E — repoint_trace.jsonl persistence.
+# ---------------------------------------------------------------------------
+
+
+class _RepointTraceHandler(logging.Handler):
+    """Capture extractor_citation_repointed records into a JSONL sink."""
+
+    _FIELDS = (
+        "tool", "field_name", "outcome", "from", "to", "candidate_count",
+        "chosen_bbox_id", "chosen_granularity", "anchor_bbox_id",
+        "anchor_text_preview", "y_distance", "value_preview",
+        "nearest_label_score", "nearest_label_used",
+    )
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(level=logging.INFO)
+        self._path = path
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = self._path.open("w", encoding="utf-8")
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if record.getMessage() != "extractor_citation_repointed":
+                return
+            payload: dict[str, Any] = {"event": "extractor_citation_repointed"}
+            for k in self._FIELDS:
+                if hasattr(record, k):
+                    payload[k] = getattr(record, k)
+            cid = _REPOINT_CASE_ID.get()
+            if cid is not None:
+                payload["case_id"] = cid
+            self._fh.write(json.dumps(payload, default=str) + "\n")
+            self._fh.flush()
+        except Exception:  # pragma: no cover
+            self.handleError(record)
+
+    def close(self) -> None:
+        try:
+            self._fh.close()
+        finally:
+            super().close()
+
+
+_REPOINT_CASE_ID: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "repoint_case_id", default=None
+)
+
+
+@contextlib.contextmanager
+def _repoint_trace_capture(path: Optional[Path]):
+    """Attach a _RepointTraceHandler at the root logger for the run."""
+    if path is None:
+        yield None
+        return
+    handler = _RepointTraceHandler(path)
+    root = logging.getLogger()
+    prior_level = root.level
+    if prior_level > logging.INFO or prior_level == logging.NOTSET:
+        root.setLevel(logging.INFO)
+    root.addHandler(handler)
+    try:
+        yield handler
+    finally:
+        root.removeHandler(handler)
+        handler.close()
+        root.setLevel(prior_level)
 
 
 async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], list[Any], dict[str, Any], dict[str, Any]]:
@@ -815,6 +927,33 @@ def main(argv: list[str] | None = None) -> int:
         results["per_modality"].setdefault(mod, {})
         for k, v in block.items():
             results["per_modality"][mod][k] = v
+
+    # Wave 2C — INFO-only ``verification_pass_rate`` rubric. Walks every
+    # citation that carries a ``verification`` block (i.e. ones the
+    # citation_verifier ran for) and computes the % that came back ``yes``.
+    # Cases where the verifier never ran (off / sampled-out) contribute
+    # zero to numerator AND denominator. Not in baseline.json — purely
+    # diagnostic; surfaces "is the verifier prompt over-rejecting?".
+    n_yes = 0
+    n_seen = 0
+    for case in scored_cases:
+        outcome = outcomes_by_case_id.get(getattr(case, "case_id", None))
+        extraction = getattr(outcome, "extraction", None) if outcome else None
+        if not isinstance(extraction, dict):
+            continue
+        for citation in _iter_extraction_citations(extraction):
+            verification = citation.get("verification") if isinstance(citation, dict) else None
+            if not isinstance(verification, dict):
+                continue
+            n_seen += 1
+            if verification.get("status") == "yes":
+                n_yes += 1
+    results["verification_pass_rate"] = {
+        "pass_rate": (n_yes / n_seen) if n_seen else None,
+        "n_yes": n_yes,
+        "n_verified": n_seen,
+        "info_only": True,
+    }
 
     # Cache statistics — written to results JSON for CI dashboards.
     results["_cache"] = cache_stats
