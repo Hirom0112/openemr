@@ -129,7 +129,7 @@ jobs:
     # W2 runs independently. The W1 suite has unrelated pre-existing
     # failures (triage / verification / synthetic-patient fixtures) that
     # don't share state with W2 — gating W2 on W1 just hides the W2 gate.
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/clinical-copilot'
     permissions:
       contents: read
       pull-requests: write   # for sticky-pull-request-comment to post the eval table
