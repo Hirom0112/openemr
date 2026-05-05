@@ -1,0 +1,268 @@
+{
+  "fields": [
+    {
+      "bbox": {
+        "h": 28.653,
+        "w": 233.739,
+        "x": 131.452,
+        "y": 217.17
+      },
+      "name": "patient_name",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Patient: Aaliyah Brooks"
+    },
+    {
+      "bbox": {
+        "h": 22.193,
+        "w": 176.655,
+        "x": 131.229,
+        "y": 256.857
+      },
+      "name": "dob",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "DOB: 1988-01-05"
+    },
+    {
+      "bbox": {
+        "h": 21.055,
+        "w": 138.647,
+        "x": 130.975,
+        "y": 295.964
+      },
+      "name": "mrn",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "MRN: 200303"
+    },
+    {
+      "bbox": {
+        "h": 22.406,
+        "w": 188.991,
+        "x": 130.529,
+        "y": 361.055
+      },
+      "name": "chief_label",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "CHIEF CONCERN"
+    },
+    {
+      "bbox": {
+        "h": 29.027,
+        "w": 393.615,
+        "x": 130.3,
+        "y": 388.6
+      },
+      "name": "chief_concern",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Worsening cough productive of yellow sputum."
+    },
+    {
+      "bbox": {
+        "h": 19.24,
+        "w": 78.822,
+        "x": 129.828,
+        "y": 468.611
+      },
+      "name": "notes_label",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "NOTES"
+    },
+    {
+      "bbox": {
+        "h": 21.693,
+        "w": 134.826,
+        "x": 129.599,
+        "y": 500.318
+      },
+      "name": "note_1",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Allergies: NKDA"
+    },
+    {
+      "bbox": {
+        "h": 19.504,
+        "w": 195.591,
+        "x": 129.402,
+        "y": 531.921
+      },
+      "name": "note_2",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Code Status: Full Code"
+    },
+    {
+      "bbox": {
+        "h": 20.295,
+        "w": 226.951,
+        "x": 129.179,
+        "y": 564.336
+      },
+      "name": "note_3",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Plan: admit for observation"
+    }
+  ],
+  "fixture": "photo_capture_003.png",
+  "image_size": {
+    "h": 1754,
+    "w": 1240
+  },
+  "modality": "photo_capture",
+  "warp": {
+    "inverse": [
+      [
+        1.0563094939241107,
+        0.006991218070496522,
+        -40.52427776299352
+      ],
+      [
+        0.032043672278784574,
+        1.0538807771689154,
+        -59.181102290884155
+      ],
+      [
+        7.068663103170148e-06,
+        -9.146176984555045e-07,
+        0.9997816947754946
+      ]
+    ],
+    "matrix": [
+      [
+        0.9466274469478965,
+        -0.006246744018117376,
+        38.0
+      ],
+      [
+        -0.029159929088952243,
+        0.9491151077673335,
+        55.0
+      ],
+      [
+        -6.719527601900919e-06,
+        9.124327932370955e-07,
+        1.0
+      ]
+    ],
+    "pre_warp_fields": [
+      {
+        "bbox": {
+          "h": 23.0,
+          "w": 246.0,
+          "x": 100.0,
+          "y": 181.0
+        },
+        "name": "patient_name",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Patient: Aaliyah Brooks"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 186.0,
+          "x": 100.0,
+          "y": 221.0
+        },
+        "name": "dob",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "DOB: 1988-01-05"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 146.0,
+          "x": 100.0,
+          "y": 261.0
+        },
+        "name": "mrn",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "MRN: 200303"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 199.0,
+          "x": 100.0,
+          "y": 331.0
+        },
+        "name": "chief_label",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "CHIEF CONCERN"
+      },
+      {
+        "bbox": {
+          "h": 19.0,
+          "w": 414.0,
+          "x": 100.0,
+          "y": 366.0
+        },
+        "name": "chief_concern",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Worsening cough productive of yellow sputum."
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 83.0,
+          "x": 100.0,
+          "y": 441.0
+        },
+        "name": "notes_label",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "NOTES"
+      },
+      {
+        "bbox": {
+          "h": 19.0,
+          "w": 142.0,
+          "x": 100.0,
+          "y": 476.0
+        },
+        "name": "note_1",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Allergies: NKDA"
+      },
+      {
+        "bbox": {
+          "h": 15.0,
+          "w": 206.0,
+          "x": 100.0,
+          "y": 511.0
+        },
+        "name": "note_2",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Code Status: Full Code"
+      },
+      {
+        "bbox": {
+          "h": 15.0,
+          "w": 239.0,
+          "x": 100.0,
+          "y": 546.0
+        },
+        "name": "note_3",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Plan: admit for observation"
+      }
+    ],
+    "pre_warp_size": {
+      "h": 1754,
+      "w": 1240
+    }
+  }
+}

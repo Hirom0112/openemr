@@ -1,0 +1,227 @@
+{
+  "fields": [
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 67.81,
+        "x": 111.45,
+        "y": 93.3
+      },
+      "name": "patient_name",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Jonas Eriksen"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 33.36,
+        "x": 352.88,
+        "y": 93.3
+      },
+      "name": "mrn",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "201010"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 122.4,
+        "x": 72.0,
+        "y": 154.5
+      },
+      "name": "row_1_test_name_hgb",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Hgb"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 57.6,
+        "x": 194.4,
+        "y": 154.5
+      },
+      "name": "row_1_value_hgb",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "13.6"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 50.4,
+        "x": 252.0,
+        "y": 154.5
+      },
+      "name": "row_1_unit_hgb",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "g/dL"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 79.2,
+        "x": 302.4,
+        "y": 154.5
+      },
+      "name": "row_1_reference_hgb",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "12.0 - 15.5"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 122.4,
+        "x": 72.0,
+        "y": 172.5
+      },
+      "name": "row_2_test_name_wbc",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "WBC"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 57.6,
+        "x": 194.4,
+        "y": 172.5
+      },
+      "name": "row_2_value_wbc",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "7.4"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 50.4,
+        "x": 252.0,
+        "y": 172.5
+      },
+      "name": "row_2_unit_wbc",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "K/uL"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 79.2,
+        "x": 302.4,
+        "y": 172.5
+      },
+      "name": "row_2_reference_wbc",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "4.0 - 11.0"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 122.4,
+        "x": 72.0,
+        "y": 190.5
+      },
+      "name": "row_3_test_name_cr",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Cr"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 57.6,
+        "x": 194.4,
+        "y": 190.5
+      },
+      "name": "row_3_value_cr",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "1.0"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 50.4,
+        "x": 252.0,
+        "y": 190.5
+      },
+      "name": "row_3_unit_cr",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "mg/dL"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 79.2,
+        "x": 302.4,
+        "y": 190.5
+      },
+      "name": "row_3_reference_cr",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "0.6 - 1.3"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 122.4,
+        "x": 72.0,
+        "y": 208.5
+      },
+      "name": "row_4_test_name_sodium",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Sodium"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 57.6,
+        "x": 194.4,
+        "y": 208.5
+      },
+      "name": "row_4_value_sodium",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "139"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 50.4,
+        "x": 252.0,
+        "y": 208.5
+      },
+      "name": "row_4_unit_sodium",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "mEq/L"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 79.2,
+        "x": 302.4,
+        "y": 208.5
+      },
+      "name": "row_4_reference_sodium",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "136 - 145"
+    }
+  ],
+  "fixture": "table_heavy_010.pdf",
+  "image_size": {
+    "h": 792,
+    "w": 612
+  },
+  "modality": "table_heavy",
+  "warp": null
+}

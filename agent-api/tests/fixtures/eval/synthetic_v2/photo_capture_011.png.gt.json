@@ -1,0 +1,268 @@
+{
+  "fields": [
+    {
+      "bbox": {
+        "h": 18.517,
+        "w": 220.885,
+        "x": 117.067,
+        "y": 246.828
+      },
+      "name": "patient_name",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Patient: Sofia Romero"
+    },
+    {
+      "bbox": {
+        "h": 18.172,
+        "w": 176.028,
+        "x": 117.948,
+        "y": 285.982
+      },
+      "name": "dob",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "DOB: 1958-10-25"
+    },
+    {
+      "bbox": {
+        "h": 17.895,
+        "w": 137.97,
+        "x": 118.827,
+        "y": 324.943
+      },
+      "name": "mrn",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "MRN: 201111"
+    },
+    {
+      "bbox": {
+        "h": 17.826,
+        "w": 187.49,
+        "x": 120.357,
+        "y": 392.404
+      },
+      "name": "chief_label",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "CHIEF CONCERN"
+    },
+    {
+      "bbox": {
+        "h": 18.846,
+        "w": 263.521,
+        "x": 121.119,
+        "y": 425.894
+      },
+      "name": "chief_concern",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Worsening shortness of breath."
+    },
+    {
+      "bbox": {
+        "h": 17.263,
+        "w": 77.977,
+        "x": 122.744,
+        "y": 498.097
+      },
+      "name": "notes_label",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "NOTES"
+    },
+    {
+      "bbox": {
+        "h": 18.198,
+        "w": 133.046,
+        "x": 123.499,
+        "y": 531.365
+      },
+      "name": "note_1",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Allergies: NKDA"
+    },
+    {
+      "bbox": {
+        "h": 14.357,
+        "w": 192.637,
+        "x": 124.252,
+        "y": 564.579
+      },
+      "name": "note_2",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Code Status: Full Code"
+    },
+    {
+      "bbox": {
+        "h": 14.254,
+        "w": 223.212,
+        "x": 125.002,
+        "y": 597.757
+      },
+      "name": "note_3",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Plan: admit for observation"
+    }
+  ],
+  "fixture": "photo_capture_011.png",
+  "image_size": {
+    "h": 1754,
+    "w": 1240
+  },
+  "modality": "photo_capture",
+  "warp": {
+    "inverse": [
+      [
+        1.05315439222593,
+        -0.028058016645424406,
+        -16.96465987824161
+      ],
+      [
+        0.006789214052495742,
+        1.01329019733499,
+        -72.0658098637292
+      ],
+      [
+        1.1666758760777595e-05,
+        -4.2083881055136356e-05,
+        1.0027779538972206
+      ]
+    ],
+    "matrix": [
+      [
+        0.9491547444893506,
+        0.02702967970181945,
+        18.0
+      ],
+      [
+        -0.007166261684560262,
+        0.98963444737023,
+        71.0
+      ],
+      [
+        -1.1343631449753291e-05,
+        4.1217808447121566e-05,
+        1.0
+      ]
+    ],
+    "pre_warp_fields": [
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 233.0,
+          "x": 100.0,
+          "y": 181.0
+        },
+        "name": "patient_name",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Patient: Sofia Romero"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 186.0,
+          "x": 100.0,
+          "y": 221.0
+        },
+        "name": "dob",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "DOB: 1958-10-25"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 146.0,
+          "x": 100.0,
+          "y": 261.0
+        },
+        "name": "mrn",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "MRN: 201111"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 199.0,
+          "x": 100.0,
+          "y": 331.0
+        },
+        "name": "chief_label",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "CHIEF CONCERN"
+      },
+      {
+        "bbox": {
+          "h": 19.0,
+          "w": 280.0,
+          "x": 100.0,
+          "y": 366.0
+        },
+        "name": "chief_concern",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Worsening shortness of breath."
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 83.0,
+          "x": 100.0,
+          "y": 441.0
+        },
+        "name": "notes_label",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "NOTES"
+      },
+      {
+        "bbox": {
+          "h": 19.0,
+          "w": 142.0,
+          "x": 100.0,
+          "y": 476.0
+        },
+        "name": "note_1",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Allergies: NKDA"
+      },
+      {
+        "bbox": {
+          "h": 15.0,
+          "w": 206.0,
+          "x": 100.0,
+          "y": 511.0
+        },
+        "name": "note_2",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Code Status: Full Code"
+      },
+      {
+        "bbox": {
+          "h": 15.0,
+          "w": 239.0,
+          "x": 100.0,
+          "y": 546.0
+        },
+        "name": "note_3",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Plan: admit for observation"
+      }
+    ],
+    "pre_warp_size": {
+      "h": 1754,
+      "w": 1240
+    }
+  }
+}

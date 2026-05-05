@@ -1,0 +1,268 @@
+{
+  "fields": [
+    {
+      "bbox": {
+        "h": 22.479,
+        "w": 225.13,
+        "x": 125.431,
+        "y": 232.538
+      },
+      "name": "patient_name",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Patient: Jonas Eriksen"
+    },
+    {
+      "bbox": {
+        "h": 21.344,
+        "w": 176.731,
+        "x": 125.685,
+        "y": 271.451
+      },
+      "name": "dob",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "DOB: 1976-08-02"
+    },
+    {
+      "bbox": {
+        "h": 20.44,
+        "w": 138.755,
+        "x": 125.938,
+        "y": 310.115
+      },
+      "name": "mrn",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "MRN: 201010"
+    },
+    {
+      "bbox": {
+        "h": 21.769,
+        "w": 188.935,
+        "x": 126.38,
+        "y": 374.825
+      },
+      "name": "chief_label",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "CHIEF CONCERN"
+    },
+    {
+      "bbox": {
+        "h": 20.993,
+        "w": 267.462,
+        "x": 126.602,
+        "y": 405.771
+      },
+      "name": "chief_concern",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Nausea and emesis x 24 hours."
+    },
+    {
+      "bbox": {
+        "h": 19.015,
+        "w": 78.882,
+        "x": 127.075,
+        "y": 481.243
+      },
+      "name": "notes_label",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "NOTES"
+    },
+    {
+      "bbox": {
+        "h": 21.445,
+        "w": 134.794,
+        "x": 127.296,
+        "y": 512.71
+      },
+      "name": "note_1",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Allergies: NKDA"
+    },
+    {
+      "bbox": {
+        "h": 19.321,
+        "w": 195.343,
+        "x": 127.517,
+        "y": 544.012
+      },
+      "name": "note_2",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Code Status: Full Code"
+    },
+    {
+      "bbox": {
+        "h": 20.202,
+        "w": 226.521,
+        "x": 127.738,
+        "y": 576.061
+      },
+      "name": "note_3",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Plan: admit for observation"
+    }
+  ],
+  "fixture": "photo_capture_010.png",
+  "image_size": {
+    "h": 1754,
+    "w": 1240
+  },
+  "modality": "photo_capture",
+  "warp": {
+    "inverse": [
+      [
+        1.0485694279356026,
+        -0.007649138684028711,
+        -29.880722840934496
+      ],
+      [
+        0.024308448325565266,
+        1.0551667199097219,
+        -73.5114486752122
+      ],
+      [
+        -7.62181441943301e-06,
+        -6.168660229055415e-06,
+        1.0006466701739685
+      ]
+    ],
+    "matrix": [
+      [
+        0.9537268792424856,
+        0.007083316950418747,
+        29.0
+      ],
+      [
+        -0.021474647557849207,
+        0.9479652420084143,
+        69.0
+      ],
+      [
+        7.1320473937592625e-06,
+        5.897849250973145e-06,
+        1.0
+      ]
+    ],
+    "pre_warp_fields": [
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 237.0,
+          "x": 100.0,
+          "y": 181.0
+        },
+        "name": "patient_name",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Patient: Jonas Eriksen"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 186.0,
+          "x": 100.0,
+          "y": 221.0
+        },
+        "name": "dob",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "DOB: 1976-08-02"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 146.0,
+          "x": 100.0,
+          "y": 261.0
+        },
+        "name": "mrn",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "MRN: 201010"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 199.0,
+          "x": 100.0,
+          "y": 331.0
+        },
+        "name": "chief_label",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "CHIEF CONCERN"
+      },
+      {
+        "bbox": {
+          "h": 15.0,
+          "w": 282.0,
+          "x": 100.0,
+          "y": 366.0
+        },
+        "name": "chief_concern",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Nausea and emesis x 24 hours."
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 83.0,
+          "x": 100.0,
+          "y": 441.0
+        },
+        "name": "notes_label",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "NOTES"
+      },
+      {
+        "bbox": {
+          "h": 19.0,
+          "w": 142.0,
+          "x": 100.0,
+          "y": 476.0
+        },
+        "name": "note_1",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Allergies: NKDA"
+      },
+      {
+        "bbox": {
+          "h": 15.0,
+          "w": 206.0,
+          "x": 100.0,
+          "y": 511.0
+        },
+        "name": "note_2",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Code Status: Full Code"
+      },
+      {
+        "bbox": {
+          "h": 15.0,
+          "w": 239.0,
+          "x": 100.0,
+          "y": 546.0
+        },
+        "name": "note_3",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Plan: admit for observation"
+      }
+    ],
+    "pre_warp_size": {
+      "h": 1754,
+      "w": 1240
+    }
+  }
+}

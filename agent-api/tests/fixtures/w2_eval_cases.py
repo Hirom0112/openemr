@@ -28,6 +28,12 @@ Bucket = Literal[
     "intra_doc_conflict",
     "evidence_retrieval",
     "missing_data",
+    # Wave 2C — synthetic fixtures with bbox ground-truth sidecars.
+    # Used by the citation_iou / citation_pixel_distance rubrics. The
+    # fixtures live in ``tests/fixtures/eval/synthetic_v2/`` (see
+    # ``_generate_synthetic_v2.py``); each carries a ``<name>.gt.json``
+    # sidecar with field-level bboxes.
+    "bbox_gt",
 ]
 
 ExpectedKind = Literal["lab_report", "intake_form", "unknown"]
@@ -1293,6 +1299,68 @@ CASES: list[W2EvalCase] = [
 
 
 # ---------------------------------------------------------------------------
+# Wave 2C — bbox-GT cases (36 fixtures, 12 per new modality)
+#
+# Each case points at a synthetic_v2 fixture that carries a ``.gt.json``
+# sidecar with field-level bboxes. The ``citation_iou`` and
+# ``citation_pixel_distance`` rubrics (see evals/rubrics_mechanical.py)
+# are GT-gated — they only run on cases whose fixture has a sidecar.
+#
+# Synthetic identities used here are listed at the top of
+# ``_generate_synthetic_v2.py``. Each is a fabricated 3-tuple
+# (name, dob, mrn) — they are added to the no-PHI whitelist
+# alongside the existing cohort.
+# ---------------------------------------------------------------------------
+
+
+# Reusable benign synthetic patient (chart side). The bbox rubric does not
+# touch demographics — it operates on the document's emitted citations only.
+PT_BBOX_GT = _patient(
+    pid="pt-200000", mrn="200000", given="GT", family="Synthetic", dob="1980-01-01",
+    gender="female",
+)
+
+
+def _bbox_gt_case(case_id: str, fixture_key: str, modality: DocumentModality, kind: ExpectedKind, hint: str | None) -> W2EvalCase:
+    return W2EvalCase(
+        case_id=case_id,
+        bucket="bbox_gt",
+        fixture_key=fixture_key,
+        doc_type_hint=hint,
+        chart_patient=PT_BBOX_GT,
+        expected_kind=kind,
+        expected_critic_decision="pass",
+        notes="Wave 2C bbox-GT synthetic fixture (citation_iou rubric).",
+        document_modality=modality,
+    )
+
+
+for _i in range(1, 13):
+    CASES.append(_bbox_gt_case(
+        case_id=f"bbox_gt_typed_{_i:03d}",
+        fixture_key=f"typed_pdf_{_i:03d}",
+        modality="typed_pdf",
+        kind="unknown",
+        hint=None,
+    ))
+    CASES.append(_bbox_gt_case(
+        case_id=f"bbox_gt_table_{_i:03d}",
+        fixture_key=f"table_heavy_{_i:03d}",
+        modality="table_heavy",
+        kind="lab_report",
+        hint="lab_report",
+    ))
+    CASES.append(_bbox_gt_case(
+        case_id=f"bbox_gt_photo_{_i:03d}",
+        fixture_key=f"photo_capture_{_i:03d}",
+        modality="photo_capture",
+        kind="intake_form",
+        hint="intake_form",
+    ))
+del _i
+
+
+# ---------------------------------------------------------------------------
 # Bucket count contract
 # ---------------------------------------------------------------------------
 
@@ -1309,9 +1377,13 @@ BUCKET_COUNTS: dict[str, int] = {
     "intra_doc_conflict": 3,
     "evidence_retrieval": 10,
     "missing_data": 4,
+    # Wave 2C — 36 synthetic fixtures with bbox ground-truth sidecars
+    # (12 typed_pdf + 12 table_heavy + 12 photo_capture). See
+    # ``_generate_synthetic_v2.py`` for layout details.
+    "bbox_gt": 36,
 }
 
-TOTAL_CASES = 88
+TOTAL_CASES = 124
 
 
 # ---------------------------------------------------------------------------
@@ -1367,6 +1439,16 @@ _FIXTURE_MODALITY: dict[str, DocumentModality] = {
     # Mixed content (multi-section / multi-column)
     "mixed_content": "multi_column",
 }
+
+# Wave 2C — synthetic_v2 fixtures (bbox GT). Modalities are also set
+# explicitly on the W2EvalCase constructors (so the backfill is a no-op
+# for these), but the map keeps the fixture_key -> modality contract
+# complete for any future tooling that crawls _FIXTURE_MODALITY.
+for _i in range(1, 13):
+    _FIXTURE_MODALITY[f"typed_pdf_{_i:03d}"] = "typed_pdf"
+    _FIXTURE_MODALITY[f"table_heavy_{_i:03d}"] = "table_heavy"
+    _FIXTURE_MODALITY[f"photo_capture_{_i:03d}"] = "photo_capture"
+del _i
 
 
 def _backfill_modality() -> None:

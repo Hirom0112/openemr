@@ -1,0 +1,268 @@
+{
+  "fields": [
+    {
+      "bbox": {
+        "h": 24.588,
+        "w": 218.637,
+        "x": 134.654,
+        "y": 226.431
+      },
+      "name": "patient_name",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Patient: Nikolai Petrov"
+    },
+    {
+      "bbox": {
+        "h": 23.019,
+        "w": 173.591,
+        "x": 135.1,
+        "y": 266.593
+      },
+      "name": "dob",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "DOB: 1948-02-08"
+    },
+    {
+      "bbox": {
+        "h": 21.721,
+        "w": 136.123,
+        "x": 135.544,
+        "y": 306.404
+      },
+      "name": "mrn",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "MRN: 200606"
+    },
+    {
+      "bbox": {
+        "h": 23.157,
+        "w": 185.191,
+        "x": 136.32,
+        "y": 372.174
+      },
+      "name": "chief_label",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "CHIEF CONCERN"
+    },
+    {
+      "bbox": {
+        "h": 26.917,
+        "w": 276.226,
+        "x": 136.707,
+        "y": 402.88
+      },
+      "name": "chief_concern",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Palpitations and lightheadedness."
+    },
+    {
+      "bbox": {
+        "h": 19.552,
+        "w": 77.075,
+        "x": 137.534,
+        "y": 480.89
+      },
+      "name": "notes_label",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "NOTES"
+    },
+    {
+      "bbox": {
+        "h": 22.139,
+        "w": 131.661,
+        "x": 137.918,
+        "y": 512.572
+      },
+      "name": "note_1",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Allergies: NKDA"
+    },
+    {
+      "bbox": {
+        "h": 20.089,
+        "w": 190.791,
+        "x": 138.302,
+        "y": 544.079
+      },
+      "name": "note_2",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Code Status: Full Code"
+    },
+    {
+      "bbox": {
+        "h": 20.941,
+        "w": 221.176,
+        "x": 138.685,
+        "y": 576.429
+      },
+      "name": "note_3",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Plan: admit for observation"
+    }
+  ],
+  "fixture": "photo_capture_006.png",
+  "image_size": {
+    "h": 1754,
+    "w": 1240
+  },
+  "modality": "photo_capture",
+  "warp": {
+    "inverse": [
+      [
+        1.0682819334167288,
+        -0.015027819246840832,
+        -40.74629842919513
+      ],
+      [
+        0.03503671704229866,
+        1.024823973487236,
+        -63.88069434737103
+      ],
+      [
+        6.3029515936051285e-06,
+        -2.7150255956532972e-05,
+        1.0014103505011978
+      ]
+    ],
+    "matrix": [
+      [
+        0.9353686395405438,
+        0.014749275209721423,
+        39.0
+      ],
+      [
+        -0.03240014449849531,
+        0.9769182688920802,
+        61.0
+      ],
+      [
+        -6.7657134460135866e-06,
+        2.6393393146093544e-05,
+        1.0
+      ]
+    ],
+    "pre_warp_fields": [
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 234.0,
+          "x": 100.0,
+          "y": 181.0
+        },
+        "name": "patient_name",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Patient: Nikolai Petrov"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 186.0,
+          "x": 100.0,
+          "y": 221.0
+        },
+        "name": "dob",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "DOB: 1948-02-08"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 146.0,
+          "x": 100.0,
+          "y": 261.0
+        },
+        "name": "mrn",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "MRN: 200606"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 199.0,
+          "x": 100.0,
+          "y": 331.0
+        },
+        "name": "chief_label",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "CHIEF CONCERN"
+      },
+      {
+        "bbox": {
+          "h": 19.0,
+          "w": 297.0,
+          "x": 100.0,
+          "y": 366.0
+        },
+        "name": "chief_concern",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Palpitations and lightheadedness."
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 83.0,
+          "x": 100.0,
+          "y": 441.0
+        },
+        "name": "notes_label",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "NOTES"
+      },
+      {
+        "bbox": {
+          "h": 19.0,
+          "w": 142.0,
+          "x": 100.0,
+          "y": 476.0
+        },
+        "name": "note_1",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Allergies: NKDA"
+      },
+      {
+        "bbox": {
+          "h": 15.0,
+          "w": 206.0,
+          "x": 100.0,
+          "y": 511.0
+        },
+        "name": "note_2",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Code Status: Full Code"
+      },
+      {
+        "bbox": {
+          "h": 15.0,
+          "w": 239.0,
+          "x": 100.0,
+          "y": 546.0
+        },
+        "name": "note_3",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Plan: admit for observation"
+      }
+    ],
+    "pre_warp_size": {
+      "h": 1754,
+      "w": 1240
+    }
+  }
+}

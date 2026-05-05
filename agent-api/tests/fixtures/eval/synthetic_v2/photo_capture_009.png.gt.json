@@ -1,0 +1,268 @@
+{
+  "fields": [
+    {
+      "bbox": {
+        "h": 23.639,
+        "w": 200.272,
+        "x": 135.941,
+        "y": 221.187
+      },
+      "name": "patient_name",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Patient: Mei-Lin Park"
+    },
+    {
+      "bbox": {
+        "h": 22.345,
+        "w": 168.459,
+        "x": 135.962,
+        "y": 259.001
+      },
+      "name": "dob",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "DOB: 1969-11-11"
+    },
+    {
+      "bbox": {
+        "h": 20.956,
+        "w": 132.142,
+        "x": 135.983,
+        "y": 296.928
+      },
+      "name": "mrn",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "MRN: 200909"
+    },
+    {
+      "bbox": {
+        "h": 22.323,
+        "w": 180.402,
+        "x": 136.019,
+        "y": 359.541
+      },
+      "name": "chief_label",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "CHIEF CONCERN"
+    },
+    {
+      "bbox": {
+        "h": 26.414,
+        "w": 313.871,
+        "x": 136.037,
+        "y": 387.459
+      },
+      "name": "chief_concern",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Left-sided chest discomfort, exertional."
+    },
+    {
+      "bbox": {
+        "h": 18.727,
+        "w": 75.095,
+        "x": 136.076,
+        "y": 463.783
+      },
+      "name": "notes_label",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "NOTES"
+    },
+    {
+      "bbox": {
+        "h": 21.15,
+        "w": 128.672,
+        "x": 136.094,
+        "y": 494.326
+      },
+      "name": "note_1",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Allergies: NKDA"
+    },
+    {
+      "bbox": {
+        "h": 19.039,
+        "w": 186.968,
+        "x": 136.113,
+        "y": 524.837
+      },
+      "name": "note_2",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Code Status: Full Code"
+    },
+    {
+      "bbox": {
+        "h": 19.721,
+        "w": 217.128,
+        "x": 136.131,
+        "y": 556.229
+      },
+      "name": "note_3",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Plan: admit for observation"
+    }
+  ],
+  "fixture": "photo_capture_009.png",
+  "image_size": {
+    "h": 1754,
+    "w": 1240
+  },
+  "modality": "photo_capture",
+  "warp": {
+    "inverse": [
+      [
+        1.1155513660403087,
+        9.687234334377605e-19,
+        -51.315362837854195
+      ],
+      [
+        0.044252535710007646,
+        1.1005413228749727,
+        -75.77188527528352
+      ],
+      [
+        2.5766795162494463e-05,
+        6.328579866677917e-06,
+        0.9983907125714578
+      ]
+    ],
+    "matrix": [
+      [
+        0.8953657029956948,
+        -0.00026451953035865896,
+        46.0
+      ],
+      [
+        -0.0375770378788236,
+        0.9082584764175089,
+        67.0
+      ],
+      [
+        -2.2869699298819735e-05,
+        -5.750424573014308e-06,
+        1.0
+      ]
+    ],
+    "pre_warp_fields": [
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 221.0,
+          "x": 100.0,
+          "y": 181.0
+        },
+        "name": "patient_name",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Patient: Mei-Lin Park"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 186.0,
+          "x": 100.0,
+          "y": 221.0
+        },
+        "name": "dob",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "DOB: 1969-11-11"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 146.0,
+          "x": 100.0,
+          "y": 261.0
+        },
+        "name": "mrn",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "MRN: 200909"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 199.0,
+          "x": 100.0,
+          "y": 331.0
+        },
+        "name": "chief_label",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "CHIEF CONCERN"
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 345.0,
+          "x": 100.0,
+          "y": 366.0
+        },
+        "name": "chief_concern",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Left-sided chest discomfort, exertional."
+      },
+      {
+        "bbox": {
+          "h": 18.0,
+          "w": 83.0,
+          "x": 100.0,
+          "y": 441.0
+        },
+        "name": "notes_label",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "NOTES"
+      },
+      {
+        "bbox": {
+          "h": 19.0,
+          "w": 142.0,
+          "x": 100.0,
+          "y": 476.0
+        },
+        "name": "note_1",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Allergies: NKDA"
+      },
+      {
+        "bbox": {
+          "h": 15.0,
+          "w": 206.0,
+          "x": 100.0,
+          "y": 511.0
+        },
+        "name": "note_2",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Code Status: Full Code"
+      },
+      {
+        "bbox": {
+          "h": 15.0,
+          "w": 239.0,
+          "x": 100.0,
+          "y": 546.0
+        },
+        "name": "note_3",
+        "page": 1,
+        "rotation_deg": 0.0,
+        "value": "Plan: admit for observation"
+      }
+    ],
+    "pre_warp_size": {
+      "h": 1754,
+      "w": 1240
+    }
+  }
+}

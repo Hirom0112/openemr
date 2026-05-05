@@ -328,6 +328,85 @@ def citation_token_match(outcome: RunOutcome) -> bool:
     return True
 
 
+_IOU_PASS_THRESHOLD = 0.5
+
+
+def _coerce_bbox(b: Any) -> Optional[tuple[float, float, float, float]]:
+    """Accept ``{x,y,w,h}`` or ``[x,y,w,h]`` and return ``(x,y,w,h)`` or None."""
+    if b is None:
+        return None
+    if isinstance(b, dict):
+        try:
+            return (
+                float(b["x"]), float(b["y"]),
+                float(b["w"]), float(b["h"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+    if isinstance(b, (list, tuple)) and len(b) == 4:
+        try:
+            return tuple(float(v) for v in b)  # type: ignore[return-value]
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def citation_iou(extracted_bbox: Any, gt_bbox: Any) -> bool:
+    """Wave 2C — boolean rubric: IoU(extracted, gt) >= 0.5.
+
+    Both inputs accept either ``{"x","y","w","h"}`` dicts or 4-tuples.
+    Returns ``False`` when either bbox is missing/malformed (a fail-loud
+    semantic — half-populated GT is a generator bug, not a vacuous pass).
+
+    The 0.5 threshold is the standard COCO/PASCAL VOC detection floor.
+    Numerically zero-area bboxes are treated as a fail (no overlap is
+    possible with a degenerate rectangle).
+    """
+    a = _coerce_bbox(extracted_bbox)
+    b = _coerce_bbox(gt_bbox)
+    if a is None or b is None:
+        return False
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    if aw <= 0 or ah <= 0 or bw <= 0 or bh <= 0:
+        return False
+    ix1 = max(ax, bx)
+    iy1 = max(ay, by)
+    ix2 = min(ax + aw, bx + bw)
+    iy2 = min(ay + ah, by + bh)
+    iw = max(0.0, ix2 - ix1)
+    ih = max(0.0, iy2 - iy1)
+    inter = iw * ih
+    union = (aw * ah) + (bw * bh) - inter
+    if union <= 0:
+        return False
+    iou = inter / union
+    return iou >= _IOU_PASS_THRESHOLD
+
+
+def citation_pixel_distance(extracted_bbox: Any, gt_bbox: Any) -> Optional[float]:
+    """Wave 2C — INFO-only rubric: centroid pixel distance (no pass/fail).
+
+    Returns the Euclidean distance (in input units, typically pixels or
+    PDF points) between the centroids of the extracted and GT bboxes.
+    Returns ``None`` when either bbox is missing — INFO-only callers
+    should skip the case rather than count it as a regression.
+    """
+    a = _coerce_bbox(extracted_bbox)
+    b = _coerce_bbox(gt_bbox)
+    if a is None or b is None:
+        return None
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    cax = ax + aw / 2.0
+    cay = ay + ah / 2.0
+    cbx = bx + bw / 2.0
+    cby = by + bh / 2.0
+    dx = cax - cbx
+    dy = cay - cby
+    return (dx * dx + dy * dy) ** 0.5
+
+
 def correct_critic_decision(outcome: RunOutcome, *, expected: str) -> bool:
     return outcome.critic_decision == expected
 
@@ -438,6 +517,8 @@ __all__ = [
     "citation_resolvable",
     "citation_row_match",
     "citation_token_match",
+    "citation_iou",
+    "citation_pixel_distance",
     "correct_critic_decision",
     "no_phi_in_logs",
     "keyword_match_in_citation",

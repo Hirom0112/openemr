@@ -672,6 +672,25 @@ def generate_all() -> dict[str, Path]:
         path = EVAL_DIR / filename
         fn(path)
         out[key] = path
+
+    # Wave 2C — merge in the synthetic_v2 corpus (typed_pdf / table_heavy /
+    # photo_capture, all carrying bbox GT sidecars). The v2 generator is
+    # standalone (separate module, separate output dir) but we register its
+    # outputs here so the eval runner's fixture index resolves them via the
+    # existing path. v2 is deterministic too, so re-running ``generate_all``
+    # is idempotent.
+    try:
+        from tests.fixtures.eval._generate_synthetic_v2 import generate_all_v2  # type: ignore
+    except Exception:
+        try:
+            from . import _generate_synthetic_v2  # type: ignore
+            generate_all_v2 = _generate_synthetic_v2.generate_all_v2  # type: ignore[attr-defined]
+        except Exception:
+            generate_all_v2 = None  # type: ignore[assignment]
+    if generate_all_v2 is not None:
+        v2_paths = generate_all_v2()
+        for key, path in v2_paths.items():
+            out[key] = path
     return out
 
 

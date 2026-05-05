@@ -10,6 +10,7 @@
   "no_phi_in_logs":             {"pass_rate": 1.00,   "min_threshold": 1.00},
   "provenance_chain":           {"pass_rate": 1.00,   "min_threshold": 0.95},
   "critic_false_positive_rate": {"max": 0.1636},
+  "citation_iou":               {"pass_rate": 0.0,    "min_threshold": 0.0},
   "per_modality": {
     "intake_form": {
       "n_cases": 26,

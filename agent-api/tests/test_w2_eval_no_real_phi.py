@@ -49,6 +49,10 @@ SYNTHETIC_IDENTITIES: frozenset[tuple[str, str, str, str]] = frozenset({
     ("Casey",    "Stone",      "100999", "1980-01-01"),
     ("Marcus",   "Webb",       "100848", "1962-03-14"),  # off-by-one MRN refusal variant
     ("Marcus",   "Webb",       "100847", "1965-03-14"),  # stale-chart DOB-drift variant
+    # Wave 2C — bbox_gt bucket (synthetic_v2 fixtures with sidecar GT).
+    # All 36 bbox_gt cases reuse this single benign chart patient; the
+    # rubric operates on document-side citations, not demographics.
+    ("GT",       "Synthetic",  "200000", "1980-01-01"),
 })
 
 # Spot-check ranges: every synthetic MRN starts with "100" or "200" (W2 reserves

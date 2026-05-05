@@ -1,0 +1,95 @@
+{
+  "fields": [
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 51.68,
+        "x": 104.23,
+        "y": 114.9
+      },
+      "name": "patient_name",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Mateo Cruz"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 51.14,
+        "x": 99.23,
+        "y": 129.3
+      },
+      "name": "dob",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "1972-09-30"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 33.36,
+        "x": 100.33,
+        "y": 143.7
+      },
+      "name": "mrn",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "200202"
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 168.4,
+        "x": 72.0,
+        "y": 194.1
+      },
+      "name": "chief_concern",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Acute lower back pain following lifting."
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 285.67,
+        "x": 72.0,
+        "y": 248.1
+      },
+      "name": "note_line_1",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Patient reports onset of symptoms three days prior to admission."
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 210.1,
+        "x": 72.0,
+        "y": 263.94
+      },
+      "name": "note_line_2",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Vital signs stable at presentation; awaiting labs."
+    },
+    {
+      "bbox": {
+        "h": 9.3,
+        "w": 191.18,
+        "x": 72.0,
+        "y": 279.78
+      },
+      "name": "note_line_3",
+      "page": 1,
+      "rotation_deg": 0.0,
+      "value": "Plan: serial reassessment, supportive care."
+    }
+  ],
+  "fixture": "typed_pdf_002.pdf",
+  "image_size": {
+    "h": 792,
+    "w": 612
+  },
+  "modality": "typed_pdf",
+  "warp": null
+}

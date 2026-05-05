@@ -20,7 +20,7 @@ import sys
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 # Allow running both via `python3 -m evals.run_full_suite` (cwd=agent-api)
 # and directly. Tests patch the module-level symbols, so import lazily inside main.
@@ -61,7 +61,7 @@ def _markdown_report(case_rows: list[dict], aggregates: dict) -> str:
     return "\n".join(lines)
 
 
-async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], list[Any]]:
+async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], list[Any], dict[str, Any]]:
     # Lazy imports — let tests patch these.
     from tests.fixtures.w2_eval_cases import CASES  # type: ignore
     from evals.runner import run_case  # type: ignore
@@ -70,9 +70,11 @@ async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], l
     case_rows: list[dict] = []
     scores: list[Any] = []
     scored_cases: list[Any] = []  # parallel to scores — for per-modality breakdown
+    outcomes_by_case_id: dict[str, Any] = {}
     for case in CASES:
         try:
             outcome = await run_case(case, fixtures_root=args.fixtures_root)
+            outcomes_by_case_id[getattr(case, "case_id", "")] = outcome
             score = await score_case(case, outcome)
             scores.append(score)
             scored_cases.append(case)
@@ -93,7 +95,142 @@ async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], l
                 "notes": str(e),
             })
 
-    return case_rows, scores, scored_cases
+    return case_rows, scores, scored_cases, outcomes_by_case_id
+
+
+def _load_gt_sidecar(fixture_path: Path) -> Optional[dict]:
+    """Load the bbox GT sidecar (``<fixture>.gt.json``) if present."""
+    sidecar = fixture_path.with_suffix(fixture_path.suffix + ".gt.json")
+    if not sidecar.exists():
+        return None
+    try:
+        return json.loads(sidecar.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _first_citation_bbox(extraction: Any) -> Optional[dict]:
+    """Best-effort extraction-side bbox lookup for the first cited item.
+
+    Returns ``None`` when no bbox is available — the rubric treats that
+    as a skip rather than a fail.
+    """
+    if not isinstance(extraction, dict):
+        return None
+    pools: list[Any] = []
+    kind = extraction.get("kind")
+    if kind == "lab_report":
+        pools = list(extraction.get("values") or [])
+    elif kind == "unknown":
+        pools = list(extraction.get("key_facts") or [])
+    elif kind == "intake_form":
+        for key in ("current_medications", "allergies", "family_history"):
+            pools.extend(extraction.get(key) or [])
+    for item in pools:
+        if not isinstance(item, dict):
+            continue
+        for cit in item.get("citations") or []:
+            if not isinstance(cit, dict):
+                continue
+            bbox = cit.get("bbox")
+            if isinstance(bbox, dict):
+                return bbox
+            if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                return {"x": bbox[0], "y": bbox[1], "w": bbox[2], "h": bbox[3]}
+    return None
+
+
+def _gt_first_field_bbox(gt: dict) -> Optional[dict]:
+    """Return the first GT field's bbox dict (or None if the sidecar is empty)."""
+    fields = gt.get("fields") or []
+    if not fields:
+        return None
+    f0 = fields[0]
+    bbox = (f0 or {}).get("bbox") if isinstance(f0, dict) else None
+    return bbox if isinstance(bbox, dict) else None
+
+
+def _resolve_fixture_path_local(case: Any, fixtures_root: Path) -> Path:
+    from evals.runner import resolve_fixture_path  # type: ignore
+
+    return resolve_fixture_path(getattr(case, "fixture_key", ""), fixtures_root)
+
+
+def _score_bbox_rubrics(
+    cases: list[Any], outcomes_by_case_id: dict[str, Any], fixtures_root: Path,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Compute citation_iou + citation_pixel_distance globally + per-modality.
+
+    Both rubrics are GT-gated: a case is in the denominator only if it
+    has a sidecar AND the run produced an extracted bbox to compare to.
+    """
+    from evals.rubrics_mechanical import citation_iou, citation_pixel_distance  # type: ignore
+
+    iou_total = 0
+    iou_passed = 0
+    pix_total = 0
+    pix_sum = 0.0
+    per_mod: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"iou_n": 0, "iou_pass": 0, "pix_n": 0, "pix_sum": 0.0}
+    )
+
+    for case in cases:
+        case_id = getattr(case, "case_id", None)
+        outcome = outcomes_by_case_id.get(case_id) if case_id else None
+        if outcome is None:
+            continue
+        try:
+            fixture_path = _resolve_fixture_path_local(case, fixtures_root)
+        except Exception:
+            continue
+        gt = _load_gt_sidecar(fixture_path)
+        if gt is None:
+            continue
+        gt_bbox = _gt_first_field_bbox(gt)
+        if gt_bbox is None:
+            continue
+        extracted = _first_citation_bbox(getattr(outcome, "extraction", None))
+        if extracted is None:
+            continue
+        modality = str(getattr(case, "document_modality", "unknown") or "unknown")
+        iou_total += 1
+        per_mod[modality]["iou_n"] += 1
+        if citation_iou(extracted, gt_bbox):
+            iou_passed += 1
+            per_mod[modality]["iou_pass"] += 1
+        dist = citation_pixel_distance(extracted, gt_bbox)
+        if dist is not None:
+            pix_total += 1
+            pix_sum += dist
+            per_mod[modality]["pix_n"] += 1
+            per_mod[modality]["pix_sum"] += dist
+
+    global_block: dict[str, Any] = {
+        "citation_iou": {
+            "pass_rate": (iou_passed / iou_total) if iou_total else None,
+            "n_evaluated": iou_total,
+        },
+        "citation_pixel_distance": {
+            "mean_px": (pix_sum / pix_total) if pix_total else None,
+            "n_evaluated": pix_total,
+            "info_only": True,
+        },
+    }
+    per_modality_block: dict[str, dict[str, Any]] = {}
+    for mod, agg in per_mod.items():
+        per_modality_block[mod] = {
+            "citation_iou": (agg["iou_pass"] / agg["iou_n"]) if agg["iou_n"] else None,
+            "citation_iou_detail": {
+                "pass_rate": (agg["iou_pass"] / agg["iou_n"]) if agg["iou_n"] else None,
+                "n_evaluated": agg["iou_n"],
+            },
+            "citation_pixel_distance_detail": {
+                "mean_px": (agg["pix_sum"] / agg["pix_n"]) if agg["pix_n"] else None,
+                "n_evaluated": agg["pix_n"],
+                "info_only": True,
+            },
+        }
+    return global_block, per_modality_block
 
 
 def _per_modality_breakdown(scores: list[Any], cases: list[Any]) -> dict[str, dict[str, float | int]]:
@@ -143,10 +280,20 @@ def main(argv: list[str] | None = None) -> int:
     md_path = args.md or args.output.with_suffix(".md")
 
     import asyncio
-    case_rows, scores, scored_cases = asyncio.run(_run_async(args))
+    case_rows, scores, scored_cases, outcomes_by_case_id = asyncio.run(_run_async(args))
 
     from evals.scoring import aggregate  # type: ignore
-    agg = aggregate(scores)
+    # Existing rubric pass-rates are computed over the original (pre-Wave-2C)
+    # case set only — i.e. exclude the ``bbox_gt`` bucket. The bbox_gt cases
+    # exist to drive the new ``citation_iou`` rubric; folding them into the
+    # legacy aggregates would shift values that have separately-baselined
+    # floors. The Wave 3 rebaseline PR (separate) will recompute from scratch.
+    legacy_scores = [
+        s for s, c in zip(scores, scored_cases)
+        if getattr(c, "bucket", None) != "bbox_gt"
+    ]
+    legacy_cases = [c for c in scored_cases if getattr(c, "bucket", None) != "bbox_gt"]
+    agg = aggregate(legacy_scores)
 
     # Ensure the JSON contains all rubric pass-rates + critic_false_positive_rate.
     expected_keys = (
@@ -169,7 +316,28 @@ def main(argv: list[str] | None = None) -> int:
         results[k] = float(v) if v is not None else 0.0
 
     # Wave 2C — per-modality breakdown (consumed by diff_baseline.py).
-    results["per_modality"] = _per_modality_breakdown(scores, scored_cases)
+    # Use legacy_* lists so existing per-modality entries match their
+    # pre-Wave-2C baselines. The new bbox_gt cases contribute their
+    # citation_iou pass-rate via _score_bbox_rubrics below.
+    results["per_modality"] = _per_modality_breakdown(legacy_scores, legacy_cases)
+
+    # Wave 2C — bbox-GT-gated rubrics (citation_iou + citation_pixel_distance).
+    # GT-gated: only synthetic_v2 cases that produced an extracted bbox count.
+    bbox_global, bbox_per_mod = _score_bbox_rubrics(
+        scored_cases, outcomes_by_case_id, args.fixtures_root,
+    )
+    iou_pr = bbox_global["citation_iou"]["pass_rate"]
+    pix_mean = bbox_global["citation_pixel_distance"]["mean_px"]
+    # Top-level: flat float for diff_baseline.py compatibility.
+    results["citation_iou"] = float(iou_pr) if iou_pr is not None else 0.0
+    results["citation_iou_detail"] = bbox_global["citation_iou"]
+    results["citation_pixel_distance_detail"] = bbox_global["citation_pixel_distance"]
+    if pix_mean is not None:
+        results["citation_pixel_distance_mean_px"] = float(pix_mean)
+    for mod, block in bbox_per_mod.items():
+        results["per_modality"].setdefault(mod, {})
+        for k, v in block.items():
+            results["per_modality"][mod][k] = v
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(results, indent=2) + "\n")
