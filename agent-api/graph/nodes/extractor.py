@@ -11,8 +11,11 @@ import logging
 import time
 from typing import Any, Awaitable, Callable
 
+from dataclasses import asdict
+
 from audit.models import AuditEvent
 from audit import writer as audit_writer
+from documents.ocr import extract_layout
 from extractors.lab import ExtractionFailed, extract
 
 from ..state import W2State
@@ -94,8 +97,28 @@ async def extractor_node(
         )
         return {"errors": errors, "next_node": "finalize"}
 
+    # Preserve any layout the caller pre-seeded (used by graph e2e tests
+    # that mock `extract`); only overwrite when our own parse succeeds.
+    ocr_layout: list[dict[str, Any]] | None = state.get("ocr_layout")
     try:
         pdf_bytes = await file_bytes_provider(file_ref)
+        # Surface the OCR layout into graph state so the critic's
+        # citation-resolvability and fidelity checks can reference real
+        # bbox_ids. Cheap re-parse: PyMuPDF text-PDF parse is sub-100ms;
+        # the lab extractor will parse again internally — accepted cost
+        # for keeping the lab module's signature stable. Layout-parse
+        # failure is non-fatal: the lab extractor's own parse will catch
+        # genuinely-malformed PDFs and surface ExtractionFailed; a
+        # transient layout error here just means the critic falls back
+        # to whatever layout is already in state (typically empty).
+        try:
+            layout_blocks = extract_layout(pdf_bytes)
+            ocr_layout = [asdict(b) for b in layout_blocks]
+        except Exception as layout_exc:  # noqa: BLE001 — boundary
+            logger.warning(
+                "graph_extractor_layout_parse_failed",
+                extra={"error_type": type(layout_exc).__name__},
+            )
         extraction = await extract(
             pdf_bytes,
             patient_id=state.get("patient_id") or "",
@@ -160,11 +183,14 @@ async def extractor_node(
         duration_ms=duration_ms,
         reason="extraction complete",
     )
-    return {
+    update: dict[str, Any] = {
         "extraction": extraction_dict,
         "errors": errors,
         "next_node": "demographics",
     }
+    if ocr_layout is not None:
+        update["ocr_layout"] = ocr_layout
+    return update
 
 
 __all__ = ["extractor_node"]

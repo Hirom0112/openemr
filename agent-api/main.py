@@ -1536,3 +1536,130 @@ async def document_ingest(
             "page_count": page_count,
         },
     }
+
+
+# ── W2 Dispatch (Slice 3.9) ──────────────────────────────────────────────────
+#
+# POST /agent/w2/dispatch — single entry point for the LangGraph pipeline
+# (W2_ARCHITECTURE §5.1 / §5.9). Accepts an optional file (lab PDF) plus
+# optional message; the supervisor routes inside the graph.  Streams SSE
+# back; today only emits a single ``done`` frame after ``ainvoke``
+# completes (TODO(slice-future): swap to ``astream_events`` for per-node
+# progress frames once the LangGraph version is bumped).
+#
+# JWT-protected via the global middleware (no bypass-list change).
+
+# Per-process file-bytes stash. The key is the inbound request_id so
+# concurrent uploads in the same session don't collide. TTL-free because
+# each closure pops its key when the graph completes.
+# TODO(phase-8): move to a session-keyed Redis blob with a 600s TTL
+# (``copilot:w2:filebytes:{session}:{request_id}``) so a multi-replica
+# deploy can share state.
+_w2_file_bytes_stash: dict[str, bytes] = {}
+
+
+@app.post("/agent/w2/dispatch")
+async def agent_w2_dispatch(
+    request: Request,
+    file: UploadFile | None = File(None),
+    patient_id: str | None = Form(None),
+    message: str | None = Form(None),
+    session_id: str = Form(...),
+    provider_id: str = Form(...),
+    doc_type_hint: str | None = Form(None),
+) -> StreamingResponse:
+    """W2 LangGraph dispatch endpoint.
+
+    Accepts a multipart upload with any of:
+      * ``file`` — PDF for the document path.
+      * ``message`` — free-text query for the structured / retriever path.
+      * ``patient_id`` — required for demographics check on the document path.
+
+    Returns ``text/event-stream``. Currently emits a single ``event: done``
+    frame carrying the ``finalized`` envelope; per-node progress frames are
+    a future enhancement.
+    """
+    from graph import compile_graph as _compile_graph
+    from graph import make_initial_state as _make_initial_state
+    from graph.nodes.finalize import sse_frame as _sse_frame
+    from langgraph.checkpoint.memory import MemorySaver
+
+    rid = request_id_var.get() or uuid.uuid4().hex
+
+    file_bytes_ref: str | None = None
+    if file is not None:
+        # Same size guard as /document/ingest.
+        pdf_bytes = await file.read(_DOC_INGEST_HARD_READ_CAP + 1)
+        size_bytes = len(pdf_bytes)
+        if size_bytes > _DOC_INGEST_MAX_BYTES:
+            raise HTTPException(
+                status_code=413, detail=_DOC_INGEST_TOO_LARGE_MSG
+            )
+        file_bytes_ref = f"w2:{session_id}:{rid}"
+        _w2_file_bytes_stash[file_bytes_ref] = pdf_bytes
+
+    async def _file_bytes_provider(ref: str) -> bytes:
+        return _w2_file_bytes_stash.get(ref, b"")
+
+    async def _fhir_patient_provider(pid: str) -> dict[str, Any]:
+        return await fhir_client.get_patient(pid)
+
+    compiled = _compile_graph(
+        checkpointer=MemorySaver(),
+        file_bytes_provider=_file_bytes_provider,
+        fhir_patient_provider=_fhir_patient_provider,
+    )
+
+    initial_state = _make_initial_state(
+        request_id=rid,
+        session_id=session_id,
+        provider_id=provider_id,
+        patient_id=patient_id,
+        message=message,
+        file_bytes_ref=file_bytes_ref,
+        doc_type_hint=doc_type_hint,
+    )
+    config = {"configurable": {"thread_id": session_id}}
+
+    async def _event_stream() -> Any:
+        try:
+            # TODO(slice-future): replace with ``compiled.astream_events(...)``
+            # so the UI sees per-node progress frames; today we ship a single
+            # ``done`` frame after ``ainvoke`` completes.
+            try:
+                final = await compiled.ainvoke(initial_state, config=config)
+            except Exception as exc:  # noqa: BLE001 — boundary
+                logger.error(
+                    "w2_dispatch_graph_failed",
+                    extra={"request_id": rid, "error_type": type(exc).__name__},
+                )
+                yield _sse_frame(
+                    "error",
+                    {
+                        "request_id": rid,
+                        "error_class": type(exc).__name__,
+                        "message": "graph execution failed",
+                    },
+                )
+                return
+            yield _sse_frame(
+                "done",
+                {
+                    "request_id": rid,
+                    "finalized": final.get("finalized") or {},
+                    "extraction": final.get("extraction"),
+                    "demographic_check": final.get("demographic_check"),
+                    "critic_decision": final.get("critic_decision"),
+                    "soft_warns": final.get("soft_warns") or [],
+                    "errors": final.get("errors") or [],
+                },
+            )
+        finally:
+            if file_bytes_ref is not None:
+                _w2_file_bytes_stash.pop(file_bytes_ref, None)
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
