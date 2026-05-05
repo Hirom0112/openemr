@@ -416,6 +416,31 @@ The observability primitives that satisfy §5.4 live in a dedicated leaf package
 | `client_timing` | INFO | `POST /agent/client-timing` | `action`, `duration_ms` |
 | `dispatcher.pid_resolution` | INFO | `agent/dispatcher.py` | `original_input`, `resolved_pid`, `resolution_method` (`normalize`/`name_match`), `tool_name`, `session_id` |
 
+**W2 metric catalog (Phase 6.1 additions).** These instrument the document-ingest path, the LangGraph hybrid-RAG retriever, the critic, and the demographic comparator. All are defined in `agent-api/agent/metrics.py`. Spec lives in `W2_ARCHITECTURE.md` §10.2; this table reflects what is actually emitted by the code today.
+
+| Metric | Type | Labels |
+|---|---|---|
+| `agent_w2_document_ingest_total` | Counter | `path`, `doc_type`, `outcome` |
+| `agent_w2_extraction_duration_seconds` | Histogram | `doc_type`, `classifier_confidence_bucket` |
+| `agent_w2_retrieval_duration_seconds` | Histogram | `mode` (`sparse`/`dense`/`rerank`/`merge`) |
+| `agent_w2_retrieval_hits_total` | Counter | `mode` |
+| `agent_w2_critic_decisions_total` | Counter | `decision` (`pass`/`soft_warn`/`hard_block`), `reason` |
+| `agent_w2_demographic_checks_total` | Counter | `outcome` |
+| `agent_w2_classifier_confidence` | Histogram | `doc_type` |
+| `agent_w2_ocr_confidence` | Histogram | `doc_type` |
+| `agent_watchdog_last_run_timestamp_seconds` | Gauge | — |
+
+**W2 audit event-type catalog.** PHI-safe audit events written via `audit/writer.py`. Spec lives in `W2_ARCHITECTURE.md` §9.4; this table reflects only what is currently emitted by the code (verified by `git grep "event_type=" agent-api/`). Events from §9.4 that are not yet emitted (e.g. `document_processing_timeout`, `document_extraction_abandoned`, `intra_doc_conflict_detected`, `record_evidence_contradiction`, `classifier_verdict`) are intentionally omitted here until the call sites land.
+
+| `event_type` | Emitted from | `detail_json` shape |
+|---|---|---|
+| `document_ingested` | `main.py::document_ingest` | `path`, `size_bytes`, `page_count` |
+| `document_extracted` | `main.py::document_ingest` | `kind`, `classifier_confidence`, `ocr_confidence_range`, `n_fields` |
+| `node_handoff` | `graph/nodes/*.py` (supervisor, retriever, extractor, structured, critic, finalize) | `from_node`, `to_node`, `decision_reason`, `duration_ms` |
+| `critic_decision` | `graph/nodes/critic.py` | `decision`, `violation_codes` |
+| `demographic_check` | `graph/nodes/demographics.py` | `decision`, `reason_code` |
+| `retrieval_completed` | `graph/nodes/retriever.py` | `sparse_hits`, `dense_hits`, `after_rerank`, `rerank_used` |
+
 When adding a new tool, cache, or background task, follow the same pattern: emit one `tool_outcome` (or equivalent) structured log line via `log_tool_outcome` and at least one Prometheus counter or histogram. This is the rule that keeps every latency or cache-hit claim verifiable from logs and metrics without re-reading the code.
 
 ---

@@ -2,7 +2,25 @@
 
 A Gauntlet AI project building a Clinical Co-Pilot agent on top of OpenEMR.
 
-**Status:** Local development environment is up and running with demo patient data loaded. AI integration not yet built.
+**Status:** agent-api (FastAPI) and agent-ui (React) run alongside OpenEMR via `docker/development-easy/docker-compose.copilot.yml`.
+
+## Week 1 vs Week 2 Capabilities
+
+The deliverable ships in two additive passes. Week 1 (W1) is the structured-data triage assistant; Week 2 (W2) layers in document ingestion, a multi-agent supervisor graph, hybrid retrieval over a guideline corpus, and a wrong-patient critic. Reading the table below should make it unambiguous which feature lives in which deliverable.
+
+| Capability | Week 1 (shipped) | Week 2 (added) |
+|---|---|---|
+| Triage census + per-patient briefing | Census ranked by triage signals; concise per-patient brief assembled from FHIR | unchanged |
+| Medication safety + targeted query + handoff | Active-medication safety screen, targeted FHIR query tools, structured nurse-handoff packet | unchanged |
+| Document ingestion | — | `POST /document/ingest`: OCR + Claude vision extraction, FHIR `DocumentReference` round-trip, idempotent claim on `(doc_ref_id, content_sha256)` |
+| Multi-agent supervisor graph | Single dispatcher with deterministic fast-path | LangGraph supervisor + 4 workers + critic + finalize, exposed via `POST /agent/w2/dispatch` (SSE) |
+| Hybrid RAG over guideline corpus | — | pgvector dense + tsvector sparse with Cohere rerank and merged-top-N fallback, `POST /evidence/search` |
+| Wrong-patient detection | Patient-id normalization and census-scope guard at dispatcher entry | MRN-dominant demographic comparator (W2_ARCHITECTURE §5.6) emitting `agent_w2_demographic_checks_total` |
+| Critic with citation fidelity | W1 verification layer preserved on the structured-data path | New critic with schema / citation / fidelity / demographic checks, surfacing `pass` / `soft_warn` / `hard_block` |
+| Bbox overlay UI | Chat surface, brief panel | `agent-ui` `DocumentViewer` + `BboxOverlay` + `CitationChip` for evidence-grounded chips |
+| 50-case eval gate | W1 prompt-eval (47 cases) | GH Actions `w2-eval` job in `.github/workflows/copilot-eval.yml` with `baseline.json`, `diff_baseline.py`, advisory pre-push hook |
+
+Week 1 features are unchanged in Week 2 by architectural constraint #3 (additive, not a rewrite): the W2 graph and document path live behind their own routes, share observability primitives with W1, and never modify W1 code paths or contracts.
 
 ## Prerequisites
 
@@ -75,6 +93,12 @@ The following warnings appear in logs in the dev environment and are expected �
 
 - Apache `ServerName` not set
 - Self-signed SSL certificate warnings (`AH01906`, `AH01909`)
+
+## Deployed
+
+- **OpenEMR (Railway):** https://clinical-copilot-openemr-production.up.railway.app/interface/login/login.php?site=default
+- **Login:** `admin` / `pass`
+- **Branch:** `clinical-copilot`
 
 ---
 
