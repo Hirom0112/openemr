@@ -4,8 +4,8 @@ Pure async function. Decides the next graph node based on the W2State.
 Never raises; audit emit failures are swallowed and logged.
 
 Routing rules (W2_ARCHITECTURE.md §5.2):
-  * file_bytes_ref present                          -> extractor
-  * message present AND extraction already populated -> retriever
+  * file_bytes_ref present                           -> intake_extractor
+  * message present AND extraction already populated -> evidence_retriever
   * message present                                  -> structured
   * otherwise                                        -> finalize
 """
@@ -30,9 +30,9 @@ def _decide(state: W2State) -> tuple[str, str]:
     extraction = state.get("extraction")
 
     if file_ref:
-        return "extractor", "file_bytes_ref present"
+        return "intake_extractor", "file_bytes_ref present"
     if message and extraction:
-        return "retriever", "message with prior extraction"
+        return "evidence_retriever", "message with prior extraction"
     if message:
         return "structured", "message without extraction"
     return "finalize", "no inputs"

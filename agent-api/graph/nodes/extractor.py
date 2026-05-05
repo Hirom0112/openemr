@@ -48,7 +48,7 @@ async def _emit_handoff(
         outcome=outcome,
         duration_ms=duration_ms,
         detail_json={
-            "from_node": "extractor",
+            "from_node": "intake_extractor",
             "to_node": to_node,
             "decision_reason": reason,
             "duration_ms": duration_ms,

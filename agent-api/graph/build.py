@@ -3,10 +3,10 @@
 Topology (post-slice 3.9)
 -------------------------
 
-    supervisor --> {extractor | structured | retriever | finalize}
-    extractor --> demographics --> critic --> finalize --> END
+    supervisor --> {intake_extractor | structured | evidence_retriever | finalize}
+    intake_extractor --> demographics --> critic --> finalize --> END
     structured --> critic --> finalize --> END
-    retriever --> critic --> finalize --> END
+    evidence_retriever --> critic --> finalize --> END
 
 Provider injection
 ------------------
@@ -58,9 +58,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SUPERVISOR_ROUTES: dict[str, str] = {
-    "extractor": "extractor",
+    "intake_extractor": "intake_extractor",
     "structured": "structured",
-    "retriever": "retriever",
+    "evidence_retriever": "evidence_retriever",
     "finalize": "finalize",
 }
 
@@ -94,9 +94,9 @@ def build_graph(
     )
 
     graph.add_node("supervisor", supervisor)
-    graph.add_node("extractor", bound_extractor)
+    graph.add_node("intake_extractor", bound_extractor)
     graph.add_node("structured", structured_node)
-    graph.add_node("retriever", retriever_node)
+    graph.add_node("evidence_retriever", retriever_node)
     graph.add_node("demographics", bound_demographics)
     graph.add_node("critic", critic_node)
     graph.add_node("finalize", finalize_node)
@@ -106,16 +106,16 @@ def build_graph(
         "supervisor",
         _route_from_supervisor,
         {
-            "extractor": "extractor",
+            "intake_extractor": "intake_extractor",
             "structured": "structured",
-            "retriever": "retriever",
+            "evidence_retriever": "evidence_retriever",
             "finalize": "finalize",
         },
     )
-    graph.add_edge("extractor", "demographics")
+    graph.add_edge("intake_extractor", "demographics")
     graph.add_edge("demographics", "critic")
     graph.add_edge("structured", "critic")
-    graph.add_edge("retriever", "critic")
+    graph.add_edge("evidence_retriever", "critic")
     graph.add_edge("critic", "finalize")
     graph.add_edge("finalize", END)
 

@@ -68,7 +68,7 @@ async def retriever_node(state: W2State) -> dict[str, Any]:
                     outcome="success",
                     duration_ms=duration_ms,
                     detail_json={
-                        "from_node": "retriever",
+                        "from_node": "evidence_retriever",
                         "to_node": "critic",
                         "skipped_reason": "no_query",
                         "n_results": 0,
@@ -117,7 +117,7 @@ async def retriever_node(state: W2State) -> dict[str, Any]:
                     outcome="failure",
                     duration_ms=duration_ms,
                     detail_json={
-                        "from_node": "retriever",
+                        "from_node": "evidence_retriever",
                         "to_node": "critic",
                         "error_type": type(exc).__name__,
                         "n_results": 0,
@@ -205,7 +205,7 @@ async def retriever_node(state: W2State) -> dict[str, Any]:
                 outcome="success",
                 duration_ms=duration_ms,
                 detail_json={
-                    "from_node": "retriever",
+                    "from_node": "evidence_retriever",
                     "to_node": "critic",
                     "n_results": len(snippet_dicts),
                     "duration_ms": duration_ms,

@@ -25,7 +25,7 @@ async def test_supervisor_routes_file_to_extractor() -> None:
         request_id="r1", session_id="s1", provider_id="p1", file_bytes_ref="x"
     )
     out = await supervisor(state)
-    assert out["next_node"] == "extractor"
+    assert out["next_node"] == "intake_extractor"
 
 
 @pytest.mark.asyncio
@@ -35,7 +35,7 @@ async def test_supervisor_routes_question_with_facts_to_retriever() -> None:
     )
     state["extraction"] = {"kind": "lab_report"}
     out = await supervisor(state)
-    assert out["next_node"] == "retriever"
+    assert out["next_node"] == "evidence_retriever"
 
 
 @pytest.mark.asyncio
