@@ -70,6 +70,24 @@ def _markdown_report(case_rows: list[dict], aggregates: dict) -> str:
     lines.append("| rubric | rate |")
     lines.append("| --- | --- |")
     for k, v in aggregates.items():
+        if k == "nearest_label_grounded":
+            detail = aggregates.get("nearest_label_grounded_detail") or {}
+            n_pass = detail.get("n_passed")
+            n_eval = detail.get("n_evaluated")
+            if v is None or not n_eval:
+                lines.append(
+                    f"| nearest_label_grounded (info) | n/a (0 cases with labels) |"
+                )
+            else:
+                pct = float(v) * 100
+                lines.append(
+                    f"| nearest_label_grounded (info) | "
+                    f"{pct:.1f}% ({n_pass}/{n_eval} cases with labels) |"
+                )
+            continue
+        if k == "nearest_label_grounded_detail":
+            # Rendered above alongside ``nearest_label_grounded``.
+            continue
         try:
             lines.append(f"| {k} | {float(v) * 100:.1f}% |")
         except (TypeError, ValueError):
@@ -462,6 +480,105 @@ def _score_bbox_rubrics(
     return global_block, per_modality_block
 
 
+def _layout_blocks_for_rubric(outcome: Any) -> list[Any]:
+    """Adapt ``outcome.ocr_layout`` (list of dicts from the runner) into
+    objects exposing ``.text`` / ``.page`` / ``.bbox`` so the
+    ``nearest_label_grounded`` rubric (which uses ``getattr``) can read
+    them. ``LayoutBlock`` dataclass instances are passed through.
+    """
+    raw = getattr(outcome, "ocr_layout", None) or []
+    from types import SimpleNamespace
+    out: list[Any] = []
+    for blk in raw:
+        if isinstance(blk, dict):
+            out.append(SimpleNamespace(
+                text=blk.get("text", "") or "",
+                page=blk.get("page"),
+                bbox=blk.get("bbox"),
+            ))
+        else:
+            out.append(blk)
+    return out
+
+
+def _score_nearest_label_grounded(
+    cases: list[Any], outcomes_by_case_id: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Compute the info-only ``nearest_label_grounded`` rubric.
+
+    Cases for which the rubric returns ``None`` (no ``nearest_label``
+    emitted) are excluded from BOTH numerator and denominator. Per-modality
+    pass-rates are computed the same way.
+
+    Errors raised by the rubric are logged and treated as a skip — the
+    eval run must never crash on an info-only rubric.
+    """
+    try:
+        from evals.rubrics_llm import nearest_label_grounded  # type: ignore
+    except Exception as exc:  # pragma: no cover — defensive (tests stub modules)
+        logger.warning(
+            "eval.nearest_label_grounded.import_error",
+            extra={
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc)[:200],
+            },
+        )
+        return (
+            {"pass_rate": None, "n_passed": 0, "n_evaluated": 0, "info_only": True},
+            {},
+        )
+
+    n_total = 0
+    n_passed = 0
+    per_mod: dict[str, dict[str, int]] = defaultdict(lambda: {"n": 0, "pass": 0})
+
+    for case in cases:
+        case_id = getattr(case, "case_id", None)
+        outcome = outcomes_by_case_id.get(case_id) if case_id else None
+        if outcome is None:
+            continue
+        layout = _layout_blocks_for_rubric(outcome)
+        try:
+            result = nearest_label_grounded(outcome, case, layout_blocks=layout)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.warning(
+                "eval.nearest_label_grounded.error",
+                extra={
+                    "case_id": case_id,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc)[:200],
+                },
+            )
+            continue
+        if result is None:
+            continue
+        modality = str(getattr(case, "document_modality", "unknown") or "unknown")
+        n_total += 1
+        per_mod[modality]["n"] += 1
+        if result:
+            n_passed += 1
+            per_mod[modality]["pass"] += 1
+
+    global_block: dict[str, Any] = {
+        "pass_rate": (n_passed / n_total) if n_total else None,
+        "n_passed": n_passed,
+        "n_evaluated": n_total,
+        "info_only": True,
+    }
+    per_mod_block: dict[str, dict[str, Any]] = {}
+    for mod, agg in per_mod.items():
+        per_mod_block[mod] = {
+            "nearest_label_grounded": (agg["pass"] / agg["n"]) if agg["n"] else None,
+            "nearest_label_grounded_detail": {
+                "pass_rate": (agg["pass"] / agg["n"]) if agg["n"] else None,
+                "n_passed": agg["pass"],
+                "n_evaluated": agg["n"],
+                "info_only": True,
+            },
+        }
+    return global_block, per_mod_block
+
+
 def _per_modality_breakdown(scores: list[Any], cases: list[Any]) -> dict[str, dict[str, float | int]]:
     """Group scores by ``case.document_modality`` and compute pass-rates.
 
@@ -575,6 +692,20 @@ def main(argv: list[str] | None = None) -> int:
     if pix_mean is not None:
         results["citation_pixel_distance_mean_px"] = float(pix_mean)
     for mod, block in bbox_per_mod.items():
+        results["per_modality"].setdefault(mod, {})
+        for k, v in block.items():
+            results["per_modality"][mod][k] = v
+
+    # Wave 2B+ — info-only ``nearest_label_grounded`` rubric. Skipped cases
+    # (no LLM-emitted nearest_label) are excluded from numerator AND
+    # denominator. NOT in baseline.json — purely diagnostic.
+    nlg_global, nlg_per_mod = _score_nearest_label_grounded(
+        scored_cases, outcomes_by_case_id,
+    )
+    nlg_pr = nlg_global["pass_rate"]
+    results["nearest_label_grounded"] = float(nlg_pr) if nlg_pr is not None else None
+    results["nearest_label_grounded_detail"] = nlg_global
+    for mod, block in nlg_per_mod.items():
         results["per_modality"].setdefault(mod, {})
         for k, v in block.items():
             results["per_modality"][mod][k] = v
