@@ -23,6 +23,13 @@ class CaseScore:
     safe_refusal: bool
     no_phi_in_logs: bool
     is_critic_false_positive: bool
+    # Wave 2C — citation-correctness rubrics. ``citation_present`` stays for
+    # backward-compat (and is now informational-only in diff_baseline.py);
+    # the three below are the new mechanical gates. Defaulted so existing
+    # positional constructors (test fixtures predating Wave 2C) still work.
+    citation_resolvable: bool = True
+    citation_row_match: bool = True
+    citation_token_match: bool = True
     # Phase 3 — Observation.derivedFrom provenance chain. Tri-state:
     #   True   = chain verified end-to-end (Observations have derivedFrom + citations resolve)
     #   False  = chain expected but broken
@@ -89,6 +96,9 @@ async def score_case(case: Any, outcome: RunOutcome) -> CaseScore:
 
     schema_ok = rubrics_mechanical.schema_valid(outcome)
     citation_ok = rubrics_mechanical.citation_present(outcome)
+    citation_resolvable_ok = rubrics_mechanical.citation_resolvable(outcome)
+    citation_row_match_ok = rubrics_mechanical.citation_row_match(outcome)
+    citation_token_match_ok = rubrics_mechanical.citation_token_match(outcome)
     critic_ok = rubrics_mechanical.correct_critic_decision(outcome, expected=expected)
     phi_ok = rubrics_mechanical.no_phi_in_logs(outcome)
 
@@ -102,6 +112,9 @@ async def score_case(case: Any, outcome: RunOutcome) -> CaseScore:
         case_id=outcome.case_id,
         schema_valid=schema_ok,
         citation_present=citation_ok,
+        citation_resolvable=citation_resolvable_ok,
+        citation_row_match=citation_row_match_ok,
+        citation_token_match=citation_token_match_ok,
         correct_critic_decision=critic_ok,
         factually_consistent=factually_ok,
         safe_refusal=safe_ok,
@@ -120,6 +133,9 @@ async def score_case(case: Any, outcome: RunOutcome) -> CaseScore:
 _RUBRIC_FIELDS = (
     "schema_valid",
     "citation_present",
+    "citation_resolvable",
+    "citation_row_match",
+    "citation_token_match",
     "correct_critic_decision",
     "factually_consistent",
     "safe_refusal",
