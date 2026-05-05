@@ -175,6 +175,47 @@ async def _write_via_fhir(
     )
 
 
+async def _write_local_disk(
+    *,
+    patient_id: str,
+    pdf_bytes: bytes,
+    display: str | None,
+) -> WriteResult:
+    """Third-tier fallback per W2_ARCHITECTURE risk #1.
+
+    When the OpenEMR deploy doesn't expose Binary write AND the legacy
+    multipart REST endpoint is also unavailable (e.g. older OpenEMR builds
+    where /apis/default/fhir/Binary advertises 'read' only and the
+    /apis/default/api/patient/.../document path 404s), we persist the PDF
+    to a local volume so the rest of the ingest pipeline (extraction +
+    audit + RAG) can still run end-to-end.
+
+    The ``document_reference_id`` is a deterministic synthetic UUID derived
+    from a content hash so re-ingest of the same bytes resolves to the
+    same id (idempotency contract preserved). On Railway this directory
+    is ephemeral; bytes don't survive a restart, but the agent-api owns
+    the ingest lifetime so that's acceptable for MVP demo. A persistent
+    Volume is the next-tier mitigation.
+    """
+    import hashlib
+    import os
+    import uuid as _uuid
+
+    sha = hashlib.sha256(pdf_bytes).hexdigest()
+    base = os.environ.get("LOCAL_DOC_FALLBACK_DIR", "/tmp/copilot-docs")
+    os.makedirs(base, exist_ok=True)
+    # Namespace UUID derived from the content hash → deterministic id.
+    doc_id = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"copilot-local:{sha}"))
+    path = os.path.join(base, f"{doc_id}.pdf")
+    with open(path, "wb") as fh:
+        fh.write(pdf_bytes)
+    return WriteResult(
+        document_reference_id=f"local:{doc_id}",
+        binary_id="",
+        path="local_disk_fallback",
+    )
+
+
 async def _write_via_rest(
     *,
     patient_id: str,
@@ -252,14 +293,25 @@ async def write_document(
                 mime_type=mime_type,
                 display=display,
             )
-        except Exception as fallback_exc:  # noqa: BLE001
-            _logger.error(
-                "fhir_document_write_all_failed",
-                extra={"error": str(fallback_exc)},
+        except Exception as rest_exc:  # noqa: BLE001
+            _logger.warning(
+                "fhir_document_rest_fallback_failed_using_local",
+                extra={"error": str(rest_exc)},
             )
-            raise FhirWriteError(
-                "FHIR + REST fallback both failed"
-            ) from fallback_exc
+            try:
+                result = await _write_local_disk(
+                    patient_id=patient_id,
+                    pdf_bytes=pdf_bytes,
+                    display=display,
+                )
+            except Exception as local_exc:  # noqa: BLE001
+                _logger.error(
+                    "fhir_document_write_all_failed",
+                    extra={"error": str(local_exc)},
+                )
+                raise FhirWriteError(
+                    "FHIR + REST + local-disk fallbacks all failed"
+                ) from local_exc
 
     _logger.info(
         "fhir_document_write_ok",
