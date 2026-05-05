@@ -164,6 +164,7 @@ def _patch_pipeline(
     claim_mock = AsyncMock(return_value=claim)
     complete_mock = AsyncMock(return_value=None)
     fail_mock = AsyncMock(return_value=None)
+    record_obs_mock = AsyncMock(return_value=None)
 
     extract_mock = AsyncMock()
     if extract_raises is not None:
@@ -172,13 +173,20 @@ def _patch_pipeline(
         extract_mock.return_value = extraction
 
     audit_emit_mock = AsyncMock(return_value=None)
+    write_obs_mock = AsyncMock(return_value={"id": "copilot-x", "action": "created"})
 
     monkeypatch.setattr(_fhir_writer, "write_document", write_mock)
     monkeypatch.setattr(_store, "claim_or_get", claim_mock)
     monkeypatch.setattr(_store, "complete", complete_mock)
     monkeypatch.setattr(_store, "fail", fail_mock)
+    monkeypatch.setattr(_store, "record_observation_ids", record_obs_mock)
     monkeypatch.setattr(_lab, "extract", extract_mock)
     monkeypatch.setattr(main_module.audit_writer, "emit", audit_emit_mock)
+
+    # Phase-2 observation writer — patched at the canonical module path
+    # so the local import inside main.document_ingest picks up the mock.
+    from observations import writer as _obs_writer
+    monkeypatch.setattr(_obs_writer, "write_observation", write_obs_mock)
 
     return {
         "write_document": write_mock,
@@ -187,6 +195,8 @@ def _patch_pipeline(
         "fail": fail_mock,
         "extract": extract_mock,
         "audit_emit": audit_emit_mock,
+        "write_observation": write_obs_mock,
+        "record_observation_ids": record_obs_mock,
     }
 
 
@@ -395,6 +405,106 @@ async def test_ingest_audit_events_emitted(monkeypatch: pytest.MonkeyPatch) -> N
     assert extracted.detail_json.get("kind") == "lab_report"
     assert extracted.detail_json.get("n_fields") == 1
     assert "values" not in extracted.detail_json
+
+
+async def test_ingest_populates_observation_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase-2 follow-up: lab_report extraction → one Observation per value.
+
+    Two LabValues in, two deterministic observation ids out, recorded under
+    ``metadata.observation_ids``. The agent-api writes them via the custom
+    JWT-authenticated endpoint (mocked here).
+    """
+    cit = Citation(
+        source_type="document",
+        source_id="copilot-117",
+        page_or_section="1",
+        field_or_chunk_id="p1-b001",
+        quote_or_value="value snippet",
+    )
+    val1 = LabValue(
+        test_name="Sodium",
+        normalized_test_name="sodium",
+        value="135",
+        unit="mmol/L",
+        normalized_unit="mmol/L",
+        reference_range="135-145",
+        collection_date=None,
+        abnormal_flag="normal",
+        citations=[cit],
+    )
+    val2 = LabValue(
+        test_name="Creatinine",
+        normalized_test_name="creatinine",
+        value="1.4",
+        unit="mg/dL",
+        normalized_unit="mg/dL",
+        reference_range="0.5-1.2",
+        collection_date=None,
+        abnormal_flag="high",
+        citations=[cit],
+    )
+    extraction = LabReport(
+        kind="lab_report",
+        schema_version="1.0",
+        patient_id="pt-1",
+        document_reference_id="copilot:117",
+        collection_facility=None,
+        values=[val1, val2],
+        classifier_confidence=0.95,
+        ocr_confidence_range=(0.9, 0.99),
+        extracted_at=_dt.datetime(2026, 5, 4, 12, 0, 0, tzinfo=_dt.timezone.utc),
+    )
+    mocks = _patch_pipeline(
+        monkeypatch,
+        document_reference_id="copilot:117",
+        extraction=extraction,
+    )
+
+    pdf_bytes = _make_pdf_bytes(pages=1)
+    resp = await _post_ingest(pdf_bytes)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    obs_ids = body["metadata"]["observation_ids"]
+    # Sodium → 2951-2, Creatinine → 2160-0 (LOINC table in observations.writer)
+    assert obs_ids == ["copilot-117-2951-2", "copilot-117-2160-0"]
+    # write_observation was called once per LabValue.
+    assert mocks["write_observation"].await_count == 2
+    # ids were recorded in Postgres.
+    assert mocks["record_observation_ids"].await_count == 1
+    rec_call = mocks["record_observation_ids"].await_args
+    assert rec_call.kwargs["ids"] == obs_ids
+
+
+async def test_ingest_observation_failure_emits_softwarn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failing Observation write must NOT fail the ingest — it surfaces as
+    a soft-warn. Other observations in the same extraction still attempt.
+    """
+    extraction = _make_lab_report()
+    mocks = _patch_pipeline(monkeypatch, extraction=extraction)
+
+    # First (and only) value's write fails.
+    mocks["write_observation"].side_effect = RuntimeError("simulated 502")
+
+    pdf_bytes = _make_pdf_bytes(pages=1)
+    resp = await _post_ingest(pdf_bytes)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["metadata"]["observation_ids"] == []
+    codes = [w["code"] for w in body["soft_warns"]]
+    assert "observation_write_failed" in codes
+
+
+async def test_ingest_unknown_kind_skips_observation_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    extraction = _make_unknown_doc()
+    mocks = _patch_pipeline(monkeypatch, extraction=extraction)
+
+    pdf_bytes = _make_pdf_bytes(pages=1)
+    resp = await _post_ingest(pdf_bytes)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["metadata"]["observation_ids"] == []
+    # No observation writes attempted on the non-lab path.
+    assert mocks["write_observation"].await_count == 0
 
 
 async def test_no_phi_in_logs(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

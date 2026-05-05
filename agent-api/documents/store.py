@@ -380,10 +380,46 @@ async def fail(
     )
 
 
+_RECORD_OBS_IDS_SQL = """
+    UPDATE copilot_doc_extractions
+       SET observation_ids = $2::jsonb
+     WHERE extraction_id = $1
+"""
+
+
+async def record_observation_ids(
+    *,
+    extraction_id: int,
+    ids: list[str],
+) -> None:
+    """Record the deterministic FHIR Observation ids derived from a row.
+
+    Phase-2 follow-up: ``/document/ingest`` writes one Observation per
+    extracted ``LabValue`` (W2 §5.3 "derivedFrom" provenance). The ids are
+    stored alongside the extraction row so downstream tools can walk the
+    provenance chain (extraction → observation → DocumentReference) without
+    a second join.
+    """
+    if not ids:
+        return
+    pool = await _require_pool()
+    payload_json = json.dumps(list(ids), ensure_ascii=False)
+    async with pool.acquire() as conn:
+        await conn.execute(_RECORD_OBS_IDS_SQL, extraction_id, payload_json)
+    _logger.info(
+        "doc_extraction_observation_ids_recorded",
+        extra={
+            "extraction_id": extraction_id,
+            "n_observations": len(ids),
+        },
+    )
+
+
 __all__ = [
     "ClaimResult",
     "claim_or_get",
     "complete",
     "compute_sha256",
     "fail",
+    "record_observation_ids",
 ]

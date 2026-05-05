@@ -16,6 +16,7 @@ root_packages =
     graph
     demographics
     rag
+    observations
 
 # audit is a leaf: HIPAA-style audit emission must not depend on any
 # business sibling — it is consumed by the dispatcher and HTTP layer only.
@@ -245,3 +246,27 @@ forbidden_modules =
     verification
     handoff
     medication
+
+# observations is a Phase-2 leaf among siblings: writes one FHIR
+# Observation per extracted LabValue via the custom Co-Pilot endpoint.
+# It needs documents.fhir_writer (for the shared _mint_copilot_jwt
+# helper) and extractors.schemas (the LabValue type), so those are
+# carved out — but no clinical sibling (triage/query/briefing/etc.)
+# may be touched. The dispatcher / HTTP layer (main.py) consumes it.
+[importlinter:contract:observations-isolated]
+name = observations must not depend on clinical siblings
+type = forbidden
+source_modules =
+    observations
+forbidden_modules =
+    triage
+    query
+    briefing
+    verification
+    medication
+    handoff
+    checkpointer
+    agent.tools
+    graph
+    rag
+    demographics
