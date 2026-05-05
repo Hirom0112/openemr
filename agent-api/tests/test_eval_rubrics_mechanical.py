@@ -5,9 +5,12 @@ from datetime import datetime, timezone
 
 import pytest
 
+from dataclasses import dataclass
+
 from evals.rubrics_mechanical import (
     citation_present,
     correct_critic_decision,
+    keyword_match_in_citation,
     no_phi_in_logs,
     schema_valid,
 )
@@ -163,6 +166,130 @@ def test_no_phi_in_logs_passes_when_only_ids_and_durations() -> None:
         no_phi_in_logs(out, synthetic_phi_values={"Marcus Webb", "100847", "1962-03-14"})
         is True
     )
+
+
+# --------------------------------------------------------------------------- #
+# keyword_match_in_citation — exercised against real retrieval output
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class _StubEvidenceCase:
+    case_id: str = "evidence_test"
+    bucket: str = "evidence_retrieval"
+    evidence_query: str | None = "What is the AKI threshold per KDIGO?"
+    expected_must_cite_source_id: tuple[str, ...] = ("kdigo-aki-2012",)
+    expected_keywords_in_quote: tuple[str, ...] = ("creatinine", "0.3")
+
+
+def _retrieval(snippets: list[dict]) -> dict:
+    return {"snippets": snippets, "fallback_used": False}
+
+
+def test_keyword_match_vacuously_true_when_no_evidence_query() -> None:
+    case = _StubEvidenceCase(evidence_query=None)
+    assert keyword_match_in_citation(_outcome(None), case=case) is True
+
+
+def test_keyword_match_passes_when_source_and_all_keywords_present() -> None:
+    case = _StubEvidenceCase()
+    snippets = [
+        {
+            "chunk_id": "c-1",
+            "source_id": "kdigo-aki-2012",
+            "content": "AKI is defined by a serum creatinine rise of 0.3 mg/dL.",
+        },
+        {
+            "chunk_id": "c-2",
+            "source_id": "ssc-2021",
+            "content": "Sepsis bundle.",
+        },
+    ]
+    out = _outcome(None)
+    out.retrieval = _retrieval(snippets)
+    assert keyword_match_in_citation(out, case=case) is True
+
+
+def test_keyword_match_fails_when_source_id_missing() -> None:
+    case = _StubEvidenceCase()
+    snippets = [
+        {
+            "chunk_id": "c-1",
+            "source_id": "ssc-2021",
+            "content": "Creatinine 0.3 mentioned but in the wrong source.",
+        },
+    ]
+    out = _outcome(None)
+    out.retrieval = _retrieval(snippets)
+    assert keyword_match_in_citation(out, case=case) is False
+
+
+def test_keyword_match_fails_when_keyword_missing_from_content() -> None:
+    case = _StubEvidenceCase()
+    snippets = [
+        {
+            "chunk_id": "c-1",
+            "source_id": "kdigo-aki-2012",
+            "content": "AKI is defined by a serum creatinine rise.",
+        },
+    ]
+    out = _outcome(None)
+    out.retrieval = _retrieval(snippets)
+    # Missing the "0.3" keyword — should fail.
+    assert keyword_match_in_citation(out, case=case) is False
+
+
+def test_keyword_match_fails_when_no_snippets() -> None:
+    case = _StubEvidenceCase()
+    out = _outcome(None)
+    out.retrieval = _retrieval([])
+    assert keyword_match_in_citation(out, case=case) is False
+
+
+def test_keyword_match_passes_with_only_source_match_when_no_keywords() -> None:
+    case = _StubEvidenceCase(expected_keywords_in_quote=())
+    snippets = [
+        {"chunk_id": "c-1", "source_id": "kdigo-aki-2012", "content": "anything"},
+    ]
+    out = _outcome(None)
+    out.retrieval = _retrieval(snippets)
+    assert keyword_match_in_citation(out, case=case) is True
+
+
+def test_keyword_match_fails_when_expected_sources_empty() -> None:
+    case = _StubEvidenceCase(expected_must_cite_source_id=())
+    out = _outcome(None)
+    out.retrieval = _retrieval(
+        [{"chunk_id": "c-1", "source_id": "kdigo-aki-2012", "content": "creatinine 0.3"}]
+    )
+    assert keyword_match_in_citation(out, case=case) is False
+
+
+def test_keyword_match_skipped_run_treated_as_pass() -> None:
+    case = _StubEvidenceCase()
+    out = _outcome(None)
+    out.skipped_reason = "missing_AUDIT_DB_URL_and_VOYAGE_API_KEY"
+    # No retrieval populated — but skipped should be vacuously True.
+    assert keyword_match_in_citation(out, case=case) is True
+
+
+def test_keyword_match_keyword_match_is_case_insensitive() -> None:
+    case = _StubEvidenceCase(expected_keywords_in_quote=("CREATININE", "0.3"))
+    snippets = [
+        {
+            "chunk_id": "c-1",
+            "source_id": "kdigo-aki-2012",
+            "content": "creatinine rise of 0.3",
+        },
+    ]
+    out = _outcome(None)
+    out.retrieval = _retrieval(snippets)
+    assert keyword_match_in_citation(out, case=case) is True
+
+
+# --------------------------------------------------------------------------- #
+# Default set sanity check
+# --------------------------------------------------------------------------- #
 
 
 def test_no_phi_in_logs_uses_default_set_when_none_provided() -> None:

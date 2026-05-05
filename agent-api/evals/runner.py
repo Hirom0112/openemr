@@ -43,6 +43,17 @@ class RunOutcome:
     # as ``None`` and the rubric records ``provenance_chain=None`` (skipped).
     ocr_layout: Optional[List[Dict[str, Any]]] = None
     observations: Optional[List[Dict[str, Any]]] = None
+    # Evidence-retrieval bucket — populated when the case routes through the
+    # evidence_retriever node. ``retrieval`` mirrors ``state["retrieval"]``
+    # (the snippet list returned by ``rag.retrieve.search``); ``finalized``
+    # mirrors ``state["finalized"]`` so rubrics can inspect the structured
+    # response. ``skipped_reason`` is set to a non-None string (e.g.
+    # ``"missing_AUDIT_DB_URL"`` or ``"missing_VOYAGE_API_KEY"``) when the
+    # runner declined to call the live retrieval stack — the suite reports
+    # these cases as ``skipped`` rather than ``failed``.
+    retrieval: Optional[Dict[str, Any]] = None
+    finalized: Optional[Dict[str, Any]] = None
+    skipped_reason: Optional[str] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -232,6 +243,105 @@ async def run_case(
     case_id = getattr(case, "case_id", "<unknown>")
     handler = _attach_capture()
     try:
+        # ── Evidence-retrieval branch ────────────────────────────────────
+        # Cases in the ``evidence_retrieval`` bucket exercise the
+        # LangGraph ``evidence_retriever`` node end-to-end against the
+        # indexed guideline corpus. We bypass the document path entirely:
+        # build an initial state with no ``file_bytes_ref``, the case's
+        # ``evidence_query`` as the user message, and a stub ``extraction``
+        # so the supervisor's routing rule
+        # ("message present AND extraction populated → evidence_retriever",
+        # see graph/nodes/supervisor.py:_decide) fires.
+        #
+        # Real retrieval requires Postgres+pgvector (AUDIT_DB_URL) AND a
+        # Voyage embedding key (VOYAGE_API_KEY). When either is missing
+        # we emit a structured-log warning and return a RunOutcome with
+        # ``skipped_reason`` set — the rubric layer treats that as
+        # ``skipped`` instead of ``failed``.
+        bucket = getattr(case, "bucket", None)
+        evidence_query = getattr(case, "evidence_query", None)
+        if bucket == "evidence_retrieval" and evidence_query:
+            import os
+
+            missing: list[str] = []
+            if not os.environ.get("AUDIT_DB_URL"):
+                missing.append("AUDIT_DB_URL")
+            if not os.environ.get("VOYAGE_API_KEY"):
+                missing.append("VOYAGE_API_KEY")
+            if missing:
+                reason = "missing_" + "_and_".join(missing)
+                logger.warning(
+                    "eval_evidence_retrieval_skipped",
+                    extra={
+                        "case_id": case_id,
+                        "missing_env": missing,
+                        "reason": reason,
+                    },
+                )
+                return RunOutcome(
+                    case_id=case_id,
+                    extraction=None,
+                    critic_decision=None,
+                    captured_logs=list(handler.records),
+                    error=None,
+                    skipped_reason=reason,
+                )
+
+            chart_patient = dict(getattr(case, "chart_patient", {}) or {})
+
+            async def _empty_file_bytes_provider(_ref: str) -> bytes:
+                # Should never be invoked — file_bytes_ref is None — but
+                # the graph factory requires the parameter.
+                return b""
+
+            async def _fhir_patient_provider_evidence(_pid: str) -> dict:
+                return chart_patient
+
+            if compile_graph_factory is None:
+                from graph import compile_graph as _compile  # local import
+
+                compile_graph_factory = _compile
+
+            compiled = compile_graph_factory(
+                file_bytes_provider=_empty_file_bytes_provider,
+                fhir_patient_provider=_fhir_patient_provider_evidence,
+            )
+
+            from graph import make_initial_state  # local import
+
+            initial = make_initial_state(
+                request_id=f"eval-{case_id}",
+                session_id=f"eval-sess-{case_id}",
+                provider_id="eval-provider",
+                patient_id=str(chart_patient.get("id") or "eval-patient"),
+                file_bytes_ref=None,
+                doc_type_hint=None,
+                message=str(evidence_query),
+            )
+            # Seed a stub extraction so the supervisor routes to
+            # evidence_retriever (see graph/nodes/supervisor.py:_decide).
+            initial["extraction"] = {
+                "kind": "unknown",
+                "schema_version": "1.0",
+                "patient_id": str(chart_patient.get("id") or "eval-patient"),
+                "document_reference_id": f"eval-stub-{case_id}",
+            }
+
+            config = {"configurable": {"thread_id": f"eval-thread-{case_id}"}}
+            final = await compiled.ainvoke(initial, config=config)
+
+            return RunOutcome(
+                case_id=case_id,
+                extraction=final.get("extraction"),
+                critic_decision=final.get("critic_decision"),
+                critic_violations=list(final.get("critic_violations") or []),
+                soft_warns=list(final.get("soft_warns") or []),
+                captured_logs=list(handler.records),
+                error=None,
+                retrieval=final.get("retrieval"),
+                finalized=final.get("finalized"),
+            )
+
         # Resolve fixture bytes lazily; the fixture key may not exist on disk
         # yet for some experimental cases.
         fixture_path = resolve_fixture_path(

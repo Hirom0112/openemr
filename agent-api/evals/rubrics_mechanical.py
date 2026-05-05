@@ -137,22 +137,27 @@ def no_phi_in_logs(
 
 
 def keyword_match_in_citation(outcome: RunOutcome, *, case: Any = None) -> bool:
-    """Evidence-retrieval rubric — boolean.
+    """Evidence-retrieval rubric — boolean, evaluated against real retrieval output.
 
     Vacuously ``True`` for cases without evidence-retrieval expectations
-    (i.e. ``case.evidence_query`` is falsy or unset). For evidence-retrieval
-    cases, returns ``True`` iff:
+    (i.e. ``case.evidence_query`` is falsy or unset).
 
-      * the case's expected source-id list is non-empty (definitional check
-        — guards against half-populated evidence cases sneaking in), AND
-      * the case's expected keyword list is non-empty.
+    For evidence-retrieval cases this inspects ``outcome.retrieval`` —
+    the snippet list returned by ``rag.retrieve.search`` via the
+    LangGraph ``evidence_retriever`` node — and returns ``True`` iff:
 
-    The end-to-end retrieval check (does the agent actually surface a
-    quote whose chunk is in ``expected_must_cite_source_id`` and whose
-    text contains a keyword) lives in the Stage-4 retrieval integration
-    tests; this rubric documents the contract every evidence-retrieval
-    case must satisfy at registration time so the bucket can never
-    silently degrade into "questions without answers".
+      * at least one snippet's ``source_id`` matches one of
+        ``case.expected_must_cite_source_id``, AND
+      * for every keyword in ``case.expected_keywords_in_quote``, at
+        least one snippet's ``content`` (case-insensitive) contains it.
+
+    When ``expected_keywords_in_quote`` is empty the keyword check is
+    skipped — the source-id match alone is sufficient.
+
+    A skipped run (``outcome.skipped_reason`` set, e.g. when the host
+    lacks ``AUDIT_DB_URL`` / ``VOYAGE_API_KEY``) is treated as vacuously
+    ``True`` here; the suite-level reporter surfaces the skip status
+    separately so it cannot mask a real regression.
     """
     if case is None:
         return True
@@ -161,8 +166,42 @@ def keyword_match_in_citation(outcome: RunOutcome, *, case: Any = None) -> bool:
         return True
     sources = tuple(getattr(case, "expected_must_cite_source_id", ()) or ())
     keywords = tuple(getattr(case, "expected_keywords_in_quote", ()) or ())
-    if not sources or not keywords:
+    if not sources:
+        # Definitional check — half-populated evidence cases must not
+        # silently pass.
         return False
+
+    # Skipped (no Postgres / no Voyage key) — don't fail the case.
+    if getattr(outcome, "skipped_reason", None):
+        return True
+
+    retrieval = getattr(outcome, "retrieval", None) or {}
+    snippets = retrieval.get("snippets") if isinstance(retrieval, dict) else None
+    if not isinstance(snippets, list) or not snippets:
+        return False
+
+    expected_sources_lc = {str(s).lower() for s in sources}
+    matching_snippets = [
+        s for s in snippets
+        if isinstance(s, dict)
+        and str(s.get("source_id") or "").lower() in expected_sources_lc
+    ]
+    if not matching_snippets:
+        return False
+
+    if not keywords:
+        return True
+
+    # Every keyword must appear (case-insensitive) in at least one
+    # snippet's content. Search across all snippets, not only the
+    # source-matched ones — the source check above already gates the
+    # citation; the content check here verifies the corpus actually
+    # surfaced the answer text.
+    haystacks = [str(s.get("content") or "").lower() for s in snippets if isinstance(s, dict)]
+    for kw in keywords:
+        needle = str(kw).lower()
+        if not any(needle in hay for hay in haystacks):
+            return False
     return True
 
 
