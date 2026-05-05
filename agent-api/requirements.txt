@@ -20,5 +20,9 @@ pymupdf==1.24.13
 reportlab==4.2.5
 python-multipart==0.0.20
 
+# Week-2 LangGraph skeleton (Slice 3.1+).
+langgraph==0.2.60
+langchain-core==0.3.28
+
 # Dev / lint (no separate requirements-dev.txt exists yet)
 import-linter==2.5.2
