@@ -105,9 +105,14 @@ BRIEFING_DURATION = Histogram(
 
 app = FastAPI(title="Clinical Co-Pilot API", version="0.1.0")
 
-# CORS: lock to a single configured browser origin. Empty falls back to "*"
-# with a startup warning so local dev keeps working without env churn, but
-# any real deployment must set OPENEMR_ORIGIN.
+# CORS configuration. The actual add_middleware call lives at the BOTTOM of
+# the middleware stack registration block so it ends up OUTERMOST in the
+# Starlette pipeline (last-added = outermost). That ordering guarantees
+# CORSMiddleware sees jwt_middleware's 401 / audit_middleware's 500 / etc.
+# on the response path and attaches Access-Control-Allow-Origin even on
+# error. Without this, the browser blocks every error response with the
+# generic "No 'Access-Control-Allow-Origin' header is present" — and the
+# iframe console can't surface the real error.
 if settings.openemr_origin:
     _cors_origins = [settings.openemr_origin]
 else:
@@ -117,13 +122,6 @@ else:
     )
     _cors_origins = ["*"]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
-)
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Per-request request_id: read X-Request-ID or mint uuid4, propagate via ContextVar."""
@@ -142,18 +140,21 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
 # ── Middleware stack ─────────────────────────────────────────────────────────
 # Starlette runs the LAST-REGISTERED middleware OUTERMOST. Registration
-# order below is therefore intentional and from INNER (runs near handler)
-# to OUTER (runs first on the request).
+# order below is from INNER (runs near handler) to OUTER (runs first on
+# the request).
 #
-#   CORSMiddleware                       — already registered above (innermost)
-#   audit_middleware                     — needs request_id + principal in scope
+#   audit_middleware                     — innermost; needs request_id + principal
 #   _audit_principal_stash               — copies principal ContextVar → request.state
 #   jwt_middleware                       — verifies JWT, sets principal ContextVar
-#   RequestIdMiddleware                  — sets request_id ContextVar (outermost)
+#   RequestIdMiddleware                  — sets request_id ContextVar
+#   CORSMiddleware                       — outermost; wraps every response, including
+#                                          errors from the auth layer below it, so the
+#                                          browser sees Access-Control-Allow-Origin
+#                                          on 401/403 too
 #
-# When a request arrives: RequestId → JWT → stash → audit → CORS → handler.
-# This guarantees both ContextVars are bound during audit's call_next, AND
-# the principal stash has run before audit reads request.state.
+# When a request arrives: CORS → RequestId → JWT → stash → audit → handler.
+# CORS being outermost means even short-circuit responses (jwt 401, audit 500)
+# get the ACAO header on the way back through the stack.
 
 # The ``audit`` package is a leaf in .importlinter and cannot import from
 # ``auth``; the stash bridges that boundary by copying ``request_principal_var``
@@ -180,6 +181,17 @@ async def _audit_principal_stash(request: Request, call_next: Any) -> Response:
 # is empty — see auth/jwt_middleware.py for the bypass-list and scope rules.
 app.middleware("http")(jwt_middleware)
 app.add_middleware(RequestIdMiddleware)
+
+# CORS LAST → outermost in the Starlette pipeline → wraps every response,
+# including 401s from jwt_middleware. Browsers see ACAO on error responses
+# and can surface the real error to the iframe console.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+)
 
 Instrumentator().instrument(app).expose(app)
 
@@ -1105,9 +1117,12 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
                 "duration_ms": duration_ms,
                 "outcome": outcome,
                 "census_entries": len(entries),
-                "bundle_warmed": len(warm_tasks),
-                "briefing_warmed": len(warm_tasks),
-                "medication_safety_warmed": len(warm_tasks),
+                # Renamed from warm_tasks → ranked_fanout in an earlier
+                # refactor; the log keys still describe the per-patient
+                # warmups so we count the size of the fanout list.
+                "bundle_warmed": len(ranked_fanout),
+                "briefing_warmed": len(ranked_fanout),
+                "medication_safety_warmed": len(ranked_fanout),
                 "warm_failures": failures,
                 "force_refresh": effective_force_refresh,
                 "caches_populated": [

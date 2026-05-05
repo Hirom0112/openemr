@@ -41,14 +41,22 @@ final class JwtMinter
     public static function mint(int $providerId, string $sessionId): ?string
     {
         // Caller-context assertion (defense-in-depth): the only legitimate
-        // call site is interface/main/tabs/main.php inside OpenEMR's
-        // authenticated session bootstrap. We require an active session
-        // with $authUserID matching the requested $providerId so a logged-in
-        // user can never mint a token for a different provider, and code
-        // executed outside an authenticated session can't mint at all.
-        $sessionUser = isset($_SESSION['authUserID'])
-            ? (int) $_SESSION['authUserID']
-            : 0;
+        // call site is interface/main/tabs/main.php (or the iframe entry
+        // index.php) inside OpenEMR's authenticated session bootstrap. We
+        // require an active session whose authUserID matches the requested
+        // $providerId so a logged-in user can never mint a token for a
+        // different provider, and code executed outside an authenticated
+        // session can't mint at all.
+        //
+        // Mirror the SAME resolution order main.php and index.php use to
+        // derive $providerId in the first place — top-level $_SESSION
+        // ['authUserID'] OR OpenEMR's namespaced $_SESSION['OpenEMR']
+        // ['authUserID'] — otherwise we reject our own legitimate callers
+        // when the session uses the namespaced layout.
+        $sessionUser = (int) (
+            $_SESSION['authUserID']
+            ?? ($_SESSION['OpenEMR']['authUserID'] ?? 0)
+        );
         if ($sessionUser <= 0 || $sessionUser !== $providerId) {
             error_log(sprintf(
                 '[clinical-copilot] JWT denied: caller-context check failed '
