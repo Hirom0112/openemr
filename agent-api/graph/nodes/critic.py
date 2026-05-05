@@ -31,6 +31,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from agent.metrics import agent_w2_critic_decisions_total
 from audit import writer as audit_writer
 from audit.models import AuditEvent
 from extractors.schemas import LabReport, UnknownDocument
@@ -350,6 +351,48 @@ async def critic_node(state: W2State) -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover — emit() is fire-and-forget
         logger.warning(
             "graph_critic_audit_emit_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+
+    # ── critic_decision audit row (W2 §9.4) — categorical only ──────────────
+    reason_label = violations[0] if violations else "none"
+    decision_event = AuditEvent(
+        event_type="critic_decision",
+        request_id=rid,
+        session_id=state.get("session_id"),
+        provider_id=state.get("provider_id"),
+        patient_id=state.get("patient_id"),
+        outcome="success" if decision != "hard_block" else "denied",
+        duration_ms=duration_ms,
+        detail_json={
+            "decision": decision,
+            "violation_codes": list(violations),
+        },
+    )
+    try:
+        await audit_writer.emit(decision_event)
+    except Exception as exc:  # pragma: no cover — fire-and-forget
+        logger.warning(
+            "graph_critic_decision_audit_emit_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+
+    # ── Metric inc (paired with one structured log event) ───────────────────
+    try:
+        agent_w2_critic_decisions_total.labels(
+            decision=decision, reason=reason_label
+        ).inc()
+        logger.info(
+            "graph_critic_metric",
+            extra={
+                "decision": decision,
+                "reason": reason_label,
+                "violation_count": len(violations),
+            },
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.warning(
+            "graph_critic_metric_emit_failed",
             extra={"error_type": type(exc).__name__},
         )
 

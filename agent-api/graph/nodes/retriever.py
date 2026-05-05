@@ -11,6 +11,10 @@ import logging
 import time
 from typing import Any
 
+from agent.metrics import (
+    agent_w2_retrieval_duration_seconds,
+    agent_w2_retrieval_hits_total,
+)
 from audit.models import AuditEvent
 from audit import writer as audit_writer
 
@@ -143,6 +147,53 @@ async def retriever_node(state: W2State) -> dict[str, Any]:
         snippet_dicts.append(d)
 
     duration_ms = int((time.monotonic() - t0) * 1000)
+
+    # ── Pull per-phase stats out of rag.retrieve and emit metrics + a
+    #    retrieval_completed audit row. Stats dict carries cardinality only —
+    #    no chunk content; query_prefix is capped at 30 chars in rag layer.
+    try:
+        stats = _retrieve.get_last_retrieval_stats()
+    except Exception:  # pragma: no cover — defensive
+        stats = {}
+
+    try:
+        n_sparse = int(stats.get("sparse_hits") or 0)
+        n_dense = int(stats.get("dense_hits") or 0)
+        n_final = int(stats.get("after_rerank") or len(snippet_dicts))
+        rerank_used = bool(stats.get("rerank_used") or False)
+        agent_w2_retrieval_hits_total.labels(mode="sparse").inc(n_sparse)
+        agent_w2_retrieval_hits_total.labels(mode="dense").inc(n_dense)
+        agent_w2_retrieval_hits_total.labels(mode="merge").inc(n_final)
+        if rerank_used:
+            agent_w2_retrieval_hits_total.labels(mode="rerank").inc(n_final)
+        agent_w2_retrieval_duration_seconds.labels(mode="sparse").observe(
+            float(stats.get("sparse_seconds") or 0.0)
+        )
+        agent_w2_retrieval_duration_seconds.labels(mode="dense").observe(
+            float(stats.get("dense_seconds") or 0.0)
+        )
+        agent_w2_retrieval_duration_seconds.labels(mode="merge").observe(
+            float(stats.get("merge_seconds") or 0.0)
+        )
+        agent_w2_retrieval_duration_seconds.labels(mode="rerank").observe(
+            float(stats.get("rerank_seconds") or 0.0)
+        )
+        logger.info(
+            "graph_retriever_metric",
+            extra={
+                "sparse_hits": n_sparse,
+                "dense_hits": n_dense,
+                "after_rerank": n_final,
+                "rerank_used": rerank_used,
+                "duration_ms": duration_ms,
+            },
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.warning(
+            "graph_retriever_metric_emit_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+
     try:
         await audit_writer.emit(
             AuditEvent(
@@ -164,6 +215,33 @@ async def retriever_node(state: W2State) -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover
         logger.warning(
             "graph_retriever_audit_emit_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+
+    # retrieval_completed (W2 §9.4) — cardinality + first-30-char prefix only.
+    try:
+        await audit_writer.emit(
+            AuditEvent(
+                event_type="retrieval_completed",
+                request_id=rid,
+                session_id=state.get("session_id"),
+                provider_id=state.get("provider_id"),
+                patient_id=state.get("patient_id"),
+                outcome="success",
+                duration_ms=duration_ms,
+                detail_json={
+                    "sparse_hits": int(stats.get("sparse_hits") or 0),
+                    "dense_hits": int(stats.get("dense_hits") or 0),
+                    "after_rerank": int(
+                        stats.get("after_rerank") or len(snippet_dicts)
+                    ),
+                    "rerank_used": bool(stats.get("rerank_used") or False),
+                },
+            )
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.warning(
+            "graph_retriever_completed_audit_emit_failed",
             extra={"error_type": type(exc).__name__},
         )
 

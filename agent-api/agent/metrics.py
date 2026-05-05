@@ -6,7 +6,7 @@ Both modules import from this file; neither defines metrics directly.
 
 from __future__ import annotations
 
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 agent_tool_calls_total = Counter(
     "agent_tool_calls_total",
@@ -136,4 +136,57 @@ agent_pid_resolution_total = Counter(
 agent_census_dropped_patients_total = Counter(
     "agent_census_dropped_patients_total",
     "Number of patients silently dropped from a census because _build_entry failed",
+)
+
+# ── W2 metrics (W2_ARCHITECTURE §10.2) ───────────────────────────────────────
+# These instrument the document-ingest path, the LangGraph hybrid-RAG
+# retriever, the critic, and the demographic comparator. Each metric is paired
+# with a structured log event at its call site (see CLAUDE.md "Observability —
+# verifiable latency claims").
+
+agent_w2_document_ingest_total = Counter(
+    "agent_w2_document_ingest_total",
+    "Document ingest count",
+    ["path", "doc_type", "outcome"],
+)
+agent_w2_extraction_duration_seconds = Histogram(
+    "agent_w2_extraction_duration_seconds",
+    "End-to-end extraction duration (OCR + classifier + vision + validation)",
+    ["doc_type", "classifier_confidence_bucket"],
+)
+agent_w2_retrieval_duration_seconds = Histogram(
+    "agent_w2_retrieval_duration_seconds",
+    "Retrieval stage duration",
+    ["mode"],   # sparse | dense | rerank | merge
+)
+agent_w2_retrieval_hits_total = Counter(
+    "agent_w2_retrieval_hits_total",
+    "Retrieval hits",
+    ["mode"],
+)
+agent_w2_critic_decisions_total = Counter(
+    "agent_w2_critic_decisions_total",
+    "Critic decisions emitted",
+    ["decision", "reason"],   # pass|soft_warn|hard_block × reason category
+)
+agent_w2_demographic_checks_total = Counter(
+    "agent_w2_demographic_checks_total",
+    "Wrong-patient demographic check outcomes",
+    ["outcome"],
+)
+agent_w2_classifier_confidence = Histogram(
+    "agent_w2_classifier_confidence",
+    "Classifier confidence per document",
+    ["doc_type"],
+    buckets=(0.1, 0.3, 0.5, 0.7, 0.85, 0.95, 1.0),
+)
+agent_w2_ocr_confidence = Histogram(
+    "agent_w2_ocr_confidence",
+    "Document-level OCR confidence",
+    ["doc_type"],
+    buckets=(0.3, 0.5, 0.6, 0.75, 0.9, 1.0),
+)
+agent_watchdog_last_run_timestamp_seconds = Gauge(
+    "agent_watchdog_last_run_timestamp_seconds",
+    "Wall-clock timestamp of the last APScheduler watchdog scan (Phase 8 will populate)",
 )

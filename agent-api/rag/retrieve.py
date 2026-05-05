@@ -83,6 +83,37 @@ def _normalize(scores: list[tuple[str, float]]) -> dict[str, float]:
     return {cid: (s - lo) / span for cid, s in scores}
 
 
+_LAST_RETRIEVAL_STATS: dict[str, Any] = {}
+"""Per-call telemetry from the most recent ``search()`` invocation in this
+event-loop task. Populated unconditionally before each return path. Read by
+``graph.nodes.retriever`` to emit Prometheus observations + the
+``retrieval_completed`` audit row without forcing ``rag`` to import
+``agent.metrics`` (would break the ``rag-isolated`` import-linter contract).
+Per-call only — the dict is overwritten each call, never accumulated.
+"""
+
+
+def get_last_retrieval_stats() -> dict[str, Any]:
+    """Return the per-call stats dict written by the most recent ``search()``.
+
+    Returns an empty dict if ``search()`` has not been called yet on this
+    interpreter. The shape is::
+
+        {
+            "sparse_hits": int,
+            "dense_hits": int,
+            "after_rerank": int,
+            "rerank_used": bool,
+            "sparse_seconds": float,
+            "dense_seconds": float,
+            "merge_seconds": float,
+            "rerank_seconds": float,
+            "query_prefix": str,  # first 30 chars only
+        }
+    """
+    return dict(_LAST_RETRIEVAL_STATS)
+
+
 async def search(
     query: str,
     *,
@@ -92,7 +123,15 @@ async def search(
     """Sparse + dense + rerank. Returns up to ``k`` snippets (may be empty)."""
     t0 = time.monotonic()
     query = (query or "").strip()
+    _LAST_RETRIEVAL_STATS.clear()
+    _LAST_RETRIEVAL_STATS["query_prefix"] = query[:30]
     if not query:
+        _LAST_RETRIEVAL_STATS.update({
+            "sparse_hits": 0, "dense_hits": 0, "after_rerank": 0,
+            "rerank_used": False,
+            "sparse_seconds": 0.0, "dense_seconds": 0.0,
+            "merge_seconds": 0.0, "rerank_seconds": 0.0,
+        })
         return []
 
     pool = await get_pool()
@@ -101,6 +140,12 @@ async def search(
             "rag_search_pool_unavailable",
             extra={"query_prefix": query[:30]},
         )
+        _LAST_RETRIEVAL_STATS.update({
+            "sparse_hits": 0, "dense_hits": 0, "after_rerank": 0,
+            "rerank_used": False,
+            "sparse_seconds": 0.0, "dense_seconds": 0.0,
+            "merge_seconds": 0.0, "rerank_seconds": 0.0,
+        })
         return []
 
     # 1. Embed the query.
@@ -108,7 +153,9 @@ async def search(
     qvec = query_vecs[0] if query_vecs else []
     qvec_literal = _vector_literal(qvec) if qvec else None
 
-    # 2. Sparse + dense in parallel.
+    # 2. Sparse + dense in parallel — capture per-phase timing.
+    sparse_t0 = time.monotonic()
+
     async def _sparse() -> list[tuple[str, float]]:
         async with pool.acquire() as conn:
             rows = await conn.fetch(_SPARSE_SQL, query)
@@ -122,8 +169,15 @@ async def search(
         return [(str(r["chunk_id"]), float(r["score"])) for r in rows]
 
     sparse_hits, dense_hits = await asyncio.gather(_sparse(), _dense())
+    parallel_seconds = max(0.0, time.monotonic() - sparse_t0)
+    # Sparse and dense run concurrently; we attribute the gather wall-clock
+    # to both so dashboards pick up the dominant phase. This is a deliberate
+    # over-attribution rather than a more invasive per-coroutine timer.
+    sparse_seconds = parallel_seconds
+    dense_seconds = parallel_seconds if qvec_literal else 0.0
 
     # 3. Merge: max of normalised scores per chunk_id.
+    merge_t0 = time.monotonic()
     sparse_norm = _normalize(sparse_hits)
     dense_norm = _normalize(dense_hits)
     merged: dict[str, float] = {}
@@ -131,6 +185,7 @@ async def search(
         merged[cid] = max(merged.get(cid, 0.0), score)
     for cid, score in dense_norm.items():
         merged[cid] = max(merged.get(cid, 0.0), score)
+    merge_seconds = max(0.0, time.monotonic() - merge_t0)
 
     if not merged:
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -145,6 +200,16 @@ async def search(
                 "query_prefix": query[:30],
             },
         )
+        _LAST_RETRIEVAL_STATS.update({
+            "sparse_hits": len(sparse_hits),
+            "dense_hits": len(dense_hits),
+            "after_rerank": 0,
+            "rerank_used": False,
+            "sparse_seconds": sparse_seconds,
+            "dense_seconds": dense_seconds,
+            "merge_seconds": merge_seconds,
+            "rerank_seconds": 0.0,
+        })
         return []
 
     candidate_ids = sorted(merged.keys(), key=lambda c: merged[c], reverse=True)[:30]
@@ -170,11 +235,22 @@ async def search(
                 "query_prefix": query[:30],
             },
         )
+        _LAST_RETRIEVAL_STATS.update({
+            "sparse_hits": len(sparse_hits),
+            "dense_hits": len(dense_hits),
+            "after_rerank": 0,
+            "rerank_used": False,
+            "sparse_seconds": sparse_seconds,
+            "dense_seconds": dense_seconds,
+            "merge_seconds": merge_seconds,
+            "rerank_seconds": 0.0,
+        })
         return []
 
     documents = [str(r["content"]) for r in ordered_candidates]
 
     # 5. Rerank or fallback.
+    rerank_t0 = time.monotonic()
     rerank_used = False
     final_pairs: list[tuple[int, float]]
     try:
@@ -219,6 +295,7 @@ async def search(
             )
         )
 
+    rerank_seconds = max(0.0, time.monotonic() - rerank_t0)
     duration_ms = int((time.monotonic() - t0) * 1000)
     _logger.info(
         "rag_search_complete",
@@ -231,6 +308,16 @@ async def search(
             "query_prefix": query[:30],
         },
     )
+    _LAST_RETRIEVAL_STATS.update({
+        "sparse_hits": len(sparse_hits),
+        "dense_hits": len(dense_hits),
+        "after_rerank": len(snippets),
+        "rerank_used": rerank_used,
+        "sparse_seconds": sparse_seconds,
+        "dense_seconds": dense_seconds,
+        "merge_seconds": merge_seconds,
+        "rerank_seconds": rerank_seconds,
+    })
     return snippets
 
 

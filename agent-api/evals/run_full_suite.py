@@ -59,26 +59,18 @@ def _markdown_report(case_rows: list[dict], aggregates: dict) -> str:
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True, help="Path to JSON results")
-    parser.add_argument("--md", type=Path, default=None, help="Path to Markdown report")
-    parser.add_argument("--fixtures-root", type=Path, default=REPO_AGENT_API / "tests" / "fixtures" / "eval")
-    args = parser.parse_args(argv)
-
-    md_path = args.md or args.output.with_suffix(".md")
-
+async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any]]:
     # Lazy imports — let tests patch these.
     from tests.fixtures.w2_eval_cases import CASES  # type: ignore
     from evals.runner import run_case  # type: ignore
     from evals.scoring import aggregate, score_case  # type: ignore
 
     case_rows: list[dict] = []
-    scores = []
+    scores: list[Any] = []
     for case in CASES:
         try:
-            outcome = run_case(case, args.fixtures_root)
-            score = score_case(case, outcome)
+            outcome = await run_case(case, fixtures_root=args.fixtures_root)
+            score = await score_case(case, outcome)
             scores.append(score)
             score_d = _serialize(score)
             case_d = _serialize(case)
@@ -97,6 +89,22 @@ def main(argv: list[str] | None = None) -> int:
                 "notes": str(e),
             })
 
+    return case_rows, scores
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, required=True, help="Path to JSON results")
+    parser.add_argument("--md", type=Path, default=None, help="Path to Markdown report")
+    parser.add_argument("--fixtures-root", type=Path, default=REPO_AGENT_API / "tests" / "fixtures" / "eval")
+    args = parser.parse_args(argv)
+
+    md_path = args.md or args.output.with_suffix(".md")
+
+    import asyncio
+    case_rows, scores = asyncio.run(_run_async(args))
+
+    from evals.scoring import aggregate  # type: ignore
     agg = aggregate(scores)
 
     # Ensure the JSON contains all six rubric pass-rates + critic_false_positive_rate.
