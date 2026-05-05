@@ -164,6 +164,98 @@ def _unknown_summary(blocks: List[LayoutBlock]) -> str:
     return f"Unclassified clinical document; first text regions: {joined}"
 
 
+def _index_blocks(blocks: List[LayoutBlock]) -> dict[str, LayoutBlock]:
+    return {b.bbox_id: b for b in blocks}
+
+
+def _hydrate_citation(cit: Citation, block_index: dict[str, LayoutBlock]) -> Citation:
+    """Stamp ``bbox`` / ``page`` from the OCR layout onto a Citation; log
+    and return untouched on lookup miss (never invent coordinates)."""
+    block = block_index.get(cit.field_or_chunk_id)
+    if block is None:
+        logger.warning(
+            "extractor_citation_bbox_lookup_failed",
+            extra={
+                "field_or_chunk_id": cit.field_or_chunk_id,
+                "source_id": cit.source_id,
+                "tool": "intake",
+            },
+        )
+        return cit
+    return cit.model_copy(update={"bbox": block.bbox, "page": block.page})
+
+
+def _hydrate_citations_list(
+    citations: List[Citation], block_index: dict[str, LayoutBlock]
+) -> List[Citation]:
+    return [_hydrate_citation(c, block_index) for c in citations]
+
+
+def _hydrate_intake_form_citations(
+    form: IntakeForm, blocks: List[LayoutBlock]
+) -> IntakeForm:
+    """Walk every cite-bearing IntakeForm field and stamp bbox/page."""
+    block_index = _index_blocks(blocks)
+
+    # Demographics — TextField sub-fields each carry citations.
+    demographics = form.demographics
+    if demographics is not None:
+        demo_updates: dict[str, Any] = {}
+        for attr in ("name", "dob", "sex", "mrn", "address"):
+            tf = getattr(demographics, attr, None)
+            if tf is not None:
+                demo_updates[attr] = tf.model_copy(
+                    update={
+                        "citations": _hydrate_citations_list(tf.citations, block_index)
+                    }
+                )
+        if demo_updates:
+            demographics = demographics.model_copy(update=demo_updates)
+
+    chief = form.chief_concern
+    if chief is not None:
+        chief = chief.model_copy(
+            update={"citations": _hydrate_citations_list(chief.citations, block_index)}
+        )
+
+    meds = [
+        m.model_copy(
+            update={"citations": _hydrate_citations_list(m.citations, block_index)}
+        )
+        for m in form.current_medications
+    ]
+    allergies = [
+        a.model_copy(
+            update={"citations": _hydrate_citations_list(a.citations, block_index)}
+        )
+        for a in form.allergies
+    ]
+    fam = [
+        f.model_copy(
+            update={"citations": _hydrate_citations_list(f.citations, block_index)}
+        )
+        for f in form.family_history
+    ]
+    code_status = form.code_status
+    if code_status is not None:
+        code_status = code_status.model_copy(
+            update={
+                "citations": _hydrate_citations_list(code_status.citations, block_index)
+            }
+        )
+
+    return form.model_copy(
+        update={
+            "demographics": demographics,
+            "chief_concern": chief,
+            "current_medications": meds,
+            "allergies": allergies,
+            "family_history": fam,
+            "code_status": code_status,
+        }
+    )
+
+
 def _unknown_key_facts(
     blocks: List[LayoutBlock], document_reference_id: str
 ) -> List[KeyFact]:
@@ -183,6 +275,8 @@ def _unknown_key_facts(
                     page_or_section=str(first.page),
                     field_or_chunk_id=first.bbox_id,
                     quote_or_value=first.text,
+                    bbox=first.bbox,
+                    page=first.page,
                 )
             ],
         )
@@ -324,11 +418,14 @@ async def extract_intake(
         )
         raise ExtractionFailed("vision call failed") from e
 
-    final = form.model_copy(
-        update={
-            "classifier_confidence": float(verdict.confidence),
-            "ocr_confidence_range": ocr_range,
-        }
+    final = _hydrate_intake_form_citations(
+        form.model_copy(
+            update={
+                "classifier_confidence": float(verdict.confidence),
+                "ocr_confidence_range": ocr_range,
+            }
+        ),
+        blocks,
     )
     logger.info(
         "extractor_intake_ok",

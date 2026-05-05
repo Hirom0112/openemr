@@ -127,6 +127,13 @@ async def test_extract_intake_returns_unknown_for_lab_pdf() -> None:
     assert result.document_kind_guess == "lab_report"
     assert result.summary  # non-empty
 
+    # Fallback synthetic citation must carry bbox/page (UI overlay contract).
+    assert result.key_facts, "fallback should produce at least one KeyFact"
+    cit = result.key_facts[0].citations[0]
+    assert cit.bbox is not None and len(cit.bbox) == 4
+    assert all(isinstance(v, float) for v in cit.bbox)
+    assert isinstance(cit.page, int) and cit.page >= 1
+
 
 # --------------------------------------------------------------------------- #
 # Validation-error path → ExtractionFailed (no PHI in message).
@@ -220,6 +227,25 @@ async def test_extract_intake_happy_path_e2e() -> None:
     assert matched_lis, (
         f"lisinopril medication not extracted: {result.current_medications}"
     )
+
+    # Every citation whose bbox_id matches a layout block must carry bbox/page.
+    from documents.ocr import extract_layout
+    bbox_ids = {b.bbox_id for b in extract_layout(pdf_bytes)}
+    walked = 0
+    for m in result.current_medications:
+        for c in m.citations:
+            if c.field_or_chunk_id in bbox_ids:
+                assert c.bbox is not None and len(c.bbox) == 4
+                assert all(isinstance(coord, float) for coord in c.bbox)
+                assert isinstance(c.page, int) and c.page >= 1
+                walked += 1
+    for a in result.allergies:
+        for c in a.citations:
+            if c.field_or_chunk_id in bbox_ids:
+                assert c.bbox is not None and len(c.bbox) == 4
+                assert isinstance(c.page, int) and c.page >= 1
+                walked += 1
+    assert walked >= 1, "expected at least one resolvable cited bbox in intake E2E"
 
 
 # --------------------------------------------------------------------------- #

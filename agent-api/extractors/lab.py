@@ -177,6 +177,47 @@ def _unknown_summary(blocks: List[LayoutBlock]) -> str:
     return f"Unclassified clinical document; first text regions: {joined}"
 
 
+def _index_blocks(blocks: List[LayoutBlock]) -> dict[str, LayoutBlock]:
+    """Build a bbox_id -> LayoutBlock map for O(1) citation hydration."""
+    return {b.bbox_id: b for b in blocks}
+
+
+def _hydrate_citation(cit: Citation, block_index: dict[str, LayoutBlock]) -> Citation:
+    """Return a copy of ``cit`` with ``bbox`` / ``page`` populated from the
+    OCR layout block keyed by ``cit.field_or_chunk_id``.
+
+    If the lookup fails, log a structured warning and return the citation
+    untouched — never invent coordinates (W2_ARCHITECTURE §8 fidelity).
+    """
+    block = block_index.get(cit.field_or_chunk_id)
+    if block is None:
+        logger.warning(
+            "extractor_citation_bbox_lookup_failed",
+            extra={
+                "field_or_chunk_id": cit.field_or_chunk_id,
+                "source_id": cit.source_id,
+            },
+        )
+        return cit
+    return cit.model_copy(update={"bbox": block.bbox, "page": block.page})
+
+
+def _hydrate_lab_report_citations(
+    report: LabReport, blocks: List[LayoutBlock]
+) -> LabReport:
+    """Walk every LabValue.citations and stamp bbox/page from the layout."""
+    block_index = _index_blocks(blocks)
+    new_values = [
+        v.model_copy(
+            update={
+                "citations": [_hydrate_citation(c, block_index) for c in v.citations]
+            }
+        )
+        for v in report.values
+    ]
+    return report.model_copy(update={"values": new_values})
+
+
 def _unknown_key_facts(blocks: List[LayoutBlock], document_reference_id: str) -> List[KeyFact]:
     """Build at least one KeyFact (the schema requires non-empty key_facts).
 
@@ -201,6 +242,8 @@ def _unknown_key_facts(blocks: List[LayoutBlock], document_reference_id: str) ->
                     page_or_section=str(first.page),
                     field_or_chunk_id=first.bbox_id,
                     quote_or_value=first.text,
+                    bbox=first.bbox,
+                    page=first.page,
                 )
             ],
         )
@@ -351,12 +394,17 @@ async def extract(
         )
         raise ExtractionFailed("vision call failed") from e
 
-    # Stamp computed fields (overrides whatever the model reported).
-    final = report.model_copy(
-        update={
-            "classifier_confidence": float(verdict.confidence),
-            "ocr_confidence_range": ocr_range,
-        }
+    # Stamp computed fields (overrides whatever the model reported) and
+    # hydrate every citation with bbox/page from the OCR layout so the UI
+    # can highlight cited regions without a separate layout map.
+    final = _hydrate_lab_report_citations(
+        report.model_copy(
+            update={
+                "classifier_confidence": float(verdict.confidence),
+                "ocr_confidence_range": ocr_range,
+            }
+        ),
+        blocks,
     )
     logger.info(
         "extractor_lab_ok",

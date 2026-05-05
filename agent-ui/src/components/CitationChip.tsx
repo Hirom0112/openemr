@@ -50,8 +50,14 @@ export default function CitationChip(props: CitationChipProps): ReactElement {
   const counter = (typeof index === 'number' && typeof total === 'number' && total > 1)
     ? `[${index + 1}/${total}] `
     : '';
-  const label = `${counter}${source}${loc ? ` · ${loc}` : ''}`;
-  const ariaLabel = `Open citation ${counter}from ${source}${loc ? `, ${loc}` : ''}`;
+  // Prefer the human-readable per-fact label (e.g. "Sodium 138 mEq/L") when
+  // the renderer attached one. Falls back to the source id so older callers
+  // and non-document citations continue to render as before.
+  const head = (citation.label && citation.label.trim().length > 0)
+    ? citation.label
+    : source;
+  const label = `${counter}${head}${loc ? ` · ${loc}` : ''}`;
+  const ariaLabel = `Open citation ${counter}from ${head}${loc ? `, ${loc}` : ''}`;
 
   const handleKeyDown = (e: KeyboardEvent<HTMLButtonElement>): void => {
     if (e.key === 'Enter' || e.key === ' ') {

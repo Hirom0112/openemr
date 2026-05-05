@@ -28,6 +28,14 @@ class Citation(BaseModel):
     page_or_section: Optional[str] = None
     field_or_chunk_id: str
     quote_or_value: str
+    # Layout coordinates carried through from the OCR layout block keyed by
+    # ``field_or_chunk_id``. Optional because (a) cached payloads written
+    # before this schema change won't have them, and (b) non-document
+    # citation sources (observation / guideline) have no bbox. When present:
+    # ``bbox`` is in the same coordinate frame as ``documents.ocr.LayoutBlock.bbox``
+    # — (x, y, w, h) in PDF user-space points — and ``page`` is 1-indexed.
+    bbox: Optional[Tuple[float, float, float, float]] = None
+    page: Optional[int] = None
 
 
 # --------------------------------------------------------------------------- #

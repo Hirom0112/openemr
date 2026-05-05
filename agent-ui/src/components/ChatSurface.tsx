@@ -36,6 +36,128 @@ function readExtraction(response: AgentResponse | undefined): ExtractionPayload 
 }
 
 /**
+ * Build a `field_or_chunk_id → human label` map from a typed extraction
+ * payload. The label is what `CitationChip` shows in place of the otherwise
+ * indistinguishable `source_id` — e.g. `Sodium 138 mEq/L` for a lab value or
+ * `Allergy: penicillin` for an intake form item. Returns an empty map when
+ * the extraction kind is unknown or the shape doesn't match — callers fall
+ * back to the existing source-id rendering.
+ */
+function buildLabelMap(extraction: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!extraction || typeof extraction !== 'object') return out;
+  const ext = extraction as { kind?: unknown };
+  const kind = typeof ext.kind === 'string' ? ext.kind : '';
+
+  const attach = (label: string, citations: unknown): void => {
+    if (!Array.isArray(citations)) return;
+    for (const c of citations) {
+      if (!c || typeof c !== 'object') continue;
+      const id = (c as { field_or_chunk_id?: unknown }).field_or_chunk_id;
+      if (typeof id === 'string' && id.length > 0 && !out.has(id)) {
+        out.set(id, label);
+      }
+    }
+  };
+
+  if (kind === 'lab_report') {
+    const values = (ext as { values?: unknown }).values;
+    if (Array.isArray(values)) {
+      for (const v of values) {
+        if (!v || typeof v !== 'object') continue;
+        const lv = v as { test_name?: unknown; value?: unknown; unit?: unknown; citations?: unknown };
+        const name = typeof lv.test_name === 'string' ? lv.test_name : '';
+        const value = typeof lv.value === 'string' ? lv.value : '';
+        const unit = typeof lv.unit === 'string' && lv.unit.length > 0 ? ` ${lv.unit}` : '';
+        const label = [name, `${value}${unit}`.trim()].filter(Boolean).join(' ').trim();
+        if (label) attach(label, lv.citations);
+      }
+    }
+    return out;
+  }
+
+  if (kind === 'intake_form') {
+    const ef = ext as Record<string, unknown>;
+    // TextField-shaped scalars: chief_concern, demographics.{name,dob,sex,mrn,address}
+    const textField = (prefix: string, tf: unknown): void => {
+      if (!tf || typeof tf !== 'object') return;
+      const t = tf as { value?: unknown; citations?: unknown };
+      const value = typeof t.value === 'string' ? t.value : '';
+      if (value) attach(`${prefix}: ${value}`, t.citations);
+    };
+    textField('Chief concern', ef.chief_concern);
+    if (ef.demographics && typeof ef.demographics === 'object') {
+      const d = ef.demographics as Record<string, unknown>;
+      textField('Name', d.name);
+      textField('DOB', d.dob);
+      textField('Sex', d.sex);
+      textField('MRN', d.mrn);
+      textField('Address', d.address);
+    }
+    if (Array.isArray(ef.current_medications)) {
+      for (const m of ef.current_medications) {
+        if (!m || typeof m !== 'object') continue;
+        const mm = m as { name?: unknown; dose?: unknown; citations?: unknown };
+        const name = typeof mm.name === 'string' ? mm.name : '';
+        const dose = typeof mm.dose === 'string' && mm.dose.length > 0 ? ` ${mm.dose}` : '';
+        if (name) attach(`Medication: ${name}${dose}`, mm.citations);
+      }
+    }
+    if (Array.isArray(ef.allergies)) {
+      for (const a of ef.allergies) {
+        if (!a || typeof a !== 'object') continue;
+        const aa = a as { substance?: unknown; reaction?: unknown; citations?: unknown };
+        const sub = typeof aa.substance === 'string' ? aa.substance : '';
+        const rxn = typeof aa.reaction === 'string' && aa.reaction.length > 0 ? ` (${aa.reaction})` : '';
+        if (sub) attach(`Allergy: ${sub}${rxn}`, aa.citations);
+      }
+    }
+    if (Array.isArray(ef.family_history)) {
+      for (const f of ef.family_history) {
+        if (!f || typeof f !== 'object') continue;
+        const ff = f as { relation?: unknown; condition?: unknown; citations?: unknown };
+        const rel = typeof ff.relation === 'string' ? ff.relation : '';
+        const cond = typeof ff.condition === 'string' ? ff.condition : '';
+        if (rel || cond) attach(`Family hx: ${[rel, cond].filter(Boolean).join(' — ')}`, ff.citations);
+      }
+    }
+    if (ef.code_status && typeof ef.code_status === 'object') {
+      const cs = ef.code_status as { value?: unknown; citations?: unknown };
+      const v = typeof cs.value === 'string' ? cs.value : '';
+      if (v) attach(`Code status: ${v}`, cs.citations);
+    }
+    return out;
+  }
+
+  if (kind === 'unknown') {
+    const facts = (ext as { key_facts?: unknown }).key_facts;
+    if (Array.isArray(facts)) {
+      for (const f of facts) {
+        if (!f || typeof f !== 'object') continue;
+        const kf = f as { text?: unknown; citations?: unknown };
+        const text = typeof kf.text === 'string' ? kf.text.trim() : '';
+        if (text) attach(text.length > 80 ? `${text.slice(0, 77)}…` : text, kf.citations);
+      }
+    }
+    return out;
+  }
+
+  return out;
+}
+
+function decorateCitationsWithLabels(
+  citations: W2Citation[],
+  extraction: unknown,
+): W2Citation[] {
+  const labels = buildLabelMap(extraction);
+  if (labels.size === 0) return citations;
+  return citations.map((c) => {
+    const lbl = labels.get(c.field_or_chunk_id);
+    return lbl ? { ...c, label: lbl } : c;
+  });
+}
+
+/**
  * One-line, top-right, auto-dismissing toast for JWT refresh failures.
  * Subscribes to the auth module on mount; auto-hides 5s after the latest
  * message. Intentionally lightweight — single string state, no animation,
@@ -1129,6 +1251,12 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       console.error('[ChatSurface] Failed to read dropped file as ArrayBuffer', err);
     }
 
+    // Derive human-readable per-citation labels so CitationChip can render
+    // "[1/15] Sodium 138 mEq/L · p1" instead of every chip looking identical.
+    // The label is purely a frontend affordance — backend keeps emitting raw
+    // Citation objects; we attach `label` here from the typed extraction.
+    const labelledCitations = decorateCitationsWithLabels(resp.citations, ext);
+
     const response: AgentResponse = {
       type: 'text',
       data: { extraction: resp.extraction, document_reference_id: resp.document_reference_id },
@@ -1138,7 +1266,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
         ...(resp.metadata as Record<string, unknown>),
         // Keyed under `extraction` so readExtraction() in this file picks it up.
         extraction: {
-          citations: resp.citations,
+          citations: labelledCitations,
           soft_warns: resp.soft_warns,
           ocr_layout: ext?.ocr_layout,
           pdf_url: ext?.pdf_url,

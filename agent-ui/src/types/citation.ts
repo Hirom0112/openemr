@@ -16,6 +16,24 @@ export interface Citation {
   /** Bbox id like "p2-b005" for documents, chunk id for guidelines, FHIR ref for observations. */
   field_or_chunk_id: string;
   quote_or_value: string;
+  /**
+   * Optional bbox in PDF user-space coordinates ([x, y, w, h], 1pt = 1/72in,
+   * top-left origin). Sent by the backend on every document citation in the
+   * ingest response so the viewer can highlight without a layout-table lookup.
+   * Falls back to {@link BboxLayoutBlock} resolution when absent.
+   */
+  bbox?: [number, number, number, number] | null;
+  /**
+   * Optional 1-indexed page number. Sent by the backend alongside `bbox`.
+   * Falls back to a numeric parse of `page_or_section` when absent.
+   */
+  page?: number | null;
+  /**
+   * Frontend-only human-readable description (e.g. "Sodium 138 mEq/L") used
+   * by {@link CitationChip} to disambiguate sibling chips. Derived in
+   * `ChatSurface` from the extraction shape; never sent on the wire.
+   */
+  label?: string | null;
 }
 
 /** One OCR layout block — ties bbox_id back to a rectangle on a specific PDF page. */

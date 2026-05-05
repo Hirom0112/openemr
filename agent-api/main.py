@@ -205,6 +205,7 @@ _redis: aioredis.Redis | None = None
 _redis_saver: RedisSaver | None = None
 _sqlite_saver: SqliteSaver | None = None
 _langfuse: Langfuse | None = None
+_langfuse_callback: Any | None = None
 
 
 @app.on_event("startup")
@@ -232,6 +233,29 @@ async def startup() -> None:
         public_key=settings.langfuse_public_key,
         host=settings.langfuse_host,
     )
+
+    # LangChain CallbackHandler — attached to LangGraph invocations so node
+    # transitions show up as Langfuse traces. Created once at startup since
+    # the handler reads creds from env / Langfuse client and is safe to share
+    # across requests (LangChain itself reuses callback handlers per-run).
+    # Guard the import: in environments missing langchain (isolated/unit
+    # tests on the host), we degrade gracefully — graph still runs, traces
+    # just aren't emitted.
+    global _langfuse_callback
+    _langfuse_callback = None
+    try:
+        from langfuse.callback import CallbackHandler as _LFCallbackHandler
+
+        _langfuse_callback = _LFCallbackHandler(
+            secret_key=settings.langfuse_secret_key,
+            public_key=settings.langfuse_public_key,
+            host=settings.langfuse_host,
+        )
+    except Exception as _exc:  # noqa: BLE001 — boundary; missing langchain is OK
+        logger.warning(
+            "langfuse_callback_init_skipped",
+            extra={"error_type": type(_exc).__name__},
+        )
 
     logger.info("agent-api started", extra={"redis_url": settings.redis_url, "openemr": settings.openemr_base_url})
 
@@ -809,20 +833,74 @@ class AgentQueryRequest(_CoerceModel):
 
 @app.post("/agent/query")
 async def agent_query(request: AgentQueryRequest) -> dict:
-    """Dispatcher — routes all physician queries through the tool_use loop."""
-    session_context = {
-        **_session_ctx(request.session_id),
-        "provider_id": request.provider_id,
-        "patient_ids": request.patient_ids,
-        "provider_name": request.provider_name,
-    }
-    if request.census_context:
-        session_context["census_context"] = request.census_context
+    """Route physician queries through the LangGraph supervisor pipeline.
+
+    Topology: supervisor -> structured (which wraps the legacy dispatcher)
+    -> critic -> finalize. The graph's structured_node calls
+    ``agent.dispatcher.dispatch`` internally, so the response contract
+    (``{narrative, data, citations, ...}``) is preserved — we surface
+    ``final["finalized"]["structured_response"]`` as the response body.
+
+    Payload mapping:
+      * ``message``, ``session_id``, ``provider_id`` map 1:1 to graph state.
+      * ``patient_ids[0]`` becomes ``state["patient_id"]`` (graph state holds
+        a single patient; the structured_node rebuilds session_context from
+        graph state).
+      * ``provider_name`` and ``census_context`` are NOT plumbed through the
+        graph today — these were prompt-enrichment hints for the dispatcher
+        and degrade gracefully when absent. If they prove load-bearing,
+        extend ``W2State`` and ``_build_session_context`` in a follow-up.
+    """
+    from graph import compile_graph as _compile_graph
+    from graph import make_initial_state as _make_initial_state
+    from langgraph.checkpoint.memory import MemorySaver
+
+    rid = request_id_var.get() or uuid.uuid4().hex
+    patient_id = request.patient_ids[0] if request.patient_ids else None
+
+    async def _fhir_patient_provider(pid: str) -> dict[str, Any]:
+        return await fhir_client.get_patient(pid)
+
+    compiled = _compile_graph(
+        checkpointer=MemorySaver(),
+        fhir_patient_provider=_fhir_patient_provider,
+    )
+    initial_state = _make_initial_state(
+        request_id=rid,
+        session_id=request.session_id,
+        provider_id=request.provider_id,
+        patient_id=patient_id,
+        message=request.message,
+    )
+    config: dict[str, Any] = {"configurable": {"thread_id": request.session_id}}
+    if _langfuse_callback is not None:
+        config["callbacks"] = [_langfuse_callback]
+
     try:
-        return await dispatch(request.message, request.session_id, session_context)
+        final = await compiled.ainvoke(initial_state, config=config)
     except Exception as exc:
-        logger.error("Dispatcher error session_id=%s error=%s", request.session_id, exc, exc_info=True)
+        logger.error(
+            "agent_query_graph_failed",
+            extra={"session_id": request.session_id, "error": str(exc)},
+            exc_info=True,
+        )
         raise HTTPException(status_code=500, detail="Dispatcher error") from exc
+
+    finalized = final.get("finalized") or {}
+    structured = finalized.get("structured_response") or final.get(
+        "structured_response"
+    )
+    if isinstance(structured, dict):
+        return structured
+    # Defensive fallback — graph short-circuited (e.g. empty message routed
+    # to finalize). Return a minimally-shaped response so the UI does not
+    # crash on a missing ``narrative`` field.
+    return {
+        "narrative": "",
+        "data": None,
+        "citations": [],
+        "errors": finalized.get("errors") or [],
+    }
 
 
 # ── FHIR pre-fetch (fired by React panel on mount) ───────────────────────────
@@ -1373,20 +1451,64 @@ def _build_soft_warns(extraction: Any) -> list[dict[str, Any]]:
     )
 
 
+def _normalize_cached_citation(cit: dict[str, Any]) -> dict[str, Any]:
+    """Backfill ``bbox`` / ``page`` keys for cached payloads written before
+    the Citation schema gained layout coordinates. Older rows simply lack
+    the keys; we surface them as ``None`` so the frontend contract is
+    uniform regardless of cache vintage.
+    """
+    if "bbox" not in cit:
+        cit = {**cit, "bbox": None}
+    if "page" not in cit:
+        cit = {**cit, "page": None}
+    return cit
+
+
 def _flatten_citations_from_dict(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Walk a serialized ExtractionResult dict for embedded citations."""
+    """Walk a serialized ExtractionResult dict for embedded citations.
+
+    Mirrors ``_flatten_citations`` but consumes the dict shape persisted in
+    the extraction cache. Older cached rows predate the bbox/page columns
+    on Citation; missing keys are normalized to ``None`` rather than
+    omitted, so the response contract is stable across cache vintages.
+    """
     out: list[dict[str, Any]] = []
     kind = payload.get("kind")
     if kind == "lab_report":
         for value in payload.get("values") or []:
             for cit in (value or {}).get("citations") or []:
                 if isinstance(cit, dict):
-                    out.append(cit)
+                    out.append(_normalize_cached_citation(cit))
     elif kind == "unknown":
         for fact in payload.get("key_facts") or []:
             for cit in (fact or {}).get("citations") or []:
                 if isinstance(cit, dict):
-                    out.append(cit)
+                    out.append(_normalize_cached_citation(cit))
+    elif kind == "intake_form":
+        demographics = payload.get("demographics") or {}
+        if isinstance(demographics, dict):
+            for attr in ("name", "dob", "sex", "mrn", "address"):
+                tf = demographics.get(attr)
+                if isinstance(tf, dict):
+                    for cit in tf.get("citations") or []:
+                        if isinstance(cit, dict):
+                            out.append(_normalize_cached_citation(cit))
+        chief = payload.get("chief_concern")
+        if isinstance(chief, dict):
+            for cit in chief.get("citations") or []:
+                if isinstance(cit, dict):
+                    out.append(_normalize_cached_citation(cit))
+        for collection_attr in ("current_medications", "allergies", "family_history"):
+            for item in payload.get(collection_attr) or []:
+                if isinstance(item, dict):
+                    for cit in item.get("citations") or []:
+                        if isinstance(cit, dict):
+                            out.append(_normalize_cached_citation(cit))
+        cs = payload.get("code_status")
+        if isinstance(cs, dict):
+            for cit in cs.get("citations") or []:
+                if isinstance(cit, dict):
+                    out.append(_normalize_cached_citation(cit))
     return out
 
 
@@ -1884,7 +2006,9 @@ async def agent_w2_dispatch(
         file_bytes_ref=file_bytes_ref,
         doc_type_hint=doc_type_hint,
     )
-    config = {"configurable": {"thread_id": session_id}}
+    config: dict[str, Any] = {"configurable": {"thread_id": session_id}}
+    if _langfuse_callback is not None:
+        config["callbacks"] = [_langfuse_callback]
 
     async def _event_stream() -> Any:
         try:

@@ -139,6 +139,14 @@ async def test_extract_returns_unknown_for_non_lab() -> None:
     assert result.classifier_confidence == 0.0
     assert result.document_kind_guess == "unknown"
 
+    # Fallback path must still carry bbox/page on its synthetic citation —
+    # the frontend highlight overlay relies on these fields being populated.
+    assert result.key_facts, "fallback should produce at least one KeyFact"
+    cit = result.key_facts[0].citations[0]
+    assert cit.bbox is not None and len(cit.bbox) == 4
+    assert all(isinstance(v, float) for v in cit.bbox)
+    assert isinstance(cit.page, int) and cit.page >= 1
+
 
 # --------------------------------------------------------------------------- #
 # Validation error → ExtractionFailed (no PHI in message).
@@ -248,3 +256,13 @@ async def test_extract_lab_happy_path_e2e() -> None:
         "Lactate must have at least one citation whose field_or_chunk_id "
         "is in the layout AND whose quote_or_value is a substring of that block."
     )
+
+    # Every citation whose bbox_id resolves into the layout must carry a
+    # 4-float bbox tuple and a positive page — that's what the UI overlay
+    # consumes (no separate layout map is shipped).
+    for v in result.values:
+        for c in v.citations:
+            if c.field_or_chunk_id in bbox_ids:
+                assert c.bbox is not None and len(c.bbox) == 4
+                assert all(isinstance(coord, float) for coord in c.bbox)
+                assert isinstance(c.page, int) and c.page >= 1

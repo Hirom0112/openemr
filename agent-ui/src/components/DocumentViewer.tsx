@@ -43,6 +43,12 @@ interface PageRender {
 
 function pageNumberFromCitation(c: Citation | undefined): number {
   if (!c) return 1;
+  // Prefer the explicit numeric `page` (new contract) when the backend supplies
+  // it; fall back to parsing the legacy `page_or_section` string so cached
+  // responses without `page` still resolve to the right canvas.
+  if (typeof c.page === 'number' && Number.isFinite(c.page) && c.page >= 1) {
+    return Math.floor(c.page);
+  }
   const raw = c.page_or_section;
   if (raw == null) return 1;
   const m = /\d+/.exec(String(raw));
@@ -148,9 +154,14 @@ export default function DocumentViewer(props: DocumentViewerProps): ReactElement
     return () => { cancelled = true; };
   }, [pdf, targetPage]);
 
-  // Resolve bbox for the active citation's field_or_chunk_id, scoped to the page.
+  // Resolve bbox for the active citation. Prefer the inline `bbox` the backend
+  // now ships on every Citation; only fall back to the layout-table lookup
+  // when a cached/older response omitted it.
   const activeBbox = useMemo<[number, number, number, number] | null>(() => {
     if (!activeCitation) return null;
+    if (activeCitation.bbox && activeCitation.bbox.length === 4) {
+      return activeCitation.bbox;
+    }
     const block = bboxLayout.find((b) => b.bbox_id === activeCitation.field_or_chunk_id);
     if (!block) return null;
     return block.bbox;
