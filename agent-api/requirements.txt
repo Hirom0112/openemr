@@ -24,5 +24,12 @@ python-multipart==0.0.20
 langgraph==0.2.60
 langchain-core==0.3.28
 
+# Hybrid-RAG (W2 §6 / Slices 4.1-4.4): pgvector text codec, deterministic
+# offline embedding stub (numpy), Voyage embeddings, Cohere rerank.
+cohere==5.13.2
+voyageai==0.3.2
+pgvector==0.3.6
+numpy==1.26.4
+
 # Dev / lint (no separate requirements-dev.txt exists yet)
 import-linter==2.5.2

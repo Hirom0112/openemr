@@ -1,0 +1,13 @@
+sources:
+  - id: ssc-2021
+    title: Surviving Sepsis Campaign 2021
+    indexed_version_date: 2021-10-01
+    file: ssc_2021_excerpt.pdf
+  - id: kdigo-aki-2012
+    title: KDIGO AKI 2012
+    indexed_version_date: 2012-03-01
+    file: kdigo_aki_2012_excerpt.pdf
+  - id: ada-inpatient-glycemic
+    title: ADA Inpatient Glycemic Management
+    indexed_version_date: 2024-01-01
+    file: ada_glycemic_excerpt.pdf
