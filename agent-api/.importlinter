@@ -14,6 +14,7 @@ root_packages =
     audit
     documents
     graph
+    demographics
 
 # audit is a leaf: HIPAA-style audit emission must not depend on any
 # business sibling — it is consumed by the dispatcher and HTTP layer only.
@@ -197,3 +198,24 @@ source_modules =
 forbidden_modules =
     fastapi
     starlette
+
+# demographics is a leaf: pure-function wrong-patient detection. It must
+# not reach into any business sibling — the caller (graph.nodes.critic)
+# wires it into the pipeline.
+[importlinter:contract:demographics-isolated]
+name = demographics must be a leaf
+type = forbidden
+source_modules =
+    demographics
+forbidden_modules =
+    auth
+    triage
+    query
+    briefing
+    extractors
+    documents
+    audit
+    agent
+    graph
+    checkpointer
+    observability
