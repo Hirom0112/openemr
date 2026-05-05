@@ -1,4 +1,5 @@
 import type { AgentResponse, TriageRationaleData } from './types';
+import type { Citation, SoftWarn } from './types/citation';
 import { withAuth, requestRefreshedToken, notifyAuthFailure, getAuthToken } from './auth/jwt';
 
 const cfg = () => window.__COPILOT_CONFIG__;
@@ -587,6 +588,67 @@ export async function refreshCensus(
     citations: [],
   };
   return { response, requestId: result.requestId };
+}
+
+// ── Document ingest (W2 Pillar 1 Path B — drag-and-drop in chat) ─────────────
+
+/**
+ * Response from POST /document/ingest. Mirrors the FastAPI route in
+ * agent-api/main.py::document_ingest. The ``extraction`` payload's exact
+ * shape varies by document kind (lab_report | intake_form | unknown), so it
+ * is typed as ``unknown`` here and narrowed by the renderer.
+ */
+export interface IngestResponse {
+  document_reference_id: string;
+  extraction: unknown;
+  citations: Citation[];
+  soft_warns: SoftWarn[];
+  metadata: {
+    fhir_write_path?: string;
+    cached?: boolean;
+    request_id?: string;
+    [k: string]: unknown;
+  };
+}
+
+/**
+ * Upload a single PDF or PNG to the ingest endpoint as multipart/form-data.
+ *
+ * Auth pattern mirrors the rest of api.ts — Authorization: Bearer is added
+ * from the in-memory JWT holder when present. We deliberately do NOT set
+ * Content-Type so the browser supplies the multipart boundary; setting it
+ * by hand drops the boundary and the backend rejects the upload.
+ *
+ * On non-2xx the server's text body (truncated) is bubbled into the Error
+ * message so FileDropZone can surface a one-line failure instead of a
+ * generic toast — most ingest failures are user-correctable (wrong patient,
+ * unsupported MIME, file too large) and the server says so explicitly.
+ */
+export async function ingestDocument(
+  baseUrl: string,
+  file: File,
+  patientId: string,
+  docTypeHint?: string,
+): Promise<IngestResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('patient_id', patientId);
+  if (docTypeHint) form.append('doc_type_hint', docTypeHint);
+
+  const headers: Record<string, string> = {};
+  const jwt = getAuthToken();
+  if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
+
+  const res = await fetch(`${baseUrl}/document/ingest`, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`ingest failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  return (await res.json()) as IngestResponse;
 }
 
 export async function sendQuery(sessionId: string, patientId: string, query: string) {

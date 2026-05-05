@@ -10,6 +10,8 @@ import { subscribeToast } from '../auth/jwt';
 import SoftWarnBanner from './SoftWarnBanner';
 import CitationChip from './CitationChip';
 import DocumentViewer from './DocumentViewer';
+import FileDropZone from './FileDropZone';
+import type { IngestResponse } from '../api';
 import type { Citation as W2Citation, BboxLayoutBlock, SoftWarn } from '../types/citation';
 
 /**
@@ -1068,6 +1070,82 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     }
   };
 
+  // ── Document ingest (W2 Pillar 1 Path B drag-drop) ────────────────────────
+  // patientId resolution for the ingest endpoint:
+  //   - 1 patient in context: that's our target.
+  //   - >1 (census view): fall back to the first id. The architecture allows
+  //     a future "select patient" disambiguator; for v1, the first id is the
+  //     stable behaviour the spec calls for.
+  //   - 0 patients: render the dropzone disabled (it tooltips "select first").
+  const ingestPatientId: string | null = patientIds.length > 0 ? patientIds[0] : null;
+  const ingestBaseUrl: string = (window.__COPILOT_CONFIG__?.agentApiUrl as string | undefined) ?? '';
+
+  const handleIngestExtraction = useCallback((resp: IngestResponse, file: File): void => {
+    // Compose an AgentResponse of type 'text' whose narrative summarises the
+    // extraction. The W2 metadata.extraction field carries citations + soft
+    // warns + (optional) ocr_layout / pdf_url so the existing CitationChip /
+    // DocumentViewer machinery in this surface lights up automatically.
+    const ext = resp.extraction as {
+      kind?: string;
+      classifier_confidence?: number;
+      values?: unknown[];
+      key_facts?: unknown[];
+      ocr_layout?: BboxLayoutBlock[];
+      pdf_url?: string;
+    } | null;
+    const kind = (ext && typeof ext.kind === 'string') ? ext.kind : 'unknown';
+    let valueCount = 0;
+    if (ext) {
+      if (Array.isArray(ext.values)) valueCount = ext.values.length;
+      else if (Array.isArray(ext.key_facts)) valueCount = ext.key_facts.length;
+    }
+    const conf = ext && typeof ext.classifier_confidence === 'number'
+      ? ` (classifier confidence ${(ext.classifier_confidence * 100).toFixed(0)}%)`
+      : '';
+    const fhirPath = typeof resp.metadata?.fhir_write_path === 'string'
+      ? resp.metadata.fhir_write_path
+      : '';
+    const narrativeLines: string[] = [
+      `**Document ingested:** ${file.name}`,
+      `Kind: \`${kind}\`${conf}. Extracted ${valueCount} field${valueCount === 1 ? '' : 's'}.`,
+    ];
+    if (fhirPath) {
+      narrativeLines.push(`Written to FHIR: \`${fhirPath}\`.`);
+    }
+
+    const response: AgentResponse = {
+      type: 'text',
+      data: { extraction: resp.extraction, document_reference_id: resp.document_reference_id },
+      narrative: narrativeLines.join('\n\n'),
+      citations: [],
+      metadata: {
+        ...(resp.metadata as Record<string, unknown>),
+        // Keyed under `extraction` so readExtraction() in this file picks it up.
+        extraction: {
+          citations: resp.citations,
+          soft_warns: resp.soft_warns,
+          ocr_layout: ext?.ocr_layout,
+          pdf_url: ext?.pdf_url,
+        },
+      },
+    };
+
+    forceScrollOnNextMessage.current = true;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `user-${Date.now()}`,
+        role: 'user',
+        content: `Ingest document: ${file.name}`,
+      },
+      {
+        id: `assistant-${Date.now() + 1}`,
+        role: 'assistant',
+        response,
+      },
+    ]);
+  }, []);
+
   return (
     <>
       {/* Keyframe animation injected once */}
@@ -1311,6 +1389,18 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           <div ref={bottomRef} />
         </div>
 
+        {/* W2 drag-drop ingest entry point — sits above the input row so the
+            pill is the closest call-to-action when Sara wants to add a PDF
+            mid-conversation. The full-surface drop overlay is rendered by
+            FileDropZone itself when the user drags anything file-shaped. */}
+        <div style={styles.dropRow}>
+          <FileDropZone
+            baseUrl={ingestBaseUrl}
+            patientId={ingestPatientId}
+            onExtraction={handleIngestExtraction}
+          />
+        </div>
+
         {/* Input row */}
         <div style={styles.inputRow}>
           <label htmlFor="copilot-chat-input" style={styles.visuallyHidden}>
@@ -1399,6 +1489,13 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     lineHeight: 1.55,
     minWidth: 0,
+  },
+  dropRow: {
+    display: 'flex',
+    alignItems: 'center',
+    padding: '6px 14px 0',
+    flex: '0 0 auto',
+    background: SURFACE.bg,
   },
   inputRow: {
     display: 'flex',
