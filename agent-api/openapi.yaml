@@ -14,6 +14,32 @@ paths:
           content:
             application/json:
               schema: {}
+  /audit/destruction-record:
+    post:
+      summary: Post Destruction Record
+      description: "Record (don't perform) a compliance-driven PHI destruction.\n\n\
+        Auth required (enforced upstream by ``jwt_middleware``).  ``requested_by``\n\
+        is taken from the verified JWT's ``sub`` \u2014 the body cannot override it."
+      operationId: post_destruction_record_audit_destruction_record_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DestructionRecordRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DestructionRecordResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /health:
     get:
       summary: Health
@@ -110,6 +136,14 @@ paths:
         schema:
           type: string
           title: Patient Id
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/BriefingRequest'
+              - type: 'null'
+              title: Body
       responses:
         '200':
           description: Successful Response
@@ -158,6 +192,23 @@ paths:
   /medication/safety/{patient_id}:
     get:
       summary: Medication Safety
+      description: 'Button-driven medication safety surface.
+
+
+        Optional ?session_id= query param: when provided, the result is persisted
+
+        as a synthetic conversation turn so subsequent dispatcher calls see this
+
+        in their loaded history (allows pronoun resolution after a button click).
+
+
+        Optional ?force_refresh=true query param: when true, bypasses the bundle
+
+        cache so the safety report reflects current FHIR state and the response
+
+        carries a fresh ``generated_at`` timestamp. Wired to the in-UI Refresh
+
+        button on the medication-safety bubble (mirrors the briefing endpoint).'
       operationId: medication_safety_medication_safety__patient_id__get
       parameters:
       - name: patient_id
@@ -166,6 +217,21 @@ paths:
         schema:
           type: string
           title: Patient Id
+      - name: session_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Id
+      - name: force_refresh
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Force Refresh
       responses:
         '200':
           description: Successful Response
@@ -200,6 +266,28 @@ paths:
                 additionalProperties: true
                 type: object
                 title: Response Handoff Generate Handoff Generate Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /handoff/generate/stream:
+    post:
+      summary: Handoff Generate Stream
+      operationId: handoff_generate_stream_handoff_generate_stream_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HandoffRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
         '422':
           description: Validation Error
           content:
@@ -242,8 +330,19 @@ paths:
   /agent/query:
     post:
       summary: Agent Query
-      description: "Dispatcher \u2014 routes all physician queries through the tool_use\
-        \ loop."
+      description: "Route physician queries through the LangGraph supervisor pipeline.\n\
+        \nTopology: supervisor -> structured (which wraps the legacy dispatcher)\n\
+        -> critic -> finalize. The graph's structured_node calls\n``agent.dispatcher.dispatch``\
+        \ internally, so the response contract\n(``{narrative, data, citations, ...}``)\
+        \ is preserved \u2014 we surface\n``final[\"finalized\"][\"structured_response\"\
+        ]`` as the response body.\n\nPayload mapping:\n  * ``message``, ``session_id``,\
+        \ ``provider_id`` map 1:1 to graph state.\n  * ``patient_ids[0]`` becomes\
+        \ ``state[\"patient_id\"]`` (graph state holds\n    a single patient; the\
+        \ structured_node rebuilds session_context from\n    graph state).\n  * ``provider_name``\
+        \ and ``census_context`` are NOT plumbed through the\n    graph today \u2014\
+        \ these were prompt-enrichment hints for the dispatcher\n    and degrade gracefully\
+        \ when absent. If they prove load-bearing,\n    extend ``W2State`` and ``_build_session_context``\
+        \ in a follow-up."
       operationId: agent_query_agent_query_post
       requestBody:
         content:
@@ -260,6 +359,37 @@ paths:
                 additionalProperties: true
                 type: object
                 title: Response Agent Query Agent Query Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /agent/prefetch/status:
+    get:
+      summary: Agent Prefetch Status
+      description: "Return per-patient warm status for the UI's \u26A1/\u23F3 pills.\n\
+        \nBest-effort read from the Redis hash populated by ``_warm_one``.\nEmpty\
+        \ result (no key, or Redis unavailable) means \"no warm in\nprogress for this\
+        \ session\" \u2014 the UI treats every patient as\n\"warmed\" in that case\
+        \ so it doesn't get stuck showing pending\npills forever."
+      operationId: agent_prefetch_status_agent_prefetch_status_get
+      parameters:
+      - name: session_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Agent Prefetch Status Agent Prefetch Status Get
         '422':
           description: Validation Error
           content:
@@ -376,6 +506,86 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /document/ingest:
+    post:
+      summary: Document Ingest
+      description: "Path B: inline upload of a clinical PDF (W2 \xA74.2 / \xA74.5\
+        \ / \xA74.7).\n\nPipeline: size/page guard \u2192 FHIR write \u2192 idempotent\
+        \ claim \u2192 extract \u2192\npersist \u2192 audit. Soft-warns are returned\
+        \ inline (Slice 1.7)."
+      operationId: document_ingest_document_ingest_post
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_document_ingest_document_ingest_post'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Document Ingest Document Ingest Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /evidence/search:
+    post:
+      summary: Evidence Search
+      operationId: evidence_search_evidence_search_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvidenceSearchRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Evidence Search Evidence Search Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /agent/w2/dispatch:
+    post:
+      summary: Agent W2 Dispatch
+      description: "W2 LangGraph dispatch endpoint.\n\nAccepts a multipart upload\
+        \ with any of:\n  * ``file`` \u2014 PDF for the document path.\n  * ``message``\
+        \ \u2014 free-text query for the structured / retriever path.\n  * ``patient_id``\
+        \ \u2014 required for demographics check on the document path.\n\nReturns\
+        \ ``text/event-stream``. Currently emits a single ``event: done``\nframe carrying\
+        \ the ``finalized`` envelope; per-node progress frames are\na future enhancement."
+      operationId: agent_w2_dispatch_agent_w2_dispatch_post
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_agent_w2_dispatch_agent_w2_dispatch_post'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     AgentQueryRequest:
@@ -410,6 +620,72 @@ components:
       - session_id
       - provider_id
       title: AgentQueryRequest
+    Body_agent_w2_dispatch_agent_w2_dispatch_post:
+      properties:
+        file:
+          anyOf:
+          - type: string
+            format: binary
+          - type: 'null'
+          title: File
+        patient_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Patient Id
+        message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Message
+        session_id:
+          type: string
+          title: Session Id
+        provider_id:
+          type: string
+          title: Provider Id
+        doc_type_hint:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Doc Type Hint
+      type: object
+      required:
+      - session_id
+      - provider_id
+      title: Body_agent_w2_dispatch_agent_w2_dispatch_post
+    Body_document_ingest_document_ingest_post:
+      properties:
+        file:
+          type: string
+          format: binary
+          title: File
+        patient_id:
+          type: string
+          title: Patient Id
+        doc_type_hint:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Doc Type Hint
+      type: object
+      required:
+      - file
+      - patient_id
+      title: Body_document_ingest_document_ingest_post
+    BriefingRequest:
+      properties:
+        force_refresh:
+          type: boolean
+          title: Force Refresh
+          default: false
+        session_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Id
+      type: object
+      title: BriefingRequest
     BriefingResponse:
       properties:
         patient_id:
@@ -418,6 +694,10 @@ components:
         name:
           type: string
           title: Name
+        openemr_pid:
+          type: string
+          title: Openemr Pid
+          default: ''
         sections:
           items:
             $ref: '#/components/schemas/BriefingSection'
@@ -428,8 +708,14 @@ components:
             type: string
           type: array
           title: Alerts
-          description: 'Hard alerts that must always be shown: critical labs, blank
-            code status, stale values.'
+          description: 'Hard alerts that must always be shown: critical labs, stale
+            values.'
+        summary:
+          type: string
+          title: Summary
+          description: 2-3 sentence executive synthesis of the patient's most important
+            issues. Plain English. Not source-attributed.
+          default: ''
         generated_at:
           type: string
           title: Generated At
@@ -475,6 +761,15 @@ components:
           - type: string
           - type: 'null'
           title: Session Id
+        provider_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider Id
+        force_refresh:
+          type: boolean
+          title: Force Refresh
+          default: false
       type: object
       required:
       - patient_ids
@@ -543,6 +838,65 @@ components:
       - source_value
       - source_dt
       title: ClinicalClaim
+    DestructionRecordRequest:
+      properties:
+        target_session:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target Session
+        target_patient:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target Patient
+        target_window_start:
+          anyOf:
+          - {}
+          - type: 'null'
+          title: Target Window Start
+        target_window_end:
+          anyOf:
+          - {}
+          - type: 'null'
+          title: Target Window End
+        rows_affected:
+          type: integer
+          title: Rows Affected
+          default: 0
+        reason:
+          type: string
+          title: Reason
+      type: object
+      required:
+      - reason
+      title: DestructionRecordRequest
+    DestructionRecordResponse:
+      properties:
+        destruction_id:
+          type: integer
+          title: Destruction Id
+        ts:
+          type: string
+          title: Ts
+      type: object
+      required:
+      - destruction_id
+      - ts
+      title: DestructionRecordResponse
+    EvidenceSearchRequest:
+      properties:
+        query:
+          type: string
+          title: Query
+        k:
+          type: integer
+          title: K
+          default: 5
+      type: object
+      required:
+      - query
+      title: EvidenceSearchRequest
     HTTPValidationError:
       properties:
         detail:
@@ -559,6 +913,11 @@ components:
             type: string
           type: array
           title: Patient Ids
+        shift_end_time:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Shift End Time
       type: object
       required:
       - patient_ids
@@ -590,6 +949,10 @@ components:
           type: array
           title: Patient Ids
           default: []
+        force_refresh:
+          type: boolean
+          title: Force Refresh
+          default: false
       type: object
       required:
       - session_id
