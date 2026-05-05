@@ -423,3 +423,239 @@ async def test_document_ingest_still_routes_lab_to_lab_extractor(
     assert body["extraction"]["kind"] == "lab_report"
     assert mocks["extract"].await_count == 1
     assert mocks["extract_intake"].await_count == 0
+
+
+# --------------------------------------------------------------------------- #
+# Wave 2B — spatial repointer + structural anchor detection.
+#
+# These tests are pure-Python (no PDF, no Anthropic). They construct synthetic
+# LayoutBlocks and exercise the repointer / anchor-detection helpers directly.
+# --------------------------------------------------------------------------- #
+
+
+def _block(
+    bbox_id: str,
+    page: int,
+    bbox: tuple[float, float, float, float],
+    text: str,
+    granularity: str | None = None,
+) -> "object":
+    """Construct a LayoutBlock-like object. Uses the real LayoutBlock dataclass
+    when no granularity is requested; falls back to a SimpleNamespace when
+    `granularity` is given so tests work whether or not Wave 2A's field has
+    landed on the dataclass yet."""
+    from documents.ocr import LayoutBlock as _LayoutBlock
+
+    if granularity is None:
+        return _LayoutBlock(
+            bbox_id=bbox_id,
+            page=page,
+            bbox=bbox,
+            text=text,
+            ocr_confidence=1.0,
+        )
+    return SimpleNamespace(
+        bbox_id=bbox_id,
+        page=page,
+        bbox=bbox,
+        text=text,
+        ocr_confidence=1.0,
+        granularity=granularity,
+    )
+
+
+def _make_citation(field_or_chunk_id: str = "p1-bXXX") -> Citation:
+    return Citation(
+        source_type="document",
+        source_id="doc-x",
+        page_or_section="1",
+        field_or_chunk_id=field_or_chunk_id,
+        quote_or_value="placeholder",
+    )
+
+
+def test_repointer_zero_candidates_returns_none() -> None:
+    from extractors.intake import _find_block_for_value
+
+    blocks = [
+        _block("p1-b001", 1, (0.0, 0.0, 100.0, 12.0), "DEMOGRAPHICS"),
+        _block("p1-b002", 1, (0.0, 20.0, 100.0, 12.0), "Address: 123 Main St"),
+    ]
+    # No block contains "06/08/1971".
+    assert _find_block_for_value("06/08/1971", blocks) is None
+
+
+def test_repointer_one_candidate_returns_it() -> None:
+    from extractors.intake import _find_block_for_value
+
+    blocks = [
+        _block("p1-b001", 1, (0.0, 0.0, 100.0, 12.0), "DEMOGRAPHICS"),
+        _block("p1-b002", 1, (0.0, 20.0, 100.0, 12.0), "DOB 06/08/1971"),
+    ]
+    chosen = _find_block_for_value("06/08/1971", blocks)
+    assert chosen is not None
+    assert chosen.bbox_id == "p1-b002"
+
+
+def test_repointer_two_candidates_same_y_band_prefers_line_granularity() -> None:
+    """When two candidates have the same overlap and similar y-distance to
+    anchors, LINE granularity wins over WORD granularity."""
+    from extractors.intake import _find_block_for_value
+
+    blocks = [
+        # Tall, all-caps, short, colon-terminated → anchor.
+        _block("p1-b000", 1, (0.0, 0.0, 200.0, 30.0), "DEMOGRAPHICS:"),
+        # Two candidates at the same y-band, same overlap. WORD-granularity
+        # one comes first in iteration order; LINE-granularity should win.
+        _block(
+            "p1-b001",
+            1,
+            (0.0, 50.0, 80.0, 12.0),
+            "06/08/1971",
+            granularity="WORD",
+        ),
+        _block(
+            "p1-b002",
+            1,
+            (90.0, 50.0, 200.0, 12.0),
+            "06/08/1971",
+            granularity="LINE",
+        ),
+    ]
+    chosen = _find_block_for_value("06/08/1971", blocks, field_name="dob")
+    assert chosen is not None
+    assert chosen.bbox_id == "p1-b002", "expected LINE-granularity candidate to win"
+
+
+def test_repointer_two_candidates_different_y_bands_prefers_field_compatible_anchor() -> None:
+    """For `dob`, a candidate near a "DEMOGRAPHICS" anchor must beat one
+    near "SIGNATURE", even though both contain the value text."""
+    from extractors.intake import _find_block_for_value
+
+    blocks = [
+        # Anchor 1: DEMOGRAPHICS (top of page).
+        _block("p1-b000", 1, (0.0, 0.0, 200.0, 30.0), "DEMOGRAPHICS:"),
+        # DOB near DEMOGRAPHICS.
+        _block("p1-b001", 1, (0.0, 50.0, 200.0, 12.0), "DOB: 06/08/1971"),
+        # Anchor 2: SIGNATURE (bottom of page).
+        _block("p1-b900", 1, (0.0, 800.0, 200.0, 30.0), "SIGNATURE:"),
+        # Stray match near SIGNATURE (e.g. typed-in date on signature line).
+        _block("p1-b901", 1, (0.0, 850.0, 200.0, 12.0), "Signed 06/08/1971"),
+    ]
+    chosen = _find_block_for_value("06/08/1971", blocks, field_name="dob")
+    assert chosen is not None
+    assert chosen.bbox_id == "p1-b001"
+
+
+def test_repointer_two_candidates_no_anchors_falls_back_to_overlap() -> None:
+    """When no structural anchors are detectable (e.g. all blocks are body
+    paragraphs), the selector falls back to longest-overlap behavior."""
+    from extractors.intake import _detect_section_anchors, _find_block_for_value
+
+    blocks = [
+        # All blocks are paragraph-style: lowercase, long, no colon. No
+        # block satisfies ≥2 anchor signals.
+        _block(
+            "p1-b001",
+            1,
+            (0.0, 0.0, 400.0, 12.0),
+            "the patient reports a date of birth of 06/08/1971 on intake.",
+        ),
+        _block(
+            "p1-b002",
+            1,
+            (0.0, 30.0, 400.0, 12.0),
+            "previous correspondence references date 06/08/1971 incidentally.",
+        ),
+    ]
+    assert _detect_section_anchors(blocks) == []
+    # Both blocks contain the value substring; tie on overlap. The fallback
+    # path is deterministic — first candidate (b001) wins.
+    chosen = _find_block_for_value("06/08/1971", blocks, field_name="dob")
+    assert chosen is not None
+    assert chosen.bbox_id == "p1-b001"
+
+
+def test_anchor_detection_recognizes_caps_with_colon() -> None:
+    from extractors.intake import _detect_section_anchors
+
+    blocks = [
+        _block("p1-b001", 1, (0.0, 0.0, 200.0, 12.0), "DEMOGRAPHICS:"),
+        _block(
+            "p1-b002",
+            1,
+            (0.0, 20.0, 400.0, 12.0),
+            "the patient is a 54 year old male presenting with acute chest pain.",
+        ),
+    ]
+    anchors = _detect_section_anchors(blocks)
+    assert any(a.bbox_id == "p1-b001" for a in anchors)
+
+
+def test_anchor_detection_rejects_paragraph_text() -> None:
+    """A long lowercase sentence must not be classified as a section anchor."""
+    from extractors.intake import _detect_section_anchors
+
+    blocks = [
+        _block(
+            "p1-b001",
+            1,
+            (0.0, 0.0, 400.0, 12.0),
+            "the patient reports occasional headaches over the past month.",
+        ),
+    ]
+    assert _detect_section_anchors(blocks) == []
+
+
+def test_repoint_citation_emits_log_and_metric() -> None:
+    """End-to-end check: _repoint_citation increments the Prometheus counter
+    and produces a log line with the new extras fields populated."""
+    import logging as _logging
+
+    from extractors.intake import _index_blocks, _repoint_citation
+    from agent.metrics import agent_citation_repoint_total
+
+    blocks = [
+        _block("p1-b000", 1, (0.0, 0.0, 200.0, 30.0), "DEMOGRAPHICS:"),
+        _block("p1-b001", 1, (0.0, 50.0, 200.0, 12.0), "DOB: 06/08/1971"),
+    ]
+    block_index = _index_blocks(blocks)
+    cit = _make_citation(field_or_chunk_id="p1-b000")  # LLM parked on header.
+
+    before = agent_citation_repoint_total.labels(
+        field="dob", outcome="repointed_no_anchor"
+    )._value.get()  # type: ignore[attr-defined]
+
+    captured: list[_logging.LogRecord] = []
+
+    class _Cap(_logging.Handler):
+        def emit(self, record: _logging.LogRecord) -> None:
+            captured.append(record)
+
+    h = _Cap(level=_logging.INFO)
+    target_logger = _logging.getLogger("extractors.intake")
+    target_logger.addHandler(h)
+    try:
+        out = _repoint_citation(
+            cit,
+            "06/08/1971",
+            blocks,
+            block_index,
+            field_name="dob",
+        )
+    finally:
+        target_logger.removeHandler(h)
+
+    assert out.field_or_chunk_id == "p1-b001"
+    assert any(r.getMessage() == "extractor_citation_repointed" for r in captured)
+    repointed = next(
+        r for r in captured if r.getMessage() == "extractor_citation_repointed"
+    )
+    assert getattr(repointed, "field_name", None) == "dob"
+    assert getattr(repointed, "chosen_bbox_id", None) == "p1-b001"
+    assert getattr(repointed, "candidate_count", None) == 1
+    # One candidate path uses repointed_no_anchor outcome.
+    after_no_anchor = agent_citation_repoint_total.labels(
+        field="dob", outcome="repointed_no_anchor"
+    )._value.get()  # type: ignore[attr-defined]
+    assert after_no_anchor == before + 1

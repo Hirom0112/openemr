@@ -190,3 +190,21 @@ agent_watchdog_last_run_timestamp_seconds = Gauge(
     "agent_watchdog_last_run_timestamp_seconds",
     "Wall-clock timestamp of the last APScheduler watchdog scan (Phase 8 will populate)",
 )
+
+# ── Citation repointer (Wave 2B) ─────────────────────────────────────────────
+# Increments at every _repoint_citation decision, labelled by the field whose
+# citation was being repointed and the outcome of the spatial selection. The
+# ``outcome`` label values:
+#   kept                   → cited bbox already contains the value text
+#   repointed_with_anchor  → multiple candidates resolved by section-anchor
+#                            spatial preference (with or without field hint)
+#   repointed_no_anchor    → repointed via the legacy single-best-overlap
+#                            path (no structural anchors detected, or only
+#                            one candidate found)
+#   no_match               → no candidate cleared the overlap floor; the
+#                            original LLM citation was preserved
+agent_citation_repoint_total = Counter(
+    "agent_citation_repoint_total",
+    "Citation repointer decisions in the intake extractor",
+    ["field", "outcome"],
+)

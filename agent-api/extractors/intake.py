@@ -20,13 +20,15 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 import anthropic
 import pymupdf
 
+from agent.metrics import agent_citation_repoint_total
 from documents.ocr import LayoutBlock, extract_layout
 from extractors.classifier import classify_keywords
 from extractors.lab import ExtractionFailed  # re-export single failure class
@@ -63,6 +65,15 @@ HARD RULES (the agent will reject your output otherwise):
     field_or_chunk_id = the bbox_id from the OCR layout (e.g. "p2-b005")
     quote_or_value   = the exact substring from THAT bbox's text that
                        contains the value. Do NOT rephrase.
+- The cited bbox MUST contain the field's actual VALUE text — never a
+  section header, column name, or row label. Concretely: if the value
+  is "06/08/1971", the cited bbox's text must contain "06/08/1971"
+  (or a substring of it). NEVER cite a bbox whose text is just
+  "DEMOGRAPHICS", "DOB", "Address", "Chief Concern", "Medications",
+  "Allergies", or any other heading.
+- Each demographic / medication / allergy / family-history item MUST
+  cite a different bbox_id where its specific value appears. Do NOT
+  reuse one section-header bbox across multiple fields.
 - Each TextField / MedicationItem / AllergyItem / FamilyHistoryItem /
   CodeStatus must have at least one citation.
 - code_status.value must be one of:
@@ -168,9 +179,460 @@ def _index_blocks(blocks: List[LayoutBlock]) -> dict[str, LayoutBlock]:
     return {b.bbox_id: b for b in blocks}
 
 
+_NORMALIZE_RE = re.compile(r"\W+")
+
+
+def _normalize_for_match(s: str) -> str:
+    """Strip non-word chars and uppercase. Lets us treat '06/08/1971' and
+    '06081971' as the same token."""
+    return _NORMALIZE_RE.sub("", s or "").upper()
+
+
+def _value_in_block(value: str, block_text: str) -> bool:
+    nv = _normalize_for_match(value)
+    nb = _normalize_for_match(block_text)
+    if not nv or not nb:
+        return False
+    return nv in nb or nb in nv
+
+
+def _block_centroid_y(b: LayoutBlock) -> float:
+    """Vertical centroid of a layout block (PDF-points)."""
+    _x, y, _w, h = b.bbox
+    return float(y) + float(h) / 2.0
+
+
+def _block_height(b: LayoutBlock) -> float:
+    return float(b.bbox[3])
+
+
+def _block_granularity(b: LayoutBlock) -> Optional[str]:
+    """Read Wave-2A's ``granularity`` field if present; otherwise None.
+
+    Wave 2A adds a ``granularity`` attribute on LayoutBlock; the value may
+    be a ``BlockGranularity`` enum (``WORD`` / ``LINE``) or — in test code
+    that constructs simple namespaces — a plain string. We normalize to
+    the enum's string value (lowercased) so callers can compare cheaply.
+    Returns None when the field is absent (Wave 2A not yet landed)."""
+    val = getattr(b, "granularity", None)
+    if val is None:
+        return None
+    # str subclass / plain string → use as-is.
+    inner = getattr(val, "value", val)
+    return str(inner)
+
+
+def _is_line_granularity(b: LayoutBlock) -> bool:
+    """True iff the block is line-granularity. Tolerant of casing and of
+    both enum / string representations from Wave 2A."""
+    g = _block_granularity(b)
+    return g is not None and g.upper() == "LINE"
+
+
+def _is_anchor_eligible(b: LayoutBlock, *, page_median_height: float) -> bool:
+    """Decide whether a layout block looks structurally like a section header.
+
+    Signals (a block must satisfy ≥2 of these to qualify):
+
+    - All-caps text: of the alphabetic characters in the block, at least 80%
+      are uppercase, and there are at least 3 alphabetic characters total.
+      (Numeric-only blocks fail this signal.)
+    - Trailing colon: the trimmed text ends with ``:`` (e.g. "DEMOGRAPHICS:",
+      "Chief Concern:").
+    - Tall: the block's height exceeds ``1.4 × page_median_height`` — section
+      headers tend to render taller than body text on the same page.
+    - Short standalone line: the block contains 1-3 whitespace-delimited
+      tokens. Long sentences are not headers.
+
+    Ratio + threshold are intentionally fuzzy and deterministic; no
+    hand-curated keyword list. See `_detect_section_anchors` for callers."""
+    text = (b.text or "").strip()
+    if not text:
+        return False
+
+    signals = 0
+
+    # Signal 1: all-caps (alphabetic letters only).
+    letters = [c for c in text if c.isalpha()]
+    if len(letters) >= 3:
+        upper = sum(1 for c in letters if c.isupper())
+        if upper / len(letters) >= 0.8:
+            signals += 1
+
+    # Signal 2: trailing colon.
+    if text.endswith(":"):
+        signals += 1
+
+    # Signal 3: significantly taller than the page-median block.
+    if page_median_height > 0.0 and _block_height(b) > 1.4 * page_median_height:
+        signals += 1
+
+    # Signal 4: short standalone line (1-3 whitespace tokens).
+    tokens = text.split()
+    if 1 <= len(tokens) <= 3:
+        signals += 1
+
+    return signals >= 2
+
+
+def _detect_section_anchors(blocks: List[LayoutBlock]) -> List[LayoutBlock]:
+    """Return the subset of `blocks` that look structurally like section
+    headers. See `_is_anchor_eligible` for the rule set."""
+    if not blocks:
+        return []
+
+    # Compute a per-page median block height so the "tall" signal is
+    # page-relative. A single global median would misclassify on
+    # multi-page docs with different layouts per page.
+    by_page: dict[int, List[float]] = {}
+    for b in blocks:
+        by_page.setdefault(b.page, []).append(_block_height(b))
+
+    page_median: dict[int, float] = {}
+    for page, heights in by_page.items():
+        sh = sorted(heights)
+        n = len(sh)
+        if n == 0:
+            page_median[page] = 0.0
+        elif n % 2 == 1:
+            page_median[page] = sh[n // 2]
+        else:
+            page_median[page] = (sh[n // 2 - 1] + sh[n // 2]) / 2.0
+
+    anchors: List[LayoutBlock] = []
+    for b in blocks:
+        if _is_anchor_eligible(b, page_median_height=page_median.get(b.page, 0.0)):
+            anchors.append(b)
+    return anchors
+
+
+# Field-name → tuple of substrings (matched case-insensitively against
+# anchor text) that indicate the anchor is likely the section header for
+# that field. Entries are intentionally minimal — extending this map is
+# how we add new spatial hints without touching the selection algorithm.
+#
+# Rationale per entry:
+#   name           → demographics blocks (patient identifier section)
+#   dob            → demographics blocks (date of birth lives there)
+#   sex            → demographics blocks
+#   mrn            → demographics blocks
+#   address        → demographics blocks
+#   chief_concern  → "chief concern" / "complaint" / "reason for visit"
+#   medication     → "medication" header (covers MEDICATIONS, CURRENT MEDS)
+#   allergy        → "allerg" stem covers ALLERGIES / ALLERGY / NKDA section
+#   family         → "family" header (FAMILY HISTORY)
+_FIELD_ANCHOR_HINTS: dict[str, tuple[str, ...]] = {
+    "name": ("DEMOGRAPHIC", "PATIENT"),
+    "dob": ("DEMOGRAPHIC", "PATIENT"),
+    "sex": ("DEMOGRAPHIC", "PATIENT"),
+    "mrn": ("DEMOGRAPHIC", "PATIENT"),
+    "address": ("DEMOGRAPHIC", "PATIENT", "ADDRESS"),
+    "chief_concern": ("CHIEF", "COMPLAINT", "REASON"),
+    "medication": ("MEDICATION", "MEDS", "RX"),
+    "allergy": ("ALLERG", "NKDA"),
+    "family": ("FAMILY",),
+}
+
+
+def _candidate_blocks_for_value(
+    value: str, blocks: List[LayoutBlock]
+) -> List[Tuple[LayoutBlock, int]]:
+    """Return all blocks whose normalized text overlaps `value` above the
+    minimum-length floor, paired with the overlap length. The floor is
+    identical to the legacy `_find_block_for_value` floor: at least 4
+    normalized chars OR half the value length, whichever is smaller."""
+    nv = _normalize_for_match(value)
+    if not nv:
+        return []
+    min_overlap = min(4, max(1, len(nv) // 2))
+    out: List[Tuple[LayoutBlock, int]] = []
+    for b in blocks:
+        nb = _normalize_for_match(b.text)
+        if not nb:
+            continue
+        if nv in nb:
+            overlap = len(nv)
+        elif nb in nv:
+            overlap = len(nb)
+        else:
+            continue
+        if overlap < min_overlap:
+            continue
+        out.append((b, overlap))
+    return out
+
+
+def _anchor_text_compatible(
+    anchor: LayoutBlock, field_name: Optional[str]
+) -> bool:
+    """True iff `anchor.text` contains any hint substring registered for
+    `field_name`. Returns False when the field has no registered hints —
+    callers fall back to "closest anchor of any kind" in that case."""
+    if not field_name:
+        return False
+    hints = _FIELD_ANCHOR_HINTS.get(field_name)
+    if not hints:
+        return False
+    upper_text = (anchor.text or "").upper()
+    return any(h.upper() in upper_text for h in hints)
+
+
+def _nearest_anchor(
+    candidate: LayoutBlock, anchors: List[LayoutBlock]
+) -> Tuple[Optional[LayoutBlock], float]:
+    """Return (nearest-anchor, |Δy|) on the same page. If no anchor exists
+    on the candidate's page, fall back to anchors on any page (cross-page
+    distance still uses centroid Δy, which is a coarse but deterministic
+    tiebreaker)."""
+    if not anchors:
+        return (None, float("inf"))
+    cy = _block_centroid_y(candidate)
+    same_page = [a for a in anchors if a.page == candidate.page]
+    pool = same_page or anchors
+    best: Optional[LayoutBlock] = None
+    best_dy = float("inf")
+    for a in pool:
+        dy = abs(_block_centroid_y(a) - cy)
+        if dy < best_dy:
+            best_dy = dy
+            best = a
+    return (best, best_dy)
+
+
+def _select_best_candidate(
+    candidates: List[Tuple[LayoutBlock, int]],
+    anchors: List[LayoutBlock],
+    field_name: Optional[str],
+) -> Tuple[LayoutBlock, Optional[LayoutBlock], float, str]:
+    """Pick the best candidate block among ≥2 candidates.
+
+    Returns (chosen_block, nearest_anchor, y_distance, outcome_label).
+    Outcome label is one of ``repointed_with_anchor`` (anchor-driven
+    selection succeeded) or ``repointed_no_anchor`` (anchor pool empty
+    or fell back to overlap/granularity tiebreaks)."""
+    # Compute (candidate, overlap, anchor, dy, anchor_compatible) tuples.
+    enriched: List[
+        Tuple[LayoutBlock, int, Optional[LayoutBlock], float, bool]
+    ] = []
+    for cand, overlap in candidates:
+        anchor, dy = _nearest_anchor(cand, anchors)
+        compat = anchor is not None and _anchor_text_compatible(anchor, field_name)
+        enriched.append((cand, overlap, anchor, dy, compat))
+
+    # Step 1: prefer field-compatible anchored candidates if any exist.
+    compat_set = [e for e in enriched if e[4]]
+    if compat_set:
+        # Smallest |Δy| wins; tie-break by overlap (desc) then LINE granularity.
+        compat_set.sort(
+            key=lambda e: (
+                e[3],
+                -e[1],
+                0 if _is_line_granularity(e[0]) else 1,
+            )
+        )
+        chosen, _ov, anchor, dy, _c = compat_set[0]
+        return (chosen, anchor, dy, "repointed_with_anchor")
+
+    # Step 2: if any anchor exists at all, prefer the candidate whose
+    # nearest anchor is closest, regardless of text content.
+    if anchors:
+        enriched_sorted = sorted(
+            enriched,
+            key=lambda e: (
+                e[3],
+                -e[1],
+                0 if _is_line_granularity(e[0]) else 1,
+            ),
+        )
+        chosen, _ov, anchor, dy, _c = enriched_sorted[0]
+        return (chosen, anchor, dy, "repointed_with_anchor")
+
+    # Step 3: no anchors detected — fall back to legacy overlap-then-LINE
+    # tiebreak. This preserves pre-2B behavior on documents that have no
+    # structural section headers (e.g. plain free-text scans).
+    legacy_sorted = sorted(
+        enriched,
+        key=lambda e: (
+            -e[1],
+            0 if _is_line_granularity(e[0]) else 1,
+        ),
+    )
+    chosen, _ov, _a, _dy, _c = legacy_sorted[0]
+    return (chosen, None, float("inf"), "repointed_no_anchor")
+
+
+def _find_block_for_value(
+    value: str,
+    blocks: List[LayoutBlock],
+    *,
+    anchors: Optional[List[LayoutBlock]] = None,
+    field_name: Optional[str] = None,
+) -> Optional[LayoutBlock]:
+    """Search the layout for the block whose text best matches `value`.
+
+    Behavior:
+
+    - 0 candidates above the overlap floor → return None.
+    - 1 candidate → return it (legacy single-block path).
+    - ≥2 candidates → spatial selection: prefer candidates whose nearest
+      section anchor is field-compatible (per `_FIELD_ANCHOR_HINTS`),
+      then by smallest |Δy| to any anchor, then by overlap length, then
+      by LINE granularity over WORD granularity.
+
+    Floor: overlap must be at least 4 normalized chars OR cover at least
+    half of `value`, whichever is smaller. Without this, two-letter
+    coincidences (e.g. 'IL' inside 'LISINOPRIL' matching the IL state
+    abbreviation in the address) win, and the citation lands on an
+    unrelated bbox far from the value's actual position."""
+    cands = _candidate_blocks_for_value(value, blocks)
+    if not cands:
+        return None
+    if len(cands) == 1:
+        return cands[0][0]
+    anchor_pool = anchors if anchors is not None else _detect_section_anchors(blocks)
+    chosen, _anchor, _dy, _outcome = _select_best_candidate(
+        cands, anchor_pool, field_name
+    )
+    return chosen
+
+
+def _repoint_citation(
+    cit: Citation,
+    value: Optional[str],
+    blocks: List[LayoutBlock],
+    block_index: dict[str, LayoutBlock],
+    *,
+    anchors: Optional[List[LayoutBlock]] = None,
+    field_name: Optional[str] = None,
+) -> Citation:
+    """If the cited bbox doesn't contain the field's actual value, search
+    the layout for one that does and re-point the citation. The LLM
+    sometimes parks every demographic field on the section-header block
+    ('DEMOGRAPHICS', 'CHIEF CONCERN', ...) — this corrects that without
+    discarding the citation.
+
+    Wave 2B: when ≥2 layout blocks contain the value text, prefer the
+    one whose nearest structural section anchor is compatible with
+    `field_name` (e.g. for `dob`, prefer a candidate near a
+    "DEMOGRAPHICS" anchor over one near "SIGNATURE"). Anchors are
+    detected structurally (`_detect_section_anchors`), not from a
+    hand-curated dictionary."""
+    # Lazy-compute the anchor pool once per call site.
+    anchor_pool = anchors if anchors is not None else _detect_section_anchors(blocks)
+
+    cited_block = block_index.get(cit.field_or_chunk_id)
+    if value and cited_block is not None and _value_in_block(value, cited_block.text):
+        # Already cites a block containing the value — just hydrate.
+        agent_citation_repoint_total.labels(
+            field=field_name or "unknown", outcome="kept"
+        ).inc()
+        logger.info(
+            "extractor_citation_repointed",
+            extra={
+                "tool": "intake",
+                "field_name": field_name,
+                "outcome": "kept",
+                "from": cit.field_or_chunk_id,
+                "to": cit.field_or_chunk_id,
+                "candidate_count": 1,
+                "chosen_bbox_id": cited_block.bbox_id,
+                "chosen_granularity": _block_granularity(cited_block),
+                "anchor_bbox_id": None,
+                "anchor_text_preview": None,
+                "y_distance": None,
+                "value_preview": (value or "")[:32],
+            },
+        )
+        return cit.model_copy(update={"bbox": cited_block.bbox, "page": cited_block.page})
+
+    if value:
+        cands = _candidate_blocks_for_value(value, blocks)
+        if cands:
+            if len(cands) == 1:
+                target = cands[0][0]
+                outcome = "repointed_no_anchor"
+                anchor: Optional[LayoutBlock] = None
+                dy = float("inf")
+            else:
+                target, anchor, dy, outcome = _select_best_candidate(
+                    cands, anchor_pool, field_name
+                )
+            agent_citation_repoint_total.labels(
+                field=field_name or "unknown", outcome=outcome
+            ).inc()
+            anchor_text_preview = (
+                (anchor.text or "")[:32] if anchor is not None else None
+            )
+            logger.info(
+                "extractor_citation_repointed",
+                extra={
+                    "tool": "intake",
+                    "field_name": field_name,
+                    "outcome": outcome,
+                    "from": cit.field_or_chunk_id,
+                    "to": target.bbox_id,
+                    "candidate_count": len(cands),
+                    "chosen_bbox_id": target.bbox_id,
+                    "chosen_granularity": _block_granularity(target),
+                    "anchor_bbox_id": anchor.bbox_id if anchor is not None else None,
+                    "anchor_text_preview": anchor_text_preview,
+                    "y_distance": (
+                        round(dy, 2) if dy != float("inf") else None
+                    ),
+                    "value_preview": (value or "")[:32],
+                },
+            )
+            return cit.model_copy(
+                update={
+                    "field_or_chunk_id": target.bbox_id,
+                    "quote_or_value": target.text or cit.quote_or_value,
+                    "bbox": target.bbox,
+                    "page": target.page,
+                }
+            )
+        # No candidate cleared the floor: emit a no_match observation so
+        # we can audit how often the LLM citation goes unverified.
+        agent_citation_repoint_total.labels(
+            field=field_name or "unknown", outcome="no_match"
+        ).inc()
+        logger.info(
+            "extractor_citation_repointed",
+            extra={
+                "tool": "intake",
+                "field_name": field_name,
+                "outcome": "no_match",
+                "from": cit.field_or_chunk_id,
+                "to": cit.field_or_chunk_id,
+                "candidate_count": 0,
+                "chosen_bbox_id": cit.field_or_chunk_id,
+                "chosen_granularity": (
+                    _block_granularity(cited_block) if cited_block is not None else None
+                ),
+                "anchor_bbox_id": None,
+                "anchor_text_preview": None,
+                "y_distance": None,
+                "value_preview": (value or "")[:32],
+            },
+        )
+
+    # No value to match against, or no overlap anywhere — best we can do
+    # is keep the original cite and stamp bbox/page if the bbox_id is real.
+    if cited_block is None:
+        logger.warning(
+            "extractor_citation_bbox_lookup_failed",
+            extra={
+                "field_or_chunk_id": cit.field_or_chunk_id,
+                "source_id": cit.source_id,
+                "tool": "intake",
+            },
+        )
+        return cit
+    return cit.model_copy(update={"bbox": cited_block.bbox, "page": cited_block.page})
+
+
 def _hydrate_citation(cit: Citation, block_index: dict[str, LayoutBlock]) -> Citation:
-    """Stamp ``bbox`` / ``page`` from the OCR layout onto a Citation; log
-    and return untouched on lookup miss (never invent coordinates)."""
+    """Hydrate a citation that has no value-anchor (used by the
+    fallback synthetic citations only)."""
     block = block_index.get(cit.field_or_chunk_id)
     if block is None:
         logger.warning(
@@ -191,11 +653,30 @@ def _hydrate_citations_list(
     return [_hydrate_citation(c, block_index) for c in citations]
 
 
+def _repoint_citations_list(
+    citations: List[Citation],
+    value: Optional[str],
+    blocks: List[LayoutBlock],
+    block_index: dict[str, LayoutBlock],
+    *,
+    field_name: Optional[str] = None,
+    anchors: Optional[List[LayoutBlock]] = None,
+) -> List[Citation]:
+    anchor_pool = anchors if anchors is not None else _detect_section_anchors(blocks)
+    return [
+        _repoint_citation(
+            c, value, blocks, block_index, anchors=anchor_pool, field_name=field_name
+        )
+        for c in citations
+    ]
+
+
 def _hydrate_intake_form_citations(
     form: IntakeForm, blocks: List[LayoutBlock]
 ) -> IntakeForm:
     """Walk every cite-bearing IntakeForm field and stamp bbox/page."""
     block_index = _index_blocks(blocks)
+    anchors = _detect_section_anchors(blocks)
 
     # Demographics — TextField sub-fields each carry citations.
     demographics = form.demographics
@@ -206,7 +687,14 @@ def _hydrate_intake_form_citations(
             if tf is not None:
                 demo_updates[attr] = tf.model_copy(
                     update={
-                        "citations": _hydrate_citations_list(tf.citations, block_index)
+                        "citations": _repoint_citations_list(
+                            tf.citations,
+                            tf.value,
+                            blocks,
+                            block_index,
+                            field_name=attr,
+                            anchors=anchors,
+                        )
                     }
                 )
         if demo_updates:
@@ -215,24 +703,60 @@ def _hydrate_intake_form_citations(
     chief = form.chief_concern
     if chief is not None:
         chief = chief.model_copy(
-            update={"citations": _hydrate_citations_list(chief.citations, block_index)}
+            update={
+                "citations": _repoint_citations_list(
+                    chief.citations,
+                    chief.value,
+                    blocks,
+                    block_index,
+                    field_name="chief_concern",
+                    anchors=anchors,
+                )
+            }
         )
 
     meds = [
         m.model_copy(
-            update={"citations": _hydrate_citations_list(m.citations, block_index)}
+            update={
+                "citations": _repoint_citations_list(
+                    m.citations,
+                    m.name,
+                    blocks,
+                    block_index,
+                    field_name="medication",
+                    anchors=anchors,
+                )
+            }
         )
         for m in form.current_medications
     ]
     allergies = [
         a.model_copy(
-            update={"citations": _hydrate_citations_list(a.citations, block_index)}
+            update={
+                "citations": _repoint_citations_list(
+                    a.citations,
+                    a.substance,
+                    blocks,
+                    block_index,
+                    field_name="allergy",
+                    anchors=anchors,
+                )
+            }
         )
         for a in form.allergies
     ]
     fam = [
         f.model_copy(
-            update={"citations": _hydrate_citations_list(f.citations, block_index)}
+            update={
+                "citations": _repoint_citations_list(
+                    f.citations,
+                    f.condition,
+                    blocks,
+                    block_index,
+                    field_name="family",
+                    anchors=anchors,
+                )
+            }
         )
         for f in form.family_history
     ]

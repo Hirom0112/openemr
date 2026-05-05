@@ -399,6 +399,7 @@ The observability primitives that satisfy §5.4 live in a dedicated leaf package
 | `agent_client_timing_seconds` | Histogram | `action` | `POST /agent/client-timing` (frontend-submitted) |
 | `agent_census_dropped_patients_total` | Counter | — | `triage/census.py:_build_entry` |
 | `agent_pid_resolution_total` | Counter | `method` (`normalize`/`name_match`) | `agent/dispatcher.py` (pre-scope tool_input rewrite) |
+| `agent_citation_repoint_total` | Counter | `field` (`name`/`dob`/`sex`/`mrn`/`address`/`chief_concern`/`medication`/`allergy`/`family`/`unknown`), `outcome` (`kept`/`repointed_with_anchor`/`repointed_no_anchor`/`no_match`) | `extractors/intake.py:_repoint_citation` (Wave 2B spatial selector) |
 
 **Structured log event catalog.** All events are JSON-formatted via `JsonLogFormatter` and carry the per-request `request_id` field automatically. Listed fields are in addition to the standard log envelope (`timestamp`, `level`, `logger`, `message`, `request_id`).
 
@@ -415,6 +416,7 @@ The observability primitives that satisfy §5.4 live in a dedicated leaf package
 | `fhir_token_cache` | DEBUG | `auth/fhir_client.py` | `outcome` (`hit`/`miss`), `expires_in_s` |
 | `client_timing` | INFO | `POST /agent/client-timing` | `action`, `duration_ms` |
 | `dispatcher.pid_resolution` | INFO | `agent/dispatcher.py` | `original_input`, `resolved_pid`, `resolution_method` (`normalize`/`name_match`), `tool_name`, `session_id` |
+| `extractor_citation_repointed` | INFO | `extractors/intake.py:_repoint_citation` | `tool` (`intake`), `field_name`, `outcome` (`kept`/`repointed_with_anchor`/`repointed_no_anchor`/`no_match`), `from`, `to`, `candidate_count`, `chosen_bbox_id`, `chosen_granularity` (`WORD`/`LINE`/null), `anchor_bbox_id` (null when no anchor was used), `anchor_text_preview` (≤32 chars), `y_distance` (rounded PDF-points; null when no anchor), `value_preview` (≤32 chars) |
 
 **W2 metric catalog (Phase 6.1 additions).** These instrument the document-ingest path, the LangGraph hybrid-RAG retriever, the critic, and the demographic comparator. All are defined in `agent-api/agent/metrics.py`. Spec lives in `W2_ARCHITECTURE.md` §10.2; this table reflects what is actually emitted by the code today.
 
