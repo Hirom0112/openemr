@@ -35,10 +35,18 @@ the upstream paths come back.
   valid bearer and `api:oemr` requested. See §3 below for the four-gate
   investigation.
 
-**What it preserves.** Documents still land in OpenEMR's `documents` table.
-FHIR `DocumentReference` reads still surface them. Round-trip integrity
+**What it preserves.** Documents still land in OpenEMR's `documents` table
+and are visible in OpenEMR's native Documents tab UI. Round-trip integrity
 (`W2_ARCHITECTURE.md §4.3`), audit dual-target (§9.4), and "OpenEMR is the
-system of record" all still hold.
+system of record" all still hold. (v1: FHIR `DocumentReference` reads
+return `total=0` because OpenEMR's `DocumentService::search` filters reads
+via `$document->can_access($_SESSION['authUser'])`, and the OAuth bearer's
+request session does not bind `authUser` on the deployed OpenEMR build —
+so `$username` is `null` and every doc fails the per-row check. The fix
+is upstream OAuth-to-PHP-session bridging, not an ACL grant. Derived facts
+ARE persisted now — as FHIR-shaped Observations into the module-private
+`copilot_observations` MySQL table via a second custom JWT-authenticated
+endpoint. See `W2_ARCHITECTURE.md §4.2.1` and §4.2.4.)
 
 **What it deviates on.** The OpenEMR-side authentication for this single
 endpoint moves from OAuth bearer + scope check + ACL gate to a shared HMAC
@@ -48,6 +56,32 @@ secret. See §2.
 When the upstream paths become functional, the chain stops landing on tier 3
 without any code change. Setting `COPILOT_JWT_SECRET` to empty disables the
 tier explicitly.
+
+---
+
+## 1a. The custom Observation endpoint (parallel deviation)
+
+A second JWT-protected endpoint inside the same module persists derived
+FHIR-shaped Observations:
+
+- URL: `/interface/modules/custom_modules/oe-module-clinical-copilot/public/observation.php`
+- Controller: `interface/modules/custom_modules/oe-module-clinical-copilot/src/ObservationController.php`
+- Auth: HS256 JWT signed with the **same** `COPILOT_JWT_SECRET`
+- Persistence: module-private `copilot_observations` MySQL table (auto-created on first call)
+- Response: `{observationId: "copilot-{doc_id}-{loinc_code}"}` — deterministic, so re-extraction UPSERTs
+
+This endpoint inherits the same JWT-secret blast-radius story as
+`UploadController` — the two endpoints share `COPILOT_JWT_SECRET`. A holder
+of the secret can mint a valid JWT for either endpoint and write arbitrary
+documents OR derived Observations to any patient's chart. The blast radius
+of a single leaked secret is therefore the union of both authorities.
+
+The forward-removal path is the same as §1: when OpenEMR's deployed FHIR
+`POST /Observation` controller is implemented (currently 404), the
+agent-api can fall back to the standard FHIR write surface and the custom
+endpoint can be retired. Until then, the FHIR resource shape is preserved
+in `copilot_observations` so the migration is a config + mapping change,
+not a rewrite. See `W2_ARCHITECTURE.md §4.2.4`.
 
 ---
 
@@ -78,13 +112,17 @@ Never include it in a plaintext config file that ships in a release artifact.
 
 The same value must exist on **both**:
 
-- `copilot-agent-api` (Python service) — used to mint JWTs in `_mint_copilot_jwt`
-- `clinical-copilot-openemr` (PHP / OpenEMR) — used to verify JWTs in `UploadController`
+- `copilot-agent-api` (Python service) — used to mint JWTs in `_mint_copilot_jwt` for both the upload and Observation endpoints
+- `clinical-copilot-openemr` (PHP / OpenEMR) — used to verify JWTs in **both** `UploadController` and `ObservationController`
 
-Asymmetry between the two services causes all uploads via tier 3 to fail
-closed: OpenEMR returns `401`, the agent-api logs the failure, and the
-fallback chain falls through to tier 4 (local-disk). There is no asymmetry
-case that produces an accepted unauthorized upload.
+Asymmetry between the two services causes all uploads via tier 3 AND all
+Observation writes to fail closed: OpenEMR returns `401`, the agent-api
+logs the failure, and the upload fallback chain falls through to tier 4
+(local-disk). Failed Observation writes do not have a fallback target —
+the derived facts simply do not persist on the OpenEMR side until the
+secret asymmetry is resolved, and the agent-api logs the failure for
+operator visibility. There is no asymmetry case that produces an accepted
+unauthorized write on either endpoint.
 
 ### 2.4 Rotation
 
@@ -92,11 +130,17 @@ case that produces an accepted unauthorized upload.
 - **Procedure.**
   1. Generate a new secret (`openssl rand -base64 32`).
   2. Set the new value on both `copilot-agent-api` and `clinical-copilot-openemr`.
+     The same secret is used to authenticate **both** the upload endpoint
+     (§1) and the Observation endpoint (§1a) — there is one secret, not two.
   3. Redeploy in either order. A transient window of `401` responses is
-     acceptable; the agent-api fallback chain handles it without data loss
-     because tier 4 captures any uploads attempted during the gap.
-  4. Verify post-deploy by uploading a test document and observing a `200`
-     response and a `documentId` in the agent-api logs.
+     acceptable on both endpoints; the upload fallback chain handles its
+     gap via tier 4 (local-disk), and Observation writes during the gap
+     simply do not persist until the next extraction (the deterministic
+     id scheme makes that a no-op UPSERT once the secret is in sync).
+  4. Verify post-deploy by uploading a test document AND triggering one
+     extraction. Confirm a `200` response with a `documentId` from the
+     upload endpoint AND a `200` with `observationId` from the Observation
+     endpoint, both visible in the agent-api logs.
 - **Do not** log or print the old or new secret value during rotation. Verify
   only by observing upload success, not by echoing the secret.
 
@@ -109,16 +153,20 @@ environments collapses the blast-radius boundary and is forbidden.
 ### 2.6 Blast radius
 
 A holder of `COPILOT_JWT_SECRET` can mint a valid JWT and write arbitrary
-documents to any patient's chart. There is no per-patient or per-user
-authorization gate on the custom endpoint. This is equivalent to admin-level
-chart-write authority on the OpenEMR instance.
+documents AND arbitrary derived Observations to any patient's chart. There
+is no per-patient or per-user authorization gate on either custom endpoint.
+This is equivalent to admin-level chart-write authority on the OpenEMR
+instance, across both the document table and the module-private
+`copilot_observations` table.
 
 ### 2.7 Kill switch
 
 Unsetting `COPILOT_JWT_SECRET` (or setting it empty) on the agent-api side
-makes `_mint_copilot_jwt` return `None`, and tier 3 of the fallback chain is
-skipped entirely. Use this as the off switch when an environment should not
-have agent-api document write authority.
+makes `_mint_copilot_jwt` return `None`, which disables **both** custom
+endpoints in one shot: tier 3 of the upload fallback chain is skipped, and
+Observation writes simply do not happen (the agent-api logs that
+persistence was skipped). Use this as the off switch when an environment
+should not have agent-api chart-write authority.
 
 ---
 
@@ -214,10 +262,12 @@ left in place dormant or removed entirely.
 - `W2_ARCHITECTURE.md §4.2` — Path B (the documented upload path)
 - `W2_ARCHITECTURE.md §4.2.1` — Custom upload path (deployment deviation)
 - `W2_ARCHITECTURE.md §4.2.2` — Shared HMAC secret tradeoff
+- `W2_ARCHITECTURE.md §4.2.4` — Custom FHIR Observation endpoint (parallel deviation)
 - `W2_ARCHITECTURE.md §4.3` — Round-trip integrity (preserved)
 - `W2_ARCHITECTURE.md §9.4` — Audit dual-target (preserved)
 - `W2_ARCHITECTURE.md §12` — Risk Register entry #1 (the fallback chain)
 - `agent-api/documents/fhir_writer.py` — fallback chain implementation
 - `agent-api/auth/fhir_client.py` — `get_access_token` and `_token_cache_key`
-- `interface/modules/custom_modules/oe-module-clinical-copilot/src/UploadController.php` — endpoint
+- `interface/modules/custom_modules/oe-module-clinical-copilot/src/UploadController.php` — upload endpoint
+- `interface/modules/custom_modules/oe-module-clinical-copilot/src/ObservationController.php` — Observation endpoint
 - `interface/modules/custom_modules/oe-module-clinical-copilot/src/JwtMinter.php` — JWT shape reference

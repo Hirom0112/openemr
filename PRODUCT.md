@@ -1,9 +1,5 @@
 # Product
 
-## Register
-
-product
-
 ## Users
 
 Hospital physicians (hospitalists, residents, attendings) on shift, embedded in OpenEMR. Primary context: morning rounds, mid-shift triage decisions, and end-of-shift handoff. They are time-pressed, interrupt-driven, and reading the chat surface in an iframe alongside the OpenEMR chart, often on a hospital workstation in landscape, sometimes on a smaller tablet at bedside. They are clinically expert; they do not need handholding, but they cannot afford ambiguity in a tool that touches medication safety and triage.
@@ -31,6 +27,18 @@ Clinical, calm, expert. Three words: **trustworthy, terse, deferential**. The vo
 3. **Triage-first hierarchy.** P1/P2 outranks layout symmetry. When the design and the clinical priority disagree, the clinical priority wins.
 4. **Calm density.** A hospitalist scans, they don't read. Information density is high but rhythm is steady — no surprise bright accents, no motion that demands attention it didn't earn.
 5. **Honest affordances.** A button that opens the chart looks like it leaves the surface. A refusal looks like a refusal. A cached answer looks cached. The UI never over-sells what the agent can do.
+
+## Traceability (the auditor's path)
+
+Every clinical claim the agent surfaces is traceable back to a source the chart already holds. A user clicking a citation chip on a derived lab value follows this chain end-to-end:
+
+1. The cited `LabValue` carries a bbox-anchored citation (page coordinates + the literal `quote_or_value`).
+2. That citation resolves to a row in `copilot_observations` with deterministic id `copilot-{doc_id}-{loinc_code}`.
+3. The Observation's `derivedFrom` reference points to `DocumentReference/copilot-{doc_id}`.
+4. `{doc_id}` is OpenEMR's `documents.id` — the same row the chart already shows.
+5. The source PDF is one click away in OpenEMR's native Documents tab.
+
+Click a citation chip → see the source PDF in OpenEMR's chart. The path is short, the chain is verifiable, and the chart never has to be taken on faith.
 
 ## Accessibility & Inclusion
 

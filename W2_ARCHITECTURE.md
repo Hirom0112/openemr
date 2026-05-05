@@ -8,7 +8,7 @@ Week 2 closes the gap between a structured-data agent and one that can read the 
 
 The architectural challenge is one sentence long: **let the agent see, without letting it lie.** Every decision in this document traces back to that constraint. Every clinical claim in the agent's response must resolve to a real source — a bounding box on a real document with text content matching the claimed value, or a chunk in a real curated guideline — or the response is blocked by a critic node before it reaches the user.
 
-The system is built as a multi-agent graph (LangGraph) sitting alongside the existing structured-data flows. A supervisor routes work to specialist workers — an intake-extractor that turns documents into typed JSON, an evidence-retriever that does hybrid sparse+dense retrieval over a curated corpus with Cohere rerank, and the existing structured-data tool registry exposed as a callable worker. A critic node reviews every output for citation existence, citation fidelity, and demographic correctness before the response leaves the system. Documents round-trip through OpenEMR's FHIR `DocumentReference`, derived facts persist as FHIR `Observation`s with `derivedFrom` references, and bounding-box metadata lives in our Postgres alongside audit. Zero new infrastructure services — pgvector is a Postgres extension, Cohere is one new vendor, no new container.
+The system is built as a multi-agent graph (LangGraph) sitting alongside the existing structured-data flows. A supervisor routes work to specialist workers — an intake-extractor that turns documents into typed JSON, an evidence-retriever that does hybrid sparse+dense retrieval over a curated corpus with Cohere rerank, and the existing structured-data tool registry exposed as a callable worker. A critic node reviews every output for citation existence, citation fidelity, and demographic correctness before the response leaves the system. Documents round-trip through OpenEMR's FHIR `DocumentReference`, derived facts persist as FHIR `Observation`s with `derivedFrom` references, and bounding-box metadata lives in our Postgres alongside audit. (v1: documents land in OpenEMR's `documents` table via a custom JWT-authenticated endpoint — see §4.2.1 — and the FHIR DocumentReference read surface is currently blind to them due to an OAuth-to-PHP-session bind upstream. v1: derived Observations are implemented via a custom JWT-authenticated FHIR-Observation endpoint inside oe-module-clinical-copilot; resources land in `copilot_observations` MySQL table, fully FHIR-shaped — see §4.2.4.) Zero new infrastructure services — pgvector is a Postgres extension, Cohere is one new vendor, no new container.
 
 Quality is gated by fifty cases scored against five boolean rubrics, where every case carries an explicit `expected_critic_decision` and the eval runs the deployed critic configuration. The gate is mechanical, the rubrics are boolean, and the regression threshold is committed in version control. A per-case auto-rerun on `factually_consistent` disagreement filters judge noise; a quarterly meta-eval against twenty human-labeled cases keeps the judge's credibility number measured rather than asserted.
 
@@ -142,7 +142,7 @@ The realistic hospital workflow. Documents arrive in OpenEMR before Sara logs in
         atomic claim via stub-row INSERT (see §4.3)
         invoke supervisor graph
         persist extraction record keyed by document_reference_id
-        emit derived FHIR Observations with derivedFrom
+        emit derived FHIR Observations with derivedFrom  # v1: implemented via custom endpoint; resources land in copilot_observations MySQL table (§4.2.4)
         emit audit event
 ```
 
@@ -204,9 +204,9 @@ The agent-api consumes this endpoint as the third tier of the fallback chain doc
 - Round-trip integrity, idempotency on `document_reference_id`, and the stub-row claim from §4.3 are unaffected.
 - Audit dual-target (§9.4) is preserved: `Document::createDocument` writes to OpenEMR's `log` table via its built-in audit hook, and the agent-api emits its own `document_ingested` event to `copilot_audit_events`.
 
-**FHIR DocumentReference visibility caveat.** The deployed OpenEMR's FHIR DocumentReference layer does NOT auto-expose documents written through `Document::createDocument` — search by `subject=Patient/<id>` returns `total=0` even when the chart UI shows the document. This is an upstream OpenEMR FHIR-mapping gap (the controller has its own filters / category logic that don't pick up legacy-API document inserts). Mitigations:
-- The Postgres `copilot_doc_extractions` table is the agent's own provenance anchor; citations resolve through it (`field_or_chunk_id` → bbox in extraction record), not through FHIR DocumentReference reads. The citation contract still holds.
-- Future: extend the custom module with a small read-side bridge that surfaces the `documents` row as a FHIR DocumentReference resource on demand. Not in MVP scope.
+**FHIR DocumentReference visibility caveat.** The deployed OpenEMR's FHIR DocumentReference search by `subject=Patient/<id>` returns `total=0` even when the chart UI shows the document. The cause is OpenEMR's OAuth-to-PHP-session bind, not an ACL configuration gap: OpenEMR core's `DocumentService::search` (line 282-286) filters reads via `$document->can_access($username)` where `$username = $this->getSession()?->get('authUser')`. On the OpenEMR build we deploy, the OAuth bearer's request session does not carry `authUser` — so `$username` is `null`, every document fails the per-row `can_access` check, and the FHIR result set is empty. The pilot's admin user has the full `gacl` chain intact; this is not a permission-grant problem. The fix is upstream OAuth-to-PHP-session bridging and is out of scope for v1. Mitigations:
+- The document IS in the chart. It is visible via OpenEMR's native Documents tab UI and verifiable directly by `documents.id`. The `documents` row is real; only the FHIR read surface is blind to it.
+- The provenance chain remains queryable via the agent-api side (the response envelope carries `documentId` and the deterministic Observation ids) and via direct inspection of OpenEMR's `documents` table. An auditor following our `derivedFrom` references can resolve the chain without depending on the FHIR DocumentReference read.
 - Verified by `scripts/verify_mvp.sh` Check 3b: reports the FHIR total as INFO, not as a hard fail.
 
 **What this deviates on.** The OpenEMR-side authentication moves from OAuth bearer + scope check + ACL gate to a single shared HMAC secret. This is a security-posture change. The detailed tradeoff is documented in §4.2.2 below and in `docs/SECURITY_TRADEOFFS.md`.
@@ -247,11 +247,52 @@ The custom upload endpoint replaces OpenEMR's per-request OAuth bearer + ACL cha
 
 **Feature-flag / kill switch.** If `COPILOT_JWT_SECRET` is unset or empty, the agent-api's `_mint_copilot_jwt` returns `None` and tier 3 of the fallback chain is skipped entirely. Operationally this is the off switch: deployments where the agent-api is not trusted to write documents can leave the secret unset, and the chain falls through to tier 4 (local-disk) without ever invoking the custom endpoint. This makes the deviation opt-in per environment.
 
+### 4.2.4 FHIR Observation custom endpoint
+
+The agent-api emits one FHIR-shaped Observation per extracted LabValue.
+Resources are POSTed to a custom JWT-authenticated endpoint inside
+oe-module-clinical-copilot (parallel to the upload endpoint from
+§4.2.1) and persist in a module-private copilot_observations MySQL
+table. Resource ids are deterministic (`copilot-{doc_id}-{loinc_code}`)
+so re-extraction is idempotent.
+
+Why custom endpoint, not FHIR /Observation POST: same upstream
+limitation as Binary/DocumentReference — OpenEMR's deployed FHIR
+controller doesn't implement the create surface (HTTP 404, route
+not found, verified by direct probe). The custom endpoint preserves
+the FHIR resource shape so any future bridge into procedure_result /
+the standard FHIR read controller is a config + mapping change, not
+a rewrite.
+
+Each Observation carries `derivedFrom: [{"reference": "DocumentReference/copilot-{doc_id}"}]`
+and a `_copilot_citations` extension carrying `bbox` + `quote_or_value`
+per citation. The agent-api's response envelope returns the list of
+deterministic Observation ids in `metadata.observation_ids` so a caller
+can resolve the provenance chain without going through FHIR.
+
+Provenance chain (auditor's path):
+  1. extracted LabValue carries citations[i].field_or_chunk_id (bbox)
+  2. -> copilot_observations row with deterministic id
+  3. -> fhir_resource.derivedFrom -> DocumentReference/copilot-{doc_id}
+  4. -> documents.id={doc_id} (OpenEMR chart)
+  5. -> source PDF bytes via Documents tab UI
+
+The chain is verified end-to-end by scripts/verify_mvp.sh Check 5
+and gated by the eval suite's provenance_chain rubric.
+
+Read-side caveat: OpenEMR's GET /apis/default/fhir/Observation
+endpoint does NOT auto-surface rows from copilot_observations — that
+would require either bridging into procedure_result (v2) or a
+read-side custom endpoint. The agent-api itself is the read surface
+in v1; the chain is queryable via the agent-api's response envelope
+(metadata.observation_ids) and via direct MySQL inspection of
+copilot_observations.
+
 ### 4.3 Round-trip integrity and concurrency
 
 The spec mandates documents and derived observations round-trip through OpenEMR without creating duplicate or untraceable records. Two separate concerns: idempotency of the extraction record, and concurrency of multiple agent-api workers seeing the same unprocessed `DocumentReference`.
 
-**Idempotency.** Extraction records are keyed by `document_reference_id`. Re-ingesting the same document is an UPSERT, not an INSERT. Derived FHIR `Observation`s carry `derivedFrom` references back to the source `DocumentReference`; re-extraction updates them rather than creating duplicates.
+**Idempotency.** Extraction records are keyed by `document_reference_id`. Re-ingesting the same document is an UPSERT, not an INSERT. Derived FHIR `Observation`s carry `derivedFrom` references back to the source `DocumentReference`; re-extraction updates them rather than creating duplicates. (v1: implemented via custom JWT-authenticated FHIR-Observation endpoint inside oe-module-clinical-copilot; resources land in `copilot_observations` MySQL table, fully FHIR-shaped — see §4.2.4.)
 
 **Concurrency.** Before invoking the supervisor graph, the agent INSERTs a stub row into `copilot_doc_extractions` with a unique constraint on `document_reference_id`:
 
@@ -271,7 +312,8 @@ If the INSERT returns a row, this worker owns the extraction. If `ON CONFLICT DO
 |---|---|
 | Stub-row INSERT with unique constraint on `document_reference_id` | At most one worker ever fires the graph for a given document |
 | Extractions UPSERTed by `document_reference_id` | Re-ingest is idempotent |
-| Derived FHIR `Observation`s carry `derivedFrom` | Every extracted lab traces back to its source document |
+| Derived facts carry `document_reference_id` to source PDF (v1: implemented via custom FHIR-Observation endpoint; resources land in `copilot_observations` with `derivedFrom` — see §4.2.4) | Every extracted lab traces back to its source document |
+| Module-private `copilot_observations` UPSERT keyed on deterministic id `copilot-{doc_id}-{loinc}` | Re-extraction idempotency for derived facts |
 | Source PDFs live exclusively in OpenEMR | No shadow document store; OpenEMR is the system of record |
 | Bbox metadata in `copilot_doc_extractions` references `document_reference_id` | Bbox data is replaceable; source is canonical |
 | Audit dual-target | Every ingest writes to OpenEMR `log` and Postgres `copilot_audit_events` |
@@ -283,7 +325,8 @@ If the INSERT returns a row, this worker owns the extraction. If `ON CONFLICT DO
 | Source PDF bytes | OpenEMR FHIR `Binary` | Spec requirement; OpenEMR's audit story applies |
 | `DocumentReference` metadata | OpenEMR FHIR | Spec requirement; round-trip path |
 | Extraction JSON + per-field bbox + per-bbox OCR confidence | Postgres `copilot_doc_extractions` | Bboxes don't fit FHIR cleanly |
-| Derived clinical facts | OpenEMR FHIR `Observation` (with `derivedFrom`) | Triage rules engine consumes FHIR |
+| Derived clinical facts | OpenEMR FHIR `Observation` (with `derivedFrom`) — v1: implemented via custom endpoint, persisted in module-private `copilot_observations` MySQL table (§4.2.4); resource shape is fully FHIR | Triage rules engine consumes FHIR |
+| FHIR Observation resources (with `derivedFrom`) | OpenEMR MySQL `copilot_observations` (module-private) | Mirrors what FHIR Observation read would surface; resource shape preserved for forward bridging into procedure_result / standard FHIR read controller |
 | Classifier verdicts + corrections | Postgres `copilot_audit_events` (`event_type='classifier_verdict'`) | Feeds future classifier eval set |
 | Guideline corpus + embeddings | Postgres + pgvector | Reuse audit Postgres; no new service |
 | APScheduler jobs | Postgres (separate schema) | Scheduler durability; advisory-locked for multi-replica |
@@ -476,8 +519,8 @@ Four-step pipeline. The split between OCR (location) and Claude vision (meaning)
         ▼
   Step 4 — Round-trip to OpenEMR
     • Persist extraction record to copilot_doc_extractions
-    • Emit derived FHIR Observation(s) with
-      derivedFrom = DocumentReference
+    • Emit derived FHIR Observation(s) with        # v1: implemented via custom endpoint (§4.2.4)
+      derivedFrom = DocumentReference              # resources land in copilot_observations MySQL table
     • Emit audit event {event_type: "document_extracted",
                         doc_type, n_fields,
                         classifier_confidence,
@@ -1247,7 +1290,7 @@ If a post-pilot owner is not named for any subsystem, the honest-degradation pri
 
 | Package | Responsibility |
 |---|---|
-| `documents/` | Path A + B ingestion, OpenEMR FHIR DocumentReference round-trip, stub-row concurrency |
+| `documents/` | Path A + B ingestion, OpenEMR `documents`-table round-trip via the custom upload endpoint; FHIR `DocumentReference` read currently blind to written docs due to upstream OAuth-to-PHP-session bind (§4.2.1); derived facts emitted as FHIR-shaped Observations via the custom endpoint at §4.2.4; stub-row concurrency |
 | `classifier/` | Document type classification (keyword fast-path + LLM) |
 | `extractors/` | Per-type schema-fill workers |
 | `rag/` | Indexing + retrieval + rerank |
