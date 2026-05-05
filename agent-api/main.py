@@ -1117,9 +1117,12 @@ async def agent_prefetch(request: PrefetchRequest) -> dict:
                 "duration_ms": duration_ms,
                 "outcome": outcome,
                 "census_entries": len(entries),
-                "bundle_warmed": len(warm_tasks),
-                "briefing_warmed": len(warm_tasks),
-                "medication_safety_warmed": len(warm_tasks),
+                # Renamed from warm_tasks → ranked_fanout in an earlier
+                # refactor; the log keys still describe the per-patient
+                # warmups so we count the size of the fanout list.
+                "bundle_warmed": len(ranked_fanout),
+                "briefing_warmed": len(ranked_fanout),
+                "medication_safety_warmed": len(ranked_fanout),
                 "warm_failures": failures,
                 "force_refresh": effective_force_refresh,
                 "caches_populated": [
