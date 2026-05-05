@@ -1,4 +1,5 @@
 [importlinter]
+include_external_packages = True
 root_packages =
     agent
     briefing
@@ -12,6 +13,7 @@ root_packages =
     observability
     audit
     documents
+    graph
 
 # audit is a leaf: HIPAA-style audit emission must not depend on any
 # business sibling — it is consumed by the dispatcher and HTTP layer only.
@@ -182,3 +184,16 @@ forbidden_modules =
     handoff
     checkpointer
     agent.tools
+
+# graph nodes are pure-async functions invoked by the route handler.
+# They must not import FastAPI / Starlette primitives — that would couple
+# the LangGraph topology to the HTTP transport and break the cut-line
+# fallback (W2_ARCHITECTURE risk #5: hand-rolled supervisor swap-in).
+[importlinter:contract:graph-isolated]
+name = graph must not depend on FastAPI, http, or external transport
+type = forbidden
+source_modules =
+    graph
+forbidden_modules =
+    fastapi
+    starlette
