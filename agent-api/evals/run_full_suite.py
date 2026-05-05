@@ -117,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         "no_phi_in_logs",
         "provenance_chain",
         "critic_false_positive_rate",
+        "keyword_match_in_citation",
     )
     results: dict[str, float] = {}
     for k in expected_keys:
