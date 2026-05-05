@@ -12,6 +12,8 @@ package does not prevent the rubric/scoring tests from running.
 from __future__ import annotations
 
 import logging
+import threading
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
@@ -104,14 +106,68 @@ class _RecordCaptureHandler(logging.Handler):
             for k, v in record.__dict__.items()
             if k not in std_attrs and not k.startswith("_")
         }
-        self.records.append(
-            {
-                "level": record.levelname,
-                "name": record.name,
-                "message": message,
-                "extra": extras,
-            }
-        )
+        entry = {
+            "level": record.levelname,
+            "name": record.name,
+            "message": message,
+            "extra": extras,
+        }
+        # Per-case isolation: when a ``run_case`` invocation has bound a
+        # records list to ``_case_log_records``, route THIS record there
+        # instead of the shared handler list. ContextVars are task-local
+        # under asyncio (see ``contextvars.copy_context`` semantics) so
+        # concurrent ``asyncio.gather``'d calls each write to their own
+        # list — no cross-contamination.
+        scoped = _case_log_records.get()
+        if scoped is not None:
+            scoped.append(entry)
+            return
+        # Out-of-eval / legacy direct usage: fall back to the handler's
+        # own list so ``_attach_capture`` callers (see
+        # tests/test_evals_no_phi_real_bug.py) keep working.
+        self.records.append(entry)
+
+
+# Per-case log capture — see ``run_case`` for the binding site. The default
+# is ``None`` so calls outside an eval run hit the handler-local fallback.
+_case_log_records: ContextVar[Optional[List[Dict[str, Any]]]] = ContextVar(
+    "_case_log_records", default=None
+)
+
+# Module-level singleton. Attached lazily on first ``run_case`` call (under
+# ``_GLOBAL_HANDLER_LOCK``) and never detached — the parallel runner shares
+# it across N concurrent cases. Per-case isolation is delivered by the
+# ContextVar above, not by add/remove churn on the logger handler list.
+_GLOBAL_CAPTURE_HANDLER: Optional["_RecordCaptureHandler"] = None
+_GLOBAL_HANDLER_LOCK = threading.Lock()
+
+
+def _ensure_global_capture() -> "_RecordCaptureHandler":
+    """Attach the shared capture handler exactly once (lazy, thread-safe)."""
+    global _GLOBAL_CAPTURE_HANDLER
+    if _GLOBAL_CAPTURE_HANDLER is not None:
+        return _GLOBAL_CAPTURE_HANDLER
+    with _GLOBAL_HANDLER_LOCK:
+        if _GLOBAL_CAPTURE_HANDLER is not None:
+            return _GLOBAL_CAPTURE_HANDLER
+        handler = _RecordCaptureHandler()
+        for name in _GRAPH_LOGGERS:
+            lg = logging.getLogger(name)
+            lg.addHandler(handler)
+            if lg.level == logging.NOTSET or lg.level > logging.DEBUG:
+                lg.setLevel(logging.DEBUG)
+        root = logging.getLogger()
+        root.addHandler(handler)
+        if root.level == logging.NOTSET or root.level > logging.DEBUG:
+            root.setLevel(logging.DEBUG)
+        # Pin third-party loggers to WARNING (see ``_THIRD_PARTY_QUIET_LOGGERS``
+        # rationale above). We do NOT restore — the handler is permanent for
+        # the lifetime of the process; restoration would re-open the cascade
+        # window between cases.
+        for name in _THIRD_PARTY_QUIET_LOGGERS:
+            logging.getLogger(name).setLevel(logging.WARNING)
+        _GLOBAL_CAPTURE_HANDLER = handler
+        return handler
 
 
 # Third-party loggers that dump request/response bodies at DEBUG. When the
@@ -241,7 +297,13 @@ async def run_case(
         cheap when only the dataclass is needed.
     """
     case_id = getattr(case, "case_id", "<unknown>")
-    handler = _attach_capture()
+    # Per-case log isolation. Bind a fresh records list to the ContextVar
+    # so this task's emissions (and only this task's) accumulate here. Under
+    # ``asyncio.gather`` each task runs in its own copied context, so two
+    # concurrent ``run_case`` invocations cannot cross-contaminate.
+    case_records: List[Dict[str, Any]] = []
+    token = _case_log_records.set(case_records)
+    _ensure_global_capture()
     try:
         # ── Evidence-retrieval branch ────────────────────────────────────
         # Cases in the ``evidence_retrieval`` bucket exercise the
@@ -282,7 +344,7 @@ async def run_case(
                     case_id=case_id,
                     extraction=None,
                     critic_decision=None,
-                    captured_logs=list(handler.records),
+                    captured_logs=list(case_records),
                     error=None,
                     skipped_reason=reason,
                 )
@@ -336,7 +398,7 @@ async def run_case(
                 critic_decision=final.get("critic_decision"),
                 critic_violations=list(final.get("critic_violations") or []),
                 soft_warns=list(final.get("soft_warns") or []),
-                captured_logs=list(handler.records),
+                captured_logs=list(case_records),
                 error=None,
                 retrieval=final.get("retrieval"),
                 finalized=final.get("finalized"),
@@ -387,7 +449,7 @@ async def run_case(
             critic_decision=final.get("critic_decision"),
             critic_violations=list(final.get("critic_violations") or []),
             soft_warns=list(final.get("soft_warns") or []),
-            captured_logs=list(handler.records),
+            captured_logs=list(case_records),
             error=None,
             ocr_layout=list(final.get("ocr_layout") or []) if final.get("ocr_layout") is not None else None,
             observations=None,  # populated by probe_observations() if MySQL is reachable
@@ -403,11 +465,11 @@ async def run_case(
             critic_decision=None,
             critic_violations=[],
             soft_warns=[],
-            captured_logs=list(handler.records),
+            captured_logs=list(case_records),
             error=f"{type(exc).__name__}",
         )
     finally:
-        _detach_capture(handler)
+        _case_log_records.reset(token)
 
 
 # --------------------------------------------------------------------------- #
