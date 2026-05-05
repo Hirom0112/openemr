@@ -1,5 +1,11 @@
 # Clinical Co-Pilot — Setup Guide
 
+## Submission
+
+This branch is the W2 deliverable. The single-page submission summary lives in [`SUBMISSION.md`](./SUBMISSION.md) — live URLs, eval-gate evidence (regression PR #1 hard-failing the 50-case suite), the deployed-vs-spec table, and the honest deferral list. The reproducible 4-minute demo walkthrough lives in [`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md). Demo video: `[VIDEO_LINK_HERE]`. The architecture single-source-of-truth is [`W2_ARCHITECTURE.md`](./W2_ARCHITECTURE.md), with the deployed-build deviation called out in §4.2.1 and its security tradeoff in §4.2.2 / [`docs/SECURITY_TRADEOFFS.md`](./docs/SECURITY_TRADEOFFS.md).
+
+---
+
 A Gauntlet AI project building a Clinical Co-Pilot agent on top of OpenEMR.
 
 **Status:** agent-api (FastAPI) and agent-ui (React) run alongside OpenEMR via `docker/development-easy/docker-compose.copilot.yml`.
