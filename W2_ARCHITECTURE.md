@@ -200,9 +200,14 @@ The agent-api consumes this endpoint as the third tier of the fallback chain doc
 **What this preserves.**
 
 - Documents still round-trip through OpenEMR's own `documents` table. The architecture's "no shadow document store; OpenEMR is the system of record" claim (§4.3, §4.4) still holds.
-- FHIR `DocumentReference` reads still surface uploaded documents — the read path is unchanged because OpenEMR generates DocumentReference resources from the underlying `documents` table.
+- Documents are visible to clinicians via OpenEMR's native Documents tab UI — the same surface used for any chart-uploaded file. Verified end-to-end via `scripts/verify_mvp.sh` Check 3a: `documents.id` row exists with the correct `foreign_id` (patient).
 - Round-trip integrity, idempotency on `document_reference_id`, and the stub-row claim from §4.3 are unaffected.
 - Audit dual-target (§9.4) is preserved: `Document::createDocument` writes to OpenEMR's `log` table via its built-in audit hook, and the agent-api emits its own `document_ingested` event to `copilot_audit_events`.
+
+**FHIR DocumentReference visibility caveat.** The deployed OpenEMR's FHIR DocumentReference layer does NOT auto-expose documents written through `Document::createDocument` — search by `subject=Patient/<id>` returns `total=0` even when the chart UI shows the document. This is an upstream OpenEMR FHIR-mapping gap (the controller has its own filters / category logic that don't pick up legacy-API document inserts). Mitigations:
+- The Postgres `copilot_doc_extractions` table is the agent's own provenance anchor; citations resolve through it (`field_or_chunk_id` → bbox in extraction record), not through FHIR DocumentReference reads. The citation contract still holds.
+- Future: extend the custom module with a small read-side bridge that surfaces the `documents` row as a FHIR DocumentReference resource on demand. Not in MVP scope.
+- Verified by `scripts/verify_mvp.sh` Check 3b: reports the FHIR total as INFO, not as a hard fail.
 
 **What this deviates on.** The OpenEMR-side authentication moves from OAuth bearer + scope check + ACL gate to a single shared HMAC secret. This is a security-posture change. The detailed tradeoff is documented in §4.2.2 below and in `docs/SECURITY_TRADEOFFS.md`.
 
