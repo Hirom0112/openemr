@@ -1646,11 +1646,26 @@ async def document_ingest(
             ocr_confidence_range=ocr_range_value,
             classifier_confidence=classifier_conf_value,
         )
+        # Recompute layout on cache hit so the UI can paint bbox overlays
+        # without a separate round-trip. extract_layout is deterministic and
+        # cheap on already-loaded PDF bytes; we soft-fail to an empty list
+        # if the layout pass blows up (the inline `bbox` on each citation
+        # remains the primary source of truth).
+        try:
+            _cached_layout = _extract_layout(pdf_bytes)
+            bbox_layout_payload = [b.to_dict() for b in _cached_layout]
+        except Exception as exc:  # noqa: BLE001 — soft-fail boundary
+            logger.warning(
+                "document_ingest_cached_layout_failed",
+                extra={"request_id": rid, "error": str(exc)},
+            )
+            bbox_layout_payload = []
         return {
             "document_reference_id": write_result.document_reference_id,
             "extraction_id": claim.extraction_id,
             "extraction": cached,
             "citations": _flatten_citations_from_dict(cached),
+            "bbox_layout": bbox_layout_payload,
             "soft_warns": soft_warns,
             "metadata": {
                 "cached": True,
@@ -1872,11 +1887,16 @@ async def document_ingest(
         )
 
     soft_warns = _build_soft_warns(extraction) + observation_soft_warns
+    # Reuse the layout already computed for the classifier (line ~1681) so the
+    # UI can paint bbox overlays without a follow-up fetch. _layout_blocks may
+    # be empty for image-only / unparseable inputs — pass through as-is.
+    bbox_layout_payload = [b.to_dict() for b in (_layout_blocks or [])]
     return {
         "document_reference_id": write_result.document_reference_id,
         "extraction_id": claim.extraction_id,
         "extraction": extraction.model_dump(mode="json"),
         "citations": _flatten_citations(extraction),
+        "bbox_layout": bbox_layout_payload,
         "soft_warns": soft_warns,
         "metadata": {
             "cached": False,

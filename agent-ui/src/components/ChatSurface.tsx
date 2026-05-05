@@ -1223,6 +1223,9 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       if (Array.isArray(ext.values)) valueCount = ext.values.length;
       else if (Array.isArray(ext.key_facts)) valueCount = ext.key_facts.length;
     }
+    if (valueCount === 0 && Array.isArray(resp.citations)) {
+      valueCount = resp.citations.length;
+    }
     const conf = ext && typeof ext.classifier_confidence === 'number'
       ? ` (classifier confidence ${(ext.classifier_confidence * 100).toFixed(0)}%)`
       : '';
@@ -1268,7 +1271,12 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
         extraction: {
           citations: labelledCitations,
           soft_warns: resp.soft_warns,
-          ocr_layout: ext?.ocr_layout,
+          // Prefer the top-level `bbox_layout` (always sent by /document/ingest
+          // post-Stage-1-polish) so the viewer paints overlays without a
+          // follow-up fetch. Fall back to the legacy in-extraction
+          // `ocr_layout` slot for older/cached responses that predate the
+          // top-level field. Either way the renderer reads the same key.
+          ocr_layout: resp.bbox_layout ?? ext?.ocr_layout,
           pdf_url: ext?.pdf_url,
           // Non-serializable but stays in React state fine; consumed by
           // DocumentViewer via the {pdfBytes} prop. Lives for the page

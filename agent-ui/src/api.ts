@@ -1,5 +1,5 @@
 import type { AgentResponse, TriageRationaleData } from './types';
-import type { Citation, SoftWarn } from './types/citation';
+import type { BboxLayoutBlock, Citation, SoftWarn } from './types/citation';
 import { withAuth, requestRefreshedToken, notifyAuthFailure, getAuthToken } from './auth/jwt';
 
 const cfg = () => window.__COPILOT_CONFIG__;
@@ -602,6 +602,13 @@ export interface IngestResponse {
   document_reference_id: string;
   extraction: unknown;
   citations: Citation[];
+  /**
+   * Layout blocks for bbox-overlay rendering. Present on every successful
+   * ingest (fresh + cached paths) so the viewer can resolve a citation's
+   * `field_or_chunk_id` to a rectangle without a follow-up fetch. May be
+   * empty for image-only or unparseable inputs.
+   */
+  bbox_layout?: BboxLayoutBlock[];
   soft_warns: SoftWarn[];
   metadata: {
     fhir_write_path?: string;

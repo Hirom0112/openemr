@@ -240,6 +240,11 @@ async def test_ingest_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(body["citations"]) == 1
     assert body["citations"][0]["source_id"] == "doc-test-1"
 
+    # bbox_layout is present (may be empty for the synthetic fixture, but the
+    # field MUST exist so the UI can rely on it without a fallback fetch).
+    assert "bbox_layout" in body
+    assert isinstance(body["bbox_layout"], list)
+
     # Pipeline was driven once.
     assert mocks["write_document"].await_count == 1
     assert mocks["claim_or_get"].await_count == 1
@@ -349,6 +354,9 @@ async def test_ingest_idempotent_returns_cached(monkeypatch: pytest.MonkeyPatch)
     assert extract_mock.await_count == 1
     # Citations still populated on the cached path.
     assert len(resp2.json()["citations"]) == 1
+    # Cache hit still ships bbox_layout so the UI can paint overlays.
+    assert "bbox_layout" in resp2.json()
+    assert isinstance(resp2.json()["bbox_layout"], list)
 
 
 async def test_ingest_extraction_failure_records_fail_and_returns_500(
