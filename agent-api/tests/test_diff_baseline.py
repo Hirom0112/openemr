@@ -134,6 +134,141 @@ def test_min_threshold_floor_fails(tmp_path):
     assert "min_threshold" in proc.stdout or "min" in proc.stdout
 
 
+def _per_modality_floor_baseline() -> dict:
+    """Synthetic baseline carrying both global rubrics and per-modality pins."""
+    return {
+        "schema_valid": {"pass_rate": 0.95, "min_threshold": 0.85},
+        "citation_present": {"pass_rate": 1.0, "min_threshold": 0.95},
+        "correct_critic_decision": {"pass_rate": 0.96, "min_threshold": 0.90},
+        "factually_consistent": {"pass_rate": 0.94, "min_threshold": 0.85},
+        "safe_refusal": {"pass_rate": 0.96, "min_threshold": 0.90},
+        "no_phi_in_logs": {"pass_rate": 1.0, "min_threshold": 1.0},
+        "citation_row_match": {"pass_rate": 0.85, "min_threshold": 0.75},
+        "critic_false_positive_rate": {"max": 0.10},
+        "per_modality": {
+            # Structurally-low pinned bucket: 0.333 schema_valid is well below
+            # the global lenient floor (0.85 - 0.05 = 0.80). Pre-fix this
+            # would FAIL even at delta=0; post-fix it must PASS.
+            "typed_pdf": {
+                "n_cases": 10,
+                "schema_valid": 0.333,
+                "citation_row_match": 0.727,
+            },
+            # Bucket present in observed but absent from per_modality_baseline
+            # at this rubric — falls back to the global lenient floor.
+            "scanned_pdf": {
+                "n_cases": 8,
+                "citation_row_match": 0.727,
+            },
+        },
+    }
+
+
+def _per_modality_floor_results_baseline_equal() -> dict:
+    """Observed exactly matches the pinned per-bucket rates."""
+    return {
+        "schema_valid": 0.95,
+        "citation_present": 1.0,
+        "correct_critic_decision": 0.96,
+        "factually_consistent": 0.94,
+        "safe_refusal": 0.96,
+        "no_phi_in_logs": 1.0,
+        "citation_row_match": 0.85,
+        "critic_false_positive_rate": 0.0,
+        "per_modality": {
+            "typed_pdf": {
+                "n_cases": 10,
+                "schema_valid": 0.333,
+                "citation_row_match": 0.727,
+            },
+            "scanned_pdf": {
+                "n_cases": 8,
+                "citation_row_match": 0.727,
+            },
+        },
+    }
+
+
+def test_per_modality_pinned_below_global_floor_passes_at_delta_zero(tmp_path):
+    """Bucket pinned below global lenient floor must PASS when delta=0.
+
+    Regression test for the bug where the lenient_floor was computed solely
+    from the GLOBAL rubric min_threshold (minus 5pp), causing structurally-
+    low pinned buckets (e.g. typed_pdf.schema_valid=0.333) to FAIL even when
+    observed exactly equals the pinned baseline rate.
+    """
+    baseline = _per_modality_floor_baseline()
+    results = _per_modality_floor_results_baseline_equal()
+    baseline_path = tmp_path / "baseline.json"
+    results_path = tmp_path / "results.json"
+    baseline_path.write_text(json.dumps(baseline))
+    results_path.write_text(json.dumps(results))
+    proc = subprocess.run(
+        [sys.executable, str(DIFF_SCRIPT), "--baseline", str(baseline_path), "--results", str(results_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "GATE: PASS" in proc.stdout
+    # Sanity: ensure the bucket actually appeared in the table — i.e. the
+    # gate logic did execute against it.
+    assert "typed_pdf.schema_valid" in proc.stdout
+
+
+def test_per_modality_drop_below_pinned_minus_5pp_fails(tmp_path):
+    """Bucket observed < bucket pinned - 5pp must FAIL the per-bucket floor."""
+    baseline = _per_modality_floor_baseline()
+    results = _per_modality_floor_results_baseline_equal()
+    # typed_pdf schema_valid pinned at 0.333; lenient floor = 0.283.
+    # 0.27 is below the per-bucket lenient floor (and the bucket-delta is
+    # 0.063 ≈ 6.3pp, also below the 8pp regression limit, so this asserts
+    # the FLOOR fires, not the regression check). Also avoids the 8pp
+    # bucket-delta regression check tripping (which would mask the floor).
+    results["per_modality"]["typed_pdf"]["schema_valid"] = 0.27
+    baseline_path = tmp_path / "baseline.json"
+    results_path = tmp_path / "results.json"
+    baseline_path.write_text(json.dumps(baseline))
+    results_path.write_text(json.dumps(results))
+    proc = subprocess.run(
+        [sys.executable, str(DIFF_SCRIPT), "--baseline", str(baseline_path), "--results", str(results_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1, proc.stdout
+    assert "GATE: FAIL" in proc.stdout
+    assert "typed_pdf" in proc.stdout
+    assert "schema_valid" in proc.stdout
+    assert "lenient_floor" in proc.stdout
+
+
+def test_per_modality_missing_bucket_falls_back_to_global_floor(tmp_path):
+    """Bucket without per_modality entry falls back to the global lenient floor."""
+    baseline = _per_modality_floor_baseline()
+    results = _per_modality_floor_results_baseline_equal()
+    # Add a NEW observed bucket not in per_modality_baseline at all. Its
+    # schema_valid floor must come from the global rubric (0.85 - 0.05 = 0.80).
+    # Set observed = 0.79 (below global lenient floor) — must FAIL.
+    results["per_modality"]["unknown_modality"] = {
+        "n_cases": 10,
+        "schema_valid": 0.79,
+    }
+    baseline_path = tmp_path / "baseline.json"
+    results_path = tmp_path / "results.json"
+    baseline_path.write_text(json.dumps(baseline))
+    results_path.write_text(json.dumps(results))
+    proc = subprocess.run(
+        [sys.executable, str(DIFF_SCRIPT), "--baseline", str(baseline_path), "--results", str(results_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1, proc.stdout
+    assert "GATE: FAIL" in proc.stdout
+    assert "unknown_modality" in proc.stdout
+    # The reported floor must be the global lenient floor (0.80), not a
+    # per-bucket value — the bucket has no baseline entry.
+    assert "0.800" in proc.stdout
+
+
 def test_malformed_results_json_fails(tmp_path):
     proc = _run("{not valid json", tmp_path)
     assert proc.returncode == 1

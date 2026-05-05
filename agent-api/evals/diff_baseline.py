@@ -178,7 +178,7 @@ def diff(baseline: dict, results: dict) -> tuple[bool, list[str]]:
                 continue
             n_cases = int(entry.get("n_cases", 0) or 0)
             base_entry = per_modality_baseline.get(modality) if isinstance(per_modality_baseline, dict) else None
-            for rubric, lenient_floor in global_floors.items():
+            for rubric, global_floor in global_floors.items():
                 obs = entry.get(rubric)
                 if obs is None:
                     continue
@@ -186,6 +186,23 @@ def diff(baseline: dict, results: dict) -> tuple[bool, list[str]]:
                     obs_v = float(obs)
                 except (TypeError, ValueError):
                     continue
+                # Resolve per-bucket pinned baseline rate (if any).
+                base_rate = None
+                if isinstance(base_entry, dict):
+                    base_rate = base_entry.get(rubric)
+                    try:
+                        base_rate = float(base_rate) if base_rate is not None else None
+                    except (TypeError, ValueError):
+                        base_rate = None
+                # Per-bucket lenient floor: when the baseline carries a pinned
+                # per-bucket rate, derive the floor from THAT rate (minus
+                # leniency) so structurally-low buckets aren't dragged up to
+                # the global mean. Fall back to the global floor only when the
+                # bucket is absent from per_modality_baseline.
+                if base_rate is not None:
+                    lenient_floor = max(0.0, base_rate - PER_MODALITY_FLOOR_LENIENCY_PP)
+                else:
+                    lenient_floor = global_floor
                 gates = n_cases >= PER_MODALITY_MIN_CASES
                 status = "PASS" if gates else "INFO"
                 # Floor check
@@ -195,14 +212,6 @@ def diff(baseline: dict, results: dict) -> tuple[bool, list[str]]:
                         f"per_modality[{modality}].{rubric}: {obs_v:.3f} "
                         f"< lenient_floor {lenient_floor:.3f} (n={n_cases})"
                     )
-                # Bucket-delta gate vs baseline (when baseline carries it)
-                base_rate = None
-                if isinstance(base_entry, dict):
-                    base_rate = base_entry.get(rubric)
-                    try:
-                        base_rate = float(base_rate) if base_rate is not None else None
-                    except (TypeError, ValueError):
-                        base_rate = None
                 delta_str = "—"
                 if base_rate is not None:
                     delta = obs_v - base_rate
