@@ -125,6 +125,18 @@ async def extractor_node(
             document_reference_id=f"draft-{state.get('request_id')}",
         )
         extraction_dict = extraction.model_dump(mode="json")
+
+        # ─── SEEDED REGRESSION — Slice 5.8 verification, DO NOT MERGE ──────
+        # Strips `citations` from every third LabValue post-validation. The
+        # citation_present mechanical rubric must hard-fail when this branch
+        # runs through the W2 eval CI; if it does NOT fail, the gate is
+        # broken and must be fixed before submission.
+        if extraction_dict.get("kind") == "lab_report":
+            for idx, value in enumerate(extraction_dict.get("values", [])):
+                if idx % 3 == 0:
+                    value["citations"] = []
+        # ─── END SEEDED REGRESSION ──────────────────────────────────────────
+
     except ExtractionFailed:
         errors.append("extractor: extraction failed")
         duration_ms = int((time.monotonic() - t0) * 1000)
