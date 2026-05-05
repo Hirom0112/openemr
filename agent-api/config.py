@@ -17,10 +17,15 @@ class Settings(BaseSettings):
     # user/* scopes with api:oemr work on this deployment.
     # system/* scopes + api:fhir return 401 — SMART backend services not configured.
     fhir_scopes: str = (
-        "openid api:oemr "
+        "openid api:oemr api:fhir "
         "user/Patient.rs user/Encounter.rs user/Observation.rs "
         "user/Condition.rs user/MedicationRequest.rs "
-        "user/AllergyIntolerance.rs user/DiagnosticReport.rs"
+        "user/AllergyIntolerance.rs user/DiagnosticReport.rs "
+        # Document ingest (W2 §4.2 step 3): write scopes for Binary +
+        # DocumentReference. Granted by the OAuth client row in
+        # OpenEMR's oauth_clients table; if those scopes are absent
+        # there the token endpoint silently downgrades and writes 404.
+        "user/Binary.cuds user/DocumentReference.cuds"
     )
 
     # Redis
