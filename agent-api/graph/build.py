@@ -1,27 +1,31 @@
-"""LangGraph factory for the Week-2 pipeline (Slice 3.1 skeleton).
+"""LangGraph factory for the Week-2 pipeline.
 
-This slice stands up the topology and proves end-to-end execution. All
-nodes are stubs; later slices replace each one with real workers/critic/
-finalize logic.
+Topology (post-slice 3.2–3.8)
+-----------------------------
 
-Topology
---------
-    supervisor_stub --(state["next_node"])--> worker_stub | finalize_stub
-    worker_stub --> critic_stub --> finalize_stub --> END
+    supervisor --> {extractor | structured | retriever | finalize}
+    extractor --> demographics_stub --> critic_stub --> finalize --> END
+    structured --> critic_stub --> finalize --> END
+    retriever --> critic_stub --> finalize --> END
+
+Stubs that remain in this file
+------------------------------
+
+* ``demographics_stub`` — owned by the parallel agent (slice 3.7); kept as
+  a passthrough until that lands.
+* ``critic_stub`` — owned by the parallel agent (slice 3.6); MUST remain
+  untouched in this slice. It returns ``critic_decision="pass"``.
 
 Checkpointer
 ------------
 LangGraph 0.2.x expects a `BaseCheckpointSaver` from
 `langgraph.checkpoint.base`. The repo's `checkpointer.RedisSaver` is a
 thin custom hash-based store with a different surface (append/load/clear),
-so it does not satisfy that interface out of the box. For the skeleton we
-let callers pass any LangGraph-compatible saver (typically `MemorySaver`
-in tests, the eventual real adapter in production). Slice 3.x will add a
-proper `RedisSaver -> BaseCheckpointSaver` adapter.
+so it does not satisfy that interface out of the box. For tests, pass
+`langgraph.checkpoint.memory.MemorySaver()`.
 
 TODO(slice-3.x): write `graph.checkpointer_adapter.LangGraphRedisSaver`
-that wraps `checkpointer.RedisSaver` and implements `aget_tuple`, `alist`,
-`aput`, `aput_writes` against the existing copilot:checkpoint:* keys.
+that wraps `checkpointer.RedisSaver`.
 """
 from __future__ import annotations
 
@@ -30,110 +34,90 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
+from .nodes.extractor import extractor_node
+from .nodes.finalize import finalize_node
+from .nodes.retriever import retriever_node
+from .nodes.structured import structured_node
+from .nodes.supervisor import supervisor
 from .state import W2State
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Stub nodes
+# Stubs owned by parallel agents — DO NOT REPLACE in slices 3.2–3.5/3.8.
 # ---------------------------------------------------------------------------
 
-async def supervisor_stub(state: W2State) -> dict[str, Any]:
-    """Decide the next node based on whether we have a file or a message."""
-    has_file = bool(state.get("file_bytes_ref"))
-    has_message = bool((state.get("message") or "").strip())
-    next_node = "worker_stub" if (has_file or has_message) else "finalize_stub"
+async def demographics_stub(state: W2State) -> dict[str, Any]:
+    """Placeholder for Slice 3.7 (wrong-patient detection).
 
-    logger.info(
-        "graph_supervisor_routed",
-        extra={
-            "request_id": state.get("request_id"),
-            "session_id": state.get("session_id"),
-            "has_file": has_file,
-            "has_message": has_message,
-            "next_node": next_node,
-        },
-    )
-    return {"next_node": next_node}
-
-
-async def worker_stub(state: W2State) -> dict[str, Any]:
-    """Passthrough worker that emits a stub structured response."""
-    return {
-        "structured_response": {
-            "narrative": "stub",
-            "data": None,
-            "citations": [],
-        }
-    }
+    Owned by the parallel agent; this passthrough keeps the topology
+    connected until that node lands.
+    """
+    return {}
 
 
 async def critic_stub(state: W2State) -> dict[str, Any]:
-    """Passthrough critic that always passes."""
+    """Passthrough critic that always passes.
+
+    Owned by the parallel agent (Slice 3.6). Do not modify in this slice.
+    """
     return {"critic_decision": "pass"}
-
-
-async def finalize_stub(state: W2State) -> dict[str, Any]:
-    """Terminal node — logs shape only, never the structured payload."""
-    sr = state.get("structured_response")
-    logger.info(
-        "graph_finalize_complete",
-        extra={
-            "request_id": state.get("request_id"),
-            "session_id": state.get("session_id"),
-            "has_structured_response": sr is not None,
-            "critic_decision": state.get("critic_decision"),
-        },
-    )
-    return {}
 
 
 # ---------------------------------------------------------------------------
 # Graph factory
 # ---------------------------------------------------------------------------
 
+_SUPERVISOR_ROUTES: dict[str, str] = {
+    "extractor": "extractor",
+    "structured": "structured",
+    "retriever": "retriever",
+    "finalize": "finalize",
+}
+
+
 def _route_from_supervisor(state: W2State) -> str:
-    """Map supervisor's `next_node` field to a successor key."""
-    return state.get("next_node") or "finalize_stub"
+    """Map supervisor's ``next_node`` field to a graph node key."""
+    requested = state.get("next_node") or "finalize"
+    return _SUPERVISOR_ROUTES.get(requested, "finalize")
 
 
 def build_graph() -> StateGraph:
-    """Build (but do not compile) the W2 graph with stub nodes wired in.
-
-    Returns the uncompiled `StateGraph` so callers can either compile it
-    themselves with a custom checkpointer or pass it through `compile_graph`.
-    """
+    """Build (but do not compile) the W2 graph."""
     graph: StateGraph = StateGraph(W2State)
 
-    graph.add_node("supervisor_stub", supervisor_stub)
-    graph.add_node("worker_stub", worker_stub)
+    graph.add_node("supervisor", supervisor)
+    graph.add_node("extractor", extractor_node)
+    graph.add_node("structured", structured_node)
+    graph.add_node("retriever", retriever_node)
+    graph.add_node("demographics_stub", demographics_stub)
     graph.add_node("critic_stub", critic_stub)
-    graph.add_node("finalize_stub", finalize_stub)
+    graph.add_node("finalize", finalize_node)
 
-    graph.set_entry_point("supervisor_stub")
+    graph.set_entry_point("supervisor")
     graph.add_conditional_edges(
-        "supervisor_stub",
+        "supervisor",
         _route_from_supervisor,
         {
-            "worker_stub": "worker_stub",
-            "finalize_stub": "finalize_stub",
+            "extractor": "extractor",
+            "structured": "structured",
+            "retriever": "retriever",
+            "finalize": "finalize",
         },
     )
-    graph.add_edge("worker_stub", "critic_stub")
-    graph.add_edge("critic_stub", "finalize_stub")
-    graph.add_edge("finalize_stub", END)
+    graph.add_edge("extractor", "demographics_stub")
+    graph.add_edge("demographics_stub", "critic_stub")
+    graph.add_edge("structured", "critic_stub")
+    graph.add_edge("retriever", "critic_stub")
+    graph.add_edge("critic_stub", "finalize")
+    graph.add_edge("finalize", END)
 
     return graph
 
 
 def compile_graph(*, checkpointer: Any | None = None) -> Any:
-    """Build and compile the graph against the supplied checkpointer.
-
-    The caller owns the checkpointer lifecycle. For tests, pass
-    `langgraph.checkpoint.memory.MemorySaver()`. For production, pass the
-    real LangGraph-compatible saver once Slice 3.x lands the adapter.
-    """
+    """Build and compile the graph against the supplied checkpointer."""
     graph = build_graph()
     return graph.compile(checkpointer=checkpointer)
 

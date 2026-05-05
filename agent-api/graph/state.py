@@ -34,6 +34,7 @@ class W2State(TypedDict):
     soft_warns: NotRequired[List[Dict[str, Any]]]
     structured_response: NotRequired[Dict[str, Any]]
     errors: NotRequired[List[str]]
+    finalized: NotRequired[Dict[str, Any]]
 
     # --- Routing -------------------------------------------------------
     next_node: NotRequired[str]
