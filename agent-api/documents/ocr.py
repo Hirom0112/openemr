@@ -137,8 +137,8 @@ def _pad_word_bbox(
     return (nx, ny, nw, nh)
 
 
-def _extract_image_layout(image_bytes: bytes, *, filetype: str) -> List[LayoutBlock]:
-    """Extract layout from a single-page raster image (PNG/JPEG).
+def _tesseract_extract_image(image_bytes: bytes, *, filetype: str) -> List[LayoutBlock]:
+    """Extract layout from a single-page raster image (PNG/JPEG) via tesseract.
 
     PyMuPDF rasterizes the image into a one-page synthetic doc. The text-layer
     path is empty (it's a raw image). We attempt Tesseract via ``pytesseract``;
@@ -332,6 +332,35 @@ def _extract_image_layout(image_bytes: bytes, *, filetype: str) -> List[LayoutBl
         )
 
     return word_blocks + line_blocks
+
+
+class TesseractEngine:
+    """OCREngine adapter wrapping the historical pytesseract path.
+
+    The actual extraction logic is in ``_tesseract_extract_image`` so that
+    the dispatcher in ``ocr_engine`` can call it without circular imports
+    (``ocr_engine`` imports ``LayoutBlock`` from this module).
+    """
+
+    name: str = "tesseract"
+
+    def extract_image(self, image_bytes: bytes, *, filetype: str) -> List[LayoutBlock]:
+        return _tesseract_extract_image(image_bytes, filetype=filetype)
+
+
+def _extract_image_layout(image_bytes: bytes, *, filetype: str) -> List[LayoutBlock]:
+    """Delegate to the configured OCR engine (tesseract by default).
+
+    Thin wrapper that preserves the historical signature so existing callers
+    in ``main.py``, ``graph/nodes/extractor.py``, and the extractors do not
+    have to change. The engine selection happens inside
+    ``ocr_engine.dispatch_extract_image``.
+    """
+    # Local import — ocr_engine imports LayoutBlock from this module, so
+    # importing it at module top-level would create a cycle on first load.
+    from documents.ocr_engine import dispatch_extract_image
+
+    return dispatch_extract_image(image_bytes, filetype=filetype)
 
 
 def extract_layout(doc_bytes: bytes) -> List[LayoutBlock]:

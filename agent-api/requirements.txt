@@ -27,6 +27,14 @@ python-multipart==0.0.20
 pytesseract==0.3.13
 Pillow>=10.0.0
 
+# Wave 2A: PaddleOCR as an alternate OCR engine, gated by the ``OCR_ENGINE``
+# env var (default ``tesseract``). CPU-only wheels — never use the GPU
+# variants in this image. paddleocr 2.8.x is the latest stable that pairs
+# with paddlepaddle 2.6.x. Both are heavyweight (~600MB combined) so the
+# adapter defers ``import paddleocr`` until first use.
+paddlepaddle==2.6.2
+paddleocr==2.8.1
+
 # Week-2 LangGraph skeleton (Slice 3.1+).
 langgraph==0.2.60
 langchain-core==0.3.28

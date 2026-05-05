@@ -208,3 +208,19 @@ agent_citation_repoint_total = Counter(
     "Citation repointer decisions in the intake extractor",
     ["field", "outcome"],
 )
+
+# ── OCR engine dispatcher (Wave 2A) ──────────────────────────────────────────
+# Recorded once per ``documents.ocr_engine.dispatch_extract_image`` call.
+# ``engine`` ∈ {"tesseract", "paddleocr"}; ``outcome`` ∈ {"success", "error"}.
+agent_ocr_engine_invocations_total = Counter(
+    "agent_ocr_engine_invocations_total",
+    "OCR engine invocations, labelled by engine and outcome",
+    ["engine", "outcome"],
+)
+
+agent_ocr_extraction_duration_seconds = Histogram(
+    "agent_ocr_extraction_duration_seconds",
+    "OCR engine wall-clock seconds per call, labelled by engine",
+    ["engine"],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0),
+)

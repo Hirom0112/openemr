@@ -70,6 +70,17 @@ class Settings(BaseSettings):
     # App
     log_level: str = "INFO"
 
+    # ── OCR engine selection (Wave 2A) ───────────────────────────────────────
+    # Which OCR backend ``documents.ocr._extract_image_layout`` dispatches to
+    # for raster (PNG/JPEG) inputs. PDF text-layer extraction is unaffected.
+    # Valid values (case-insensitive):
+    #   tesseract  — pytesseract + tesseract-ocr binary (default)
+    #   paddleocr  — PaddleOCR (CPU). Requires paddlepaddle wheels.
+    # An unknown value logs a warning and falls back to tesseract — a typo
+    # in the env var must not 500 every document upload. Rollback:
+    # ``OCR_ENGINE=tesseract``.
+    ocr_engine: str = "tesseract"
+
     # ── Auth / CORS ──────────────────────────────────────────────────────────
     # HS256 secret used to verify JWTs minted by the OpenEMR PHP layer.
     # Empty string disables JWT verification (middleware logs a startup

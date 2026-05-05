@@ -6,6 +6,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         tesseract-ocr \
         tesseract-ocr-eng \
+        # Wave 2A: PaddleOCR runtime deps. paddlepaddle links libgomp; opencv
+        # (a paddleocr dependency) needs libgl1 + libglib2.0 for image I/O.
+        libgomp1 \
+        libgl1 \
+        libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
