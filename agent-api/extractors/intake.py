@@ -65,6 +65,14 @@ HARD RULES (the agent will reject your output otherwise):
     field_or_chunk_id = the bbox_id from the OCR layout (e.g. "p2-b005")
     quote_or_value   = the exact substring from THAT bbox's text that
                        contains the value. Do NOT rephrase.
+    nearest_label    = (OPTIONAL, recommended) 1-3 words from the OCR
+                       layout that name the field this value belongs to,
+                       as they appear in the document immediately before
+                       or above the value. Examples: "DOB", "Date of
+                       Birth", "Allergies", "Medications". Used only as
+                       a TIE-BREAKER when multiple bboxes contain the
+                       same value text — never as a primary signal.
+                       Omit if uncertain; do NOT invent labels.
 - The cited bbox MUST contain the field's actual VALUE text — never a
   section header, column name, or row label. Concretely: if the value
   is "06/08/1971", the cited bbox's text must contain "06/08/1971"
@@ -399,39 +407,118 @@ def _nearest_anchor(
     return (best, best_dy)
 
 
+def _label_match_score(
+    candidate: LayoutBlock,
+    blocks: List[LayoutBlock],
+    nearest_label: Optional[str],
+) -> float:
+    """Score (0.0–1.0) how well ``nearest_label`` is grounded in the
+    candidate's spatial neighborhood. Returns 0.0 when no label given.
+
+    Heuristic: a hit if the normalized label appears as a substring in
+    the candidate's own text OR in any block within 200pt euclidean
+    distance of the candidate's centroid on the same page. Returns 1.0
+    on hit, 0.0 otherwise. Kept as a float to leave room for graded
+    scoring later without changing the sort-key shape.
+    """
+    if not nearest_label:
+        return 0.0
+    nl = _normalize_for_match(nearest_label)
+    if not nl or len(nl) < 2:
+        return 0.0
+    # Candidate's own text first (cheapest).
+    if nl in _normalize_for_match(candidate.text):
+        return 1.0
+    cx = float(candidate.bbox[0]) + float(candidate.bbox[2]) / 2.0
+    cy = _block_centroid_y(candidate)
+    for b in blocks:
+        if b.page != candidate.page:
+            continue
+        if b.bbox_id == candidate.bbox_id:
+            continue
+        bx = float(b.bbox[0]) + float(b.bbox[2]) / 2.0
+        by = _block_centroid_y(b)
+        # Cheap rectilinear gate before sqrt — same 200pt window.
+        if abs(bx - cx) > 200.0 or abs(by - cy) > 200.0:
+            continue
+        dist = ((bx - cx) ** 2 + (by - cy) ** 2) ** 0.5
+        if dist > 200.0:
+            continue
+        if nl in _normalize_for_match(b.text):
+            return 1.0
+    return 0.0
+
+
 def _select_best_candidate(
     candidates: List[Tuple[LayoutBlock, int]],
     anchors: List[LayoutBlock],
     field_name: Optional[str],
-) -> Tuple[LayoutBlock, Optional[LayoutBlock], float, str]:
+    *,
+    blocks: Optional[List[LayoutBlock]] = None,
+    nearest_label: Optional[str] = None,
+) -> Tuple[LayoutBlock, Optional[LayoutBlock], float, str, float, bool]:
     """Pick the best candidate block among ≥2 candidates.
 
-    Returns (chosen_block, nearest_anchor, y_distance, outcome_label).
-    Outcome label is one of ``repointed_with_anchor`` (anchor-driven
-    selection succeeded) or ``repointed_no_anchor`` (anchor pool empty
-    or fell back to overlap/granularity tiebreaks)."""
-    # Compute (candidate, overlap, anchor, dy, anchor_compatible) tuples.
+    Returns ``(chosen_block, nearest_anchor, y_distance, outcome_label,
+    label_score, label_tiebreak_used)``.
+
+    Outcome label is one of:
+      ``repointed_with_anchor``                 — anchor-driven selection
+      ``repointed_with_anchor_label_tiebreak``  — y-band tied; LLM-supplied
+                                                  ``nearest_label`` broke
+                                                  the tie
+      ``repointed_no_anchor``                   — fell back to overlap
+
+    Wave 2B+: the LLM-supplied ``nearest_label`` participates ONLY as a
+    tiebreaker. Sort key is widened from
+    ``(|Δy|, -overlap, granularity)`` to
+    ``(|Δy|, -label_score, -overlap, granularity)`` so y-band remains the
+    primary signal. The label score never overrides a smaller |Δy|.
+    """
+    blocks_pool: List[LayoutBlock] = blocks if blocks is not None else []
+    # Compute (candidate, overlap, anchor, dy, anchor_compatible, label_score) tuples.
     enriched: List[
-        Tuple[LayoutBlock, int, Optional[LayoutBlock], float, bool]
+        Tuple[LayoutBlock, int, Optional[LayoutBlock], float, bool, float]
     ] = []
     for cand, overlap in candidates:
         anchor, dy = _nearest_anchor(cand, anchors)
         compat = anchor is not None and _anchor_text_compatible(anchor, field_name)
-        enriched.append((cand, overlap, anchor, dy, compat))
+        label_score = _label_match_score(cand, blocks_pool, nearest_label)
+        enriched.append((cand, overlap, anchor, dy, compat, label_score))
+
+    def _label_tiebreak_used(
+        sorted_set: List[Tuple[LayoutBlock, int, Optional[LayoutBlock], float, bool, float]],
+    ) -> bool:
+        """True iff the chosen candidate's |Δy| equals the runner-up's
+        AND the chosen had a strictly higher label_score. This is the
+        only situation where the label hint actually changed the outcome.
+        """
+        if len(sorted_set) < 2 or not nearest_label:
+            return False
+        head, second = sorted_set[0], sorted_set[1]
+        return head[3] == second[3] and head[5] > second[5]
 
     # Step 1: prefer field-compatible anchored candidates if any exist.
     compat_set = [e for e in enriched if e[4]]
     if compat_set:
-        # Smallest |Δy| wins; tie-break by overlap (desc) then LINE granularity.
+        # Smallest |Δy| wins; tiebreak by label_score (desc), then overlap
+        # (desc), then LINE granularity.
         compat_set.sort(
             key=lambda e: (
                 e[3],
+                -e[5],
                 -e[1],
                 0 if _is_line_granularity(e[0]) else 1,
             )
         )
-        chosen, _ov, anchor, dy, _c = compat_set[0]
-        return (chosen, anchor, dy, "repointed_with_anchor")
+        chosen, _ov, anchor, dy, _c, label_score = compat_set[0]
+        used = _label_tiebreak_used(compat_set)
+        outcome = (
+            "repointed_with_anchor_label_tiebreak"
+            if used
+            else "repointed_with_anchor"
+        )
+        return (chosen, anchor, dy, outcome, label_score, used)
 
     # Step 2: if any anchor exists at all, prefer the candidate whose
     # nearest anchor is closest, regardless of text content.
@@ -440,12 +527,19 @@ def _select_best_candidate(
             enriched,
             key=lambda e: (
                 e[3],
+                -e[5],
                 -e[1],
                 0 if _is_line_granularity(e[0]) else 1,
             ),
         )
-        chosen, _ov, anchor, dy, _c = enriched_sorted[0]
-        return (chosen, anchor, dy, "repointed_with_anchor")
+        chosen, _ov, anchor, dy, _c, label_score = enriched_sorted[0]
+        used = _label_tiebreak_used(enriched_sorted)
+        outcome = (
+            "repointed_with_anchor_label_tiebreak"
+            if used
+            else "repointed_with_anchor"
+        )
+        return (chosen, anchor, dy, outcome, label_score, used)
 
     # Step 3: no anchors detected — fall back to legacy overlap-then-LINE
     # tiebreak. This preserves pre-2B behavior on documents that have no
@@ -454,11 +548,12 @@ def _select_best_candidate(
         enriched,
         key=lambda e: (
             -e[1],
+            -e[5],
             0 if _is_line_granularity(e[0]) else 1,
         ),
     )
-    chosen, _ov, _a, _dy, _c = legacy_sorted[0]
-    return (chosen, None, float("inf"), "repointed_no_anchor")
+    chosen, _ov, _a, _dy, _c, label_score = legacy_sorted[0]
+    return (chosen, None, float("inf"), "repointed_no_anchor", label_score, False)
 
 
 def _find_block_for_value(
@@ -490,8 +585,8 @@ def _find_block_for_value(
     if len(cands) == 1:
         return cands[0][0]
     anchor_pool = anchors if anchors is not None else _detect_section_anchors(blocks)
-    chosen, _anchor, _dy, _outcome = _select_best_candidate(
-        cands, anchor_pool, field_name
+    chosen, _anchor, _dy, _outcome, _ls, _lt = _select_best_candidate(
+        cands, anchor_pool, field_name, blocks=blocks
     )
     return chosen
 
@@ -520,6 +615,7 @@ def _repoint_citation(
     # Lazy-compute the anchor pool once per call site.
     anchor_pool = anchors if anchors is not None else _detect_section_anchors(blocks)
 
+    nearest_label = getattr(cit, "nearest_label", None)
     cited_block = block_index.get(cit.field_or_chunk_id)
     if value and cited_block is not None and _value_in_block(value, cited_block.text):
         # Already cites a block containing the value — just hydrate.
@@ -541,6 +637,8 @@ def _repoint_citation(
                 "anchor_text_preview": None,
                 "y_distance": None,
                 "value_preview": (value or "")[:32],
+                "nearest_label_score": 0.0,
+                "nearest_label_used": False,
             },
         )
         return cit.model_copy(update={"bbox": cited_block.bbox, "page": cited_block.page})
@@ -553,9 +651,17 @@ def _repoint_citation(
                 outcome = "repointed_no_anchor"
                 anchor: Optional[LayoutBlock] = None
                 dy = float("inf")
+                label_score = _label_match_score(target, blocks, nearest_label)
+                label_used = False
             else:
-                target, anchor, dy, outcome = _select_best_candidate(
-                    cands, anchor_pool, field_name
+                target, anchor, dy, outcome, label_score, label_used = (
+                    _select_best_candidate(
+                        cands,
+                        anchor_pool,
+                        field_name,
+                        blocks=blocks,
+                        nearest_label=nearest_label,
+                    )
                 )
             agent_citation_repoint_total.labels(
                 field=field_name or "unknown", outcome=outcome
@@ -580,6 +686,8 @@ def _repoint_citation(
                         round(dy, 2) if dy != float("inf") else None
                     ),
                     "value_preview": (value or "")[:32],
+                    "nearest_label_score": round(label_score, 3),
+                    "nearest_label_used": label_used,
                 },
             )
             return cit.model_copy(
@@ -612,6 +720,8 @@ def _repoint_citation(
                 "anchor_text_preview": None,
                 "y_distance": None,
                 "value_preview": (value or "")[:32],
+                "nearest_label_score": 0.0,
+                "nearest_label_used": False,
             },
         )
 

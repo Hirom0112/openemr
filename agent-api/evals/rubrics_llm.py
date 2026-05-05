@@ -224,4 +224,119 @@ async def safe_refusal(outcome: RunOutcome, case: Any) -> bool:
     return answer == "yes"
 
 
-__all__ = ["factually_consistent", "safe_refusal"]
+def _normalize_for_label_match(s: str) -> str:
+    """Mirror ``extractors.intake._normalize_for_match`` — strip non-word
+    chars, uppercase. Kept inline to avoid a cross-package import."""
+    out = []
+    for ch in s or "":
+        if ch.isalnum():
+            out.append(ch.upper())
+    return "".join(out)
+
+
+def _iter_citations_with_bbox(extraction: Any) -> Iterable[dict]:
+    """Yield each citation dict that carries a ``nearest_label`` field.
+
+    Mirrors the pool-walking shape used in
+    ``run_full_suite._first_citation_bbox`` so the rubric is consistent
+    with the bbox-IoU rubric's denominator definition.
+    """
+    if not isinstance(extraction, dict):
+        return
+    pools: list[Any] = []
+    kind = extraction.get("kind")
+    if kind == "intake_form":
+        for key in ("current_medications", "allergies", "family_history"):
+            pools.extend(extraction.get(key) or [])
+        demographics = extraction.get("demographics") or {}
+        if isinstance(demographics, dict):
+            for k in ("name", "dob", "sex", "mrn", "address"):
+                v = demographics.get(k)
+                if isinstance(v, dict):
+                    pools.append(v)
+        chief = extraction.get("chief_concern")
+        if isinstance(chief, dict):
+            pools.append(chief)
+    elif kind == "lab_report":
+        pools = list(extraction.get("values") or [])
+    elif kind == "unknown":
+        pools = list(extraction.get("key_facts") or [])
+    for item in pools:
+        if not isinstance(item, dict):
+            continue
+        for cit in item.get("citations") or []:
+            if isinstance(cit, dict) and cit.get("nearest_label"):
+                yield cit
+
+
+def nearest_label_grounded(
+    outcome: RunOutcome,
+    case: Any,
+    *,
+    layout_blocks: Optional[list[Any]] = None,
+) -> Optional[bool]:
+    """Info-only rubric — does the LLM-returned ``nearest_label`` for
+    each citation actually appear in the document layout near the cited
+    bbox? PASS iff the normalized label substring appears in any layout
+    block within a 200-PDF-point Euclidean window of the citation's
+    bbox centroid (same page).
+
+    Returns:
+      ``True``  — at least one labeled citation, all grounded.
+      ``False`` — at least one labeled citation failed to ground.
+      ``None``  — no labels emitted on this case (rubric is vacuously
+                  skipped; do NOT count toward pass-rate denominator).
+
+    The ``layout_blocks`` keyword is accepted for tests; production
+    callers will pass the OCR layout retrieved alongside ``outcome``.
+    """
+    extraction = getattr(outcome, "extraction", None)
+    cits = list(_iter_citations_with_bbox(extraction))
+    if not cits:
+        return None
+    if not layout_blocks:
+        # No layout to verify against — treat as skipped rather than failed.
+        return None
+
+    def _label_grounded(cit: dict) -> bool:
+        nl = _normalize_for_label_match(str(cit.get("nearest_label") or ""))
+        if not nl or len(nl) < 2:
+            return False
+        bbox = cit.get("bbox")
+        page = cit.get("page")
+        if not bbox or page is None:
+            # Without a citation bbox we can't apply the 200pt window;
+            # fall back to "label appears anywhere in the document".
+            for b in layout_blocks:
+                if nl in _normalize_for_label_match(getattr(b, "text", "") or ""):
+                    return True
+            return False
+        try:
+            x, y, w, h = bbox if isinstance(bbox, (list, tuple)) else (
+                bbox["x"], bbox["y"], bbox["w"], bbox["h"],
+            )
+        except (KeyError, TypeError, ValueError):
+            return False
+        cx = float(x) + float(w) / 2.0
+        cy = float(y) + float(h) / 2.0
+        for b in layout_blocks:
+            b_page = getattr(b, "page", None)
+            if b_page is not None and b_page != page:
+                continue
+            b_bbox = getattr(b, "bbox", None)
+            if not b_bbox:
+                continue
+            bx = float(b_bbox[0]) + float(b_bbox[2]) / 2.0
+            by = float(b_bbox[1]) + float(b_bbox[3]) / 2.0
+            if abs(bx - cx) > 200.0 or abs(by - cy) > 200.0:
+                continue
+            if ((bx - cx) ** 2 + (by - cy) ** 2) ** 0.5 > 200.0:
+                continue
+            if nl in _normalize_for_label_match(getattr(b, "text", "") or ""):
+                return True
+        return False
+
+    return all(_label_grounded(c) for c in cits)
+
+
+__all__ = ["factually_consistent", "safe_refusal", "nearest_label_grounded"]

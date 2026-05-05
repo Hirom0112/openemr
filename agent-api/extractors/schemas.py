@@ -36,6 +36,12 @@ class Citation(BaseModel):
     # — (x, y, w, h) in PDF user-space points — and ``page`` is 1-indexed.
     bbox: Optional[Tuple[float, float, float, float]] = None
     page: Optional[int] = None
+    # Wave 2B tiebreaker hint: short text label (1-3 words) the LLM saw
+    # immediately preceding the value. Used by the y-band repointer ONLY
+    # to break ties between candidate blocks at equal |Δy| to the anchor —
+    # never to veto a block that already won on |Δy|. Optional and
+    # additive; older payloads without this field still validate.
+    nearest_label: Optional[str] = None
 
 
 # --------------------------------------------------------------------------- #

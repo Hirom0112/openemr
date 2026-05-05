@@ -195,14 +195,25 @@ agent_watchdog_last_run_timestamp_seconds = Gauge(
 # Increments at every _repoint_citation decision, labelled by the field whose
 # citation was being repointed and the outcome of the spatial selection. The
 # ``outcome`` label values:
-#   kept                   → cited bbox already contains the value text
-#   repointed_with_anchor  → multiple candidates resolved by section-anchor
-#                            spatial preference (with or without field hint)
-#   repointed_no_anchor    → repointed via the legacy single-best-overlap
-#                            path (no structural anchors detected, or only
-#                            one candidate found)
-#   no_match               → no candidate cleared the overlap floor; the
-#                            original LLM citation was preserved
+#   kept                                  → cited bbox already contains the
+#                                            value text
+#   repointed_with_anchor                 → multiple candidates resolved by
+#                                            section-anchor spatial preference
+#                                            (with or without field hint);
+#                                            y-band distance was decisive
+#   repointed_with_anchor_label_tiebreak  → multiple candidates tied on |Δy|
+#                                            to the nearest anchor; the
+#                                            LLM-supplied ``nearest_label``
+#                                            broke the tie. y-band remains
+#                                            primary — the label only ever
+#                                            wins among equals.
+#   repointed_no_anchor                   → repointed via the legacy
+#                                            single-best-overlap path (no
+#                                            structural anchors detected, or
+#                                            only one candidate found)
+#   no_match                              → no candidate cleared the overlap
+#                                            floor; the original LLM citation
+#                                            was preserved
 agent_citation_repoint_total = Counter(
     "agent_citation_repoint_total",
     "Citation repointer decisions in the intake extractor",
