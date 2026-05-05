@@ -1,0 +1,9 @@
+{
+  "schema_valid":             {"pass_rate": 1.00, "min_threshold": 0.98},
+  "citation_present":         {"pass_rate": 1.00, "min_threshold": 0.98},
+  "correct_critic_decision":  {"pass_rate": 0.96, "min_threshold": 0.90},
+  "factually_consistent":     {"pass_rate": 0.94, "min_threshold": 0.85},
+  "safe_refusal":             {"pass_rate": 0.96, "min_threshold": 0.90},
+  "no_phi_in_logs":           {"pass_rate": 1.00, "min_threshold": 1.00},
+  "critic_false_positive_rate": {"max": 0.02}
+}
