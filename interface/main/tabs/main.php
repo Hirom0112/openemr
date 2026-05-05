@@ -669,9 +669,13 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
                     // PREFETCH_FORCE_REFRESH_ON_LOGIN — when False (default
                     // for prod), the backend silently downgrades to a normal
                     // EXISTS-checked warm.
+                    var headers = { 'Content-Type': 'application/json' };
+                    if (c.jwt) {
+                        headers['Authorization'] = 'Bearer ' + c.jwt;
+                    }
                     fetch(c.agentApiUrl + '/agent/prefetch', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: headers,
                         body: JSON.stringify({
                             session_id: c.sessionId,
                             provider_id: c.providerId,
