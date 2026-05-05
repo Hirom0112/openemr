@@ -150,11 +150,25 @@ function decorateCitationsWithLabels(
   extraction: unknown,
 ): W2Citation[] {
   const labels = buildLabelMap(extraction);
-  if (labels.size === 0) return citations;
-  return citations.map((c) => {
-    const lbl = labels.get(c.field_or_chunk_id);
-    return lbl ? { ...c, label: lbl } : c;
-  });
+  const labelled = labels.size === 0
+    ? citations
+    : citations.map((c) => {
+        const lbl = labels.get(c.field_or_chunk_id);
+        return lbl ? { ...c, label: lbl } : c;
+      });
+  // Dedupe by display label so a value found in N OCR blocks (e.g. DOB
+  // appearing in both header and body) shows up as one chip. Citations
+  // without a label are passed through untouched — they're already
+  // distinguishable by source/page.
+  const seen = new Set<string>();
+  const out: W2Citation[] = [];
+  for (const c of labelled) {
+    const key = c.label ?? '';
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    out.push(c);
+  }
+  return out;
 }
 
 /**

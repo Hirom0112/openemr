@@ -43,7 +43,11 @@ final class UploadController
     private const ALGORITHM       = 'HS256';
     private const MIN_SECRET_LEN  = 32;
     private const MAX_BYTES       = 25 * 1024 * 1024;   // 25 MB
-    private const ALLOWED_MIME    = 'application/pdf';
+    private const ALLOWED_MIMES   = [
+        'application/pdf',
+        'image/png',
+        'image/jpeg',
+    ];
     private const DEFAULT_CATEGORY = 'Medical Record';
 
     /**
@@ -93,7 +97,7 @@ final class UploadController
             $mime = function_exists('mime_content_type')
                 ? (string) (mime_content_type($tmpName) ?: '')
                 : '';
-            if ($mime === '' || stripos($mime, 'pdf') === false) {
+            if ($mime === '' || !in_array(strtolower($mime), self::ALLOWED_MIMES, true)) {
                 self::respond(400, ['error' => 'unsupported_mime', 'mime' => $mime]);
                 return;
             }
@@ -116,7 +120,7 @@ final class UploadController
                 $patientId,
                 $categoryId,
                 $filename,
-                self::ALLOWED_MIME,
+                strtolower($mime),
                 $data,
                 '',
                 1,
