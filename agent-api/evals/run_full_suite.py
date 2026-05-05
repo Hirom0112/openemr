@@ -851,11 +851,22 @@ def main(argv: list[str] | None = None) -> int:
             "Bump EVAL_CACHE_VERSION to invalidate when prompts change."
         ),
     )
+    parser.add_argument(
+        "--repoint-trace",
+        type=Path,
+        default=None,
+        help=(
+            "Path for the per-case repoint_trace.jsonl artifact. "
+            "Defaults to <output_dir>/repoint_trace.jsonl."
+        ),
+    )
     args = parser.parse_args(argv)
 
     md_path = args.md or args.output.with_suffix(".md")
+    trace_path = args.repoint_trace or (args.output.parent / "repoint_trace.jsonl")
 
-    case_rows, scores, scored_cases, outcomes_by_case_id, cache_stats = asyncio.run(_run_async(args))
+    with _repoint_trace_capture(trace_path):
+        case_rows, scores, scored_cases, outcomes_by_case_id, cache_stats = asyncio.run(_run_async(args))
 
     from evals.scoring import aggregate  # type: ignore
     # Existing rubric pass-rates are computed over the original (pre-Wave-2C)
