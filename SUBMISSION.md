@@ -36,7 +36,7 @@ The 50-case W2 eval suite is wired into GitHub Actions and hard-fails on regress
 - 49 agent-ui Jest tests, 0 failures.
 - 0 import-linter contract violations (`agent-api/.importlinter`).
 
-**Gate mechanics:** 50 cases × 6 boolean rubrics → per-rubric pass rates compared against `evals/baseline.json`. `evals/diff_baseline.py` enforces the per-rubric floor. CI workflow: `.github/workflows/copilot-eval.yml` (job `w2-eval`).
+**Gate mechanics:** 50 cases × 7 boolean rubrics → per-rubric pass rates compared against `evals/baseline.json`. `evals/diff_baseline.py` enforces the per-rubric floor. CI workflow: `.github/workflows/copilot-eval.yml` (job `w2-eval`). The seventh rubric — `provenance_chain` — asserts that every extracted LabValue produces a FHIR-shaped `Observation` row with a non-empty `derivedFrom` array referencing the source `DocumentReference`, and that every citation's `bbox_id` resolves into the extraction's OCR layout. See `EVAL.md` for the full rubric set.
 
 ---
 
@@ -67,6 +67,27 @@ The 50-case W2 eval suite is wired into GitHub Actions and hard-fails on regress
 
 ---
 
+## Deliberate v1 / v2 scope split
+
+Two architectural deviations forced by upstream OpenEMR limitations (write-side FHIR routes return 404 on this build) and one read-side gap. v1 ships a working, queryable, FHIR-shaped provenance chain; v2 bridges into OpenEMR's standard FHIR read controllers.
+
+| Surface | v1 (shipped) | v2 (bridge work) |
+|---|---|---|
+| **Document write** | Custom JWT endpoint → OpenEMR `documents` table (visible in Documents tab). Resource id `copilot-{doc_id}` | OpenEMR's FHIR `Binary` POST (currently returns 404 — upstream limitation). |
+| **Observation write** | Custom JWT endpoint → module-private `copilot_observations` MySQL table. FHIR-shaped resources with `derivedFrom: DocumentReference/copilot-{doc_id}` and deterministic ids `copilot-{doc_id}-{loinc_code}` | Bridge into OpenEMR's `procedure_result` so standard FHIR `Observation` reads auto-surface. |
+| **DocumentReference read** | Documents are visible in OpenEMR's Documents tab UI; the chain is queryable from the agent-api response envelope (`metadata.observation_ids`) and via direct MySQL inspection | OpenEMR's FHIR `DocumentReference` GET currently returns `total=0` because `DocumentService::search` calls `can_access($_SESSION['authUser'])` and OAuth-bearer requests don't bind `authUser` into the session on this build. ACL chain is correct (admin → Administrators ARO → ACL 10 with patients/docs grant); the gap is OAuth-to-PHP-session bridging. |
+| **Observation read** | Through the agent-api response envelope (the chain is queryable end-to-end via the agent-api side and the `copilot_observations` MySQL table) | Bridge to procedure_result OR add a read-side custom endpoint mirroring the writes. |
+
+The provenance chain (auditor's path) holds end-to-end today via:
+
+1. extracted `LabValue.citations[i].field_or_chunk_id` (bbox)
+2. → row in `copilot_observations` keyed on `copilot-{doc_id}-{loinc_code}`
+3. → `fhir_resource.derivedFrom` → `DocumentReference/copilot-{doc_id}`
+4. → row in OpenEMR `documents` (id={doc_id}, foreign_id=patient_id)
+5. → source PDF bytes via the Documents tab UI
+
+This is verified by `scripts/verify_mvp.sh` Check 5 and gated by the `provenance_chain` rubric in the eval suite. v2 makes the same chain queryable through OpenEMR's standard FHIR endpoints without rewriting any of v1.
+
 ## Known gaps — Phase 8 conditional items
 
 Stating these honestly rather than papering over them. Each is scoped, deferred to Phase 8 or beyond, and does not affect the core demonstration.
@@ -83,4 +104,5 @@ Stating these honestly rather than papering over them. Each is scoped, deferred 
 Two items recorded for the reviewer rather than buried.
 
 - **Pre-existing W1 test failures in CI are unrelated to W2 work.** I reproduced them on the pre-Phase-1 commit (W2 branch point) — they are inherited W1 baseline noise, not regressions introduced by W2 changes.
-- **Document persistence on Railway uses the custom upload tier**, not OpenEMR's documented FHIR Binary write or legacy REST upload, because both upstream paths fail on the deployed OpenEMR build (FHIR `Binary` is `read`-only and the route returns 404; legacy REST upload is ACL-gated and returns 401 even with a valid bearer token and `api:oemr` scope). Full analysis in `W2_ARCHITECTURE.md` §4.2.1; security tradeoff of the shared-HMAC custom path in §4.2.2 and `docs/SECURITY_TRADEOFFS.md`. The deviation is reversible and gated by an environment variable (`COPILOT_JWT_SECRET`); unsetting it disables tier 3 and the fallback chain falls through cleanly.
+- **Document AND Observation writes on Railway use custom JWT-protected endpoints**, not OpenEMR's FHIR Binary / Observation POST routes, because both upstream routes return HTTP 404 on this OpenEMR build (verified by direct probe). The legacy REST `/api/patient/.../document` upload also returns 401 unrelated to OAuth scope. Full analysis in `W2_ARCHITECTURE.md` §4.2.1 (DocumentReference) + §4.2.4 (Observation). Security tradeoff of the shared-HMAC custom path in §4.2.2 and `docs/SECURITY_TRADEOFFS.md`. The deviation is reversible and gated by an environment variable (`COPILOT_JWT_SECRET`); unsetting it disables both custom tiers cleanly.
+- **FHIR `DocumentReference` GET currently returns total=0** despite documents being persisted and the OAuth user's ACL chain resolving. Empirically: bearer's `sub` is admin's UUID, scopes are granted, `/Patient` returns total=1 (auth chain works), `/DocumentReference` with no filter returns total=0. The gap is in OpenEMR's `DocumentService::search` (line 282-286) which calls `can_access($_SESSION['authUser'])` and OAuth-bearer requests don't bind `authUser` into the session on this build. v1 ships a working chain via the agent-api response envelope + `copilot_observations` direct query; v2 bridges into procedure_result so OpenEMR's standard FHIR reads auto-surface.
