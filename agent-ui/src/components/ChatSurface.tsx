@@ -1113,6 +1113,16 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       narrativeLines.push(`Written to FHIR: \`${fhirPath}\`.`);
     }
 
+    // Stash the dropped File as an object URL so DocumentViewer has bytes to
+    // render. The agent-api response carries a document_reference_id but no
+    // back-channel to fetch the bytes (the architecture's §4.7
+    // /document/{id}/preview endpoint is Phase 8 / not yet built). Until
+    // then the iframe-side file blob is the source of truth for the PDF
+    // viewer. Object URLs live for the page lifetime — fine for a session.
+    const dropPdfUrl = (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function')
+      ? URL.createObjectURL(file)
+      : undefined;
+
     const response: AgentResponse = {
       type: 'text',
       data: { extraction: resp.extraction, document_reference_id: resp.document_reference_id },
@@ -1125,7 +1135,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           citations: resp.citations,
           soft_warns: resp.soft_warns,
           ocr_layout: ext?.ocr_layout,
-          pdf_url: ext?.pdf_url,
+          pdf_url: ext?.pdf_url || dropPdfUrl,
         },
       },
     };
