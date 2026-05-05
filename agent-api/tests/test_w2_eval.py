@@ -15,6 +15,8 @@ _VALID_BUCKETS = {
     "wrong_type_hint", "wrong_patient", "blank_noise",
     "mixed_content", "low_quality_scan", "intra_doc_conflict",
     "evidence_retrieval", "missing_data",
+    # Wave 2C — synthetic fixtures with bbox ground-truth sidecars.
+    "bbox_gt",
 }
 _VALID_KINDS = {"lab_report", "intake_form", "unknown"}
 _VALID_DECISIONS = {"pass", "soft_warn", "hard_block"}

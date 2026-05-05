@@ -23,6 +23,10 @@ def _baseline_results() -> dict:
     for k, v in spec.items():
         if k == "critic_false_positive_rate":
             out[k] = 0.0
+        elif k == "per_modality":
+            # Wave 2C — nested per-modality block; not a pass_rate rubric.
+            # Mirrors the skip in evals/diff_baseline.py.
+            continue
         else:
             out[k] = v["pass_rate"]
     return out
@@ -69,7 +73,12 @@ def test_no_phi_in_logs_failure_is_absolute(tmp_path):
 
 def test_critic_false_positive_above_max_fails(tmp_path):
     results = _baseline_results()
-    results["critic_false_positive_rate"] = 0.03
+    # Pick a value strictly above whatever ``max`` the committed baseline
+    # carries today — Phase 2 raised the cap from 0.02 to 0.1636, so a
+    # hard-coded 0.03 no longer trips the gate. Compute it from the spec.
+    spec = json.loads(BASELINE.read_text())
+    cap = float(spec["critic_false_positive_rate"]["max"])
+    results["critic_false_positive_rate"] = cap + 0.05
     proc = _run(results, tmp_path)
     assert proc.returncode == 1
     assert "critic_false_positive_rate" in proc.stdout
