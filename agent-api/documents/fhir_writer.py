@@ -29,6 +29,7 @@ import logging
 from typing import Any, Literal, NamedTuple
 
 import httpx
+import jwt as _jwt
 
 # documents-isolated importlinter contract carves out auth.fhir_client
 # explicitly so this slice can reuse the existing OAuth-aware client + token
@@ -59,7 +60,12 @@ class WriteResult(NamedTuple):
 
     document_reference_id: str
     binary_id: str
-    path: Literal["fhir", "rest_fallback"]
+    path: Literal[
+        "fhir",
+        "rest_fallback",
+        "copilot_custom",
+        "local_disk_fallback",
+    ]
 
 
 class FhirWriteError(RuntimeError):
@@ -175,6 +181,77 @@ async def _write_via_fhir(
     )
 
 
+def _mint_copilot_jwt(provider_id: str = "0") -> str | None:
+    """Mint an HS256 JWT compatible with PHP JwtMinter's shape.
+
+    Returns None when ``copilot_jwt_secret`` is unset/short — caller must
+    skip the custom endpoint entirely (it would 401 anyway).
+    """
+    secret = settings.copilot_jwt_secret
+    if not secret or len(secret) < 32:
+        return None
+    now = int(_dt.datetime.now(_dt.timezone.utc).timestamp())
+    claims = {
+        "sub": str(provider_id),
+        "sid": f"agent-api-doc-{now}",
+        "iat": now,
+        "exp": now + 300,  # 5-minute TTL — single-shot upload
+        "iss": "openemr-copilot",
+    }
+    return _jwt.encode(claims, secret, algorithm="HS256")
+
+
+def _custom_upload_url() -> str:
+    return (
+        settings.openemr_base_url.rstrip("/")
+        + "/interface/modules/custom_modules/oe-module-clinical-copilot/public/upload.php"
+    )
+
+
+async def _write_via_custom_endpoint(
+    *,
+    patient_id: str,
+    pdf_bytes: bytes,
+    mime_type: str,
+    display: str | None,
+    doc_type_hint: str | None,
+) -> WriteResult:
+    """Second-tier fallback: POST to the custom Co-Pilot upload endpoint.
+
+    Skips the FHIR + REST gauntlet entirely and writes directly into
+    OpenEMR's documents table via the legacy ``Document::createDocument``
+    API. Authenticated by the same HS256 JWT shape JwtMinter.php mints.
+    """
+    token = _mint_copilot_jwt()
+    if token is None:
+        raise RuntimeError("copilot_jwt_secret unset — custom endpoint skipped")
+
+    url = _custom_upload_url()
+    filename = (display or "document") + ".pdf"
+    files = {"document": (filename, pdf_bytes, mime_type)}
+    data: dict[str, str] = {"patient_id": patient_id}
+    if doc_type_hint:
+        data["doc_type_hint"] = doc_type_hint
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.post(
+            url,
+            files=files,
+            data=data,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or "documentId" not in payload:
+        raise RuntimeError("custom upload returned no documentId field")
+    document_id = payload["documentId"]
+    return WriteResult(
+        document_reference_id=f"copilot:{document_id}",
+        binary_id="",
+        path="copilot_custom",
+    )
+
+
 async def _write_local_disk(
     *,
     patient_id: str,
@@ -227,7 +304,7 @@ async def _write_via_rest(
     url = f"{_rest_base()}/patient/{patient_id}/document"
     token = await get_access_token(force_refresh=False)
     filename = (display or "document") + ".pdf"
-    files = {"file": (filename, pdf_bytes, mime_type)}
+    files = {"document": (filename, pdf_bytes, mime_type)}
     async with httpx.AsyncClient(timeout=120) as client:
         response = await client.post(
             url,
@@ -295,23 +372,36 @@ async def write_document(
             )
         except Exception as rest_exc:  # noqa: BLE001
             _logger.warning(
-                "fhir_document_rest_fallback_failed_using_local",
+                "fhir_document_rest_fallback_failed_trying_custom",
                 extra={"error": str(rest_exc)},
             )
             try:
-                result = await _write_local_disk(
+                result = await _write_via_custom_endpoint(
                     patient_id=patient_id,
                     pdf_bytes=pdf_bytes,
+                    mime_type=mime_type,
                     display=display,
+                    doc_type_hint=doc_type_hint,
                 )
-            except Exception as local_exc:  # noqa: BLE001
-                _logger.error(
-                    "fhir_document_write_all_failed",
-                    extra={"error": str(local_exc)},
+            except Exception as custom_exc:  # noqa: BLE001
+                _logger.warning(
+                    "fhir_document_custom_fallback_failed_using_local",
+                    extra={"error": str(custom_exc)},
                 )
-                raise FhirWriteError(
-                    "FHIR + REST + local-disk fallbacks all failed"
-                ) from local_exc
+                try:
+                    result = await _write_local_disk(
+                        patient_id=patient_id,
+                        pdf_bytes=pdf_bytes,
+                        display=display,
+                    )
+                except Exception as local_exc:  # noqa: BLE001
+                    _logger.error(
+                        "fhir_document_write_all_failed",
+                        extra={"error": str(local_exc)},
+                    )
+                    raise FhirWriteError(
+                        "FHIR + REST + custom + local-disk fallbacks all failed"
+                    ) from local_exc
 
     _logger.info(
         "fhir_document_write_ok",

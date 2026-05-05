@@ -52,9 +52,13 @@ def _make_handler(
     rest_status: int = 200,
     rest_body: dict[str, Any] | None = None,
     rest_raise: bool = False,
+    custom_status: int = 200,
+    custom_body: dict[str, Any] | None = None,
+    custom_raise: bool = False,
     captured: list[dict[str, Any]] | None = None,
 ):
     rest_body = rest_body if rest_body is not None else {"documentId": 9876}
+    custom_body = custom_body if custom_body is not None else {"documentId": 12345}
 
     def _handler(request: httpx.Request) -> httpx.Response:
         # Token endpoint stub — get_access_token() may hit this.
@@ -102,6 +106,10 @@ def _make_handler(
             if rest_raise:
                 raise httpx.ConnectError("simulated REST error", request=request)
             return httpx.Response(rest_status, json=rest_body)
+        if path.endswith("/oe-module-clinical-copilot/public/upload.php"):
+            if custom_raise:
+                raise httpx.ConnectError("simulated custom error", request=request)
+            return httpx.Response(custom_status, json=custom_body)
 
         return httpx.Response(404, json={"error": f"unhandled {path}"})
 
@@ -205,17 +213,23 @@ async def test_fallback_to_rest_when_binary_post_fails() -> None:
     assert rest_calls[0]["url"].endswith("/api/patient/42/document")
 
 
-async def test_falls_back_to_local_disk_when_fhir_and_rest_fail(tmp_path) -> None:
-    """Risk #1 third-tier fallback: when FHIR and REST both 4xx/5xx, the
-    writer persists locally so the rest of the ingest pipeline still runs.
+async def test_falls_back_to_local_disk_when_fhir_and_rest_fail(tmp_path, monkeypatch) -> None:
+    """Risk #1 fourth-tier fallback: when FHIR + REST + custom endpoint all
+    4xx/5xx, the writer persists locally so the rest of the ingest
+    pipeline still runs.
 
     On Railway this is the documented MVP behaviour for OpenEMR builds
     that advertise FHIR Binary as read-only and don't expose the
     legacy REST upload either.
     """
     import os
-    handler = _make_handler(binary_raise=True, rest_raise=True)
+    # Custom endpoint also raises so the chain falls all the way through.
+    handler = _make_handler(binary_raise=True, rest_raise=True, custom_raise=True)
     os.environ["LOCAL_DOC_FALLBACK_DIR"] = str(tmp_path)
+    monkeypatch.setattr(
+        "documents.fhir_writer.settings.copilot_jwt_secret",
+        "x" * 32,
+    )
 
     try:
         with _patch_httpx(handler):
@@ -235,10 +249,52 @@ async def test_falls_back_to_local_disk_when_fhir_and_rest_fail(tmp_path) -> Non
     assert result2.document_reference_id == expected_id
 
 
+async def test_falls_back_to_custom_endpoint_when_fhir_and_rest_fail(monkeypatch) -> None:
+    """Third-tier fallback: when FHIR Binary is read-only and the legacy
+    REST /api/patient/.../document path 401s, the writer hits the custom
+    Co-Pilot upload endpoint, which round-trips into OpenEMR's documents
+    table via Document::createDocument.
+    """
+    captured: list[dict[str, Any]] = []
+    handler = _make_handler(
+        binary_raise=True,
+        rest_raise=True,
+        custom_status=200,
+        custom_body={"documentId": 12345},
+        captured=captured,
+    )
+    # Custom endpoint requires a JWT secret >=32 chars to mint a token.
+    monkeypatch.setattr(
+        "documents.fhir_writer.settings.copilot_jwt_secret",
+        "x" * 32,
+    )
+
+    with _patch_httpx(handler):
+        result = await write_document(
+            patient_id="42",
+            pdf_bytes=_PDF_BYTES,
+            doc_type_hint="lab_report",
+        )
+
+    assert result.path == "copilot_custom"
+    assert result.document_reference_id == "copilot:12345"
+    assert result.binary_id == ""
+
+    custom_calls = [
+        c for c in captured
+        if c["url"].endswith("/oe-module-clinical-copilot/public/upload.php")
+    ]
+    assert len(custom_calls) == 1
+
+
 async def test_raises_when_local_disk_also_fails(tmp_path, monkeypatch) -> None:
-    handler = _make_handler(binary_raise=True, rest_raise=True)
+    handler = _make_handler(binary_raise=True, rest_raise=True, custom_raise=True)
     # Point the fallback at an unwritable path to force the third tier to fail.
     monkeypatch.setenv("LOCAL_DOC_FALLBACK_DIR", "/nonexistent/forbidden")
+    monkeypatch.setattr(
+        "documents.fhir_writer.settings.copilot_jwt_secret",
+        "x" * 32,
+    )
 
     def _boom(*_a, **_kw):
         raise OSError("simulated unwritable")
