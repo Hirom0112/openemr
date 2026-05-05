@@ -25,13 +25,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# Bypass JWT before importing main: the middleware short-circuits on empty
-# secret and lets every request through with principal=None — exactly what
-# we want for these tests.
-os.environ["COPILOT_JWT_SECRET"] = ""
-# audit_db_url empty so audit_writer.emit() is a hard no-op for any path
-# that doesn't explicitly capture it.
-os.environ.setdefault("AUDIT_DB_URL", "")
+# JWT and AUDIT_DB_URL bypass is set in conftest.py so it lands before any
+# sibling test file imports config.settings (pydantic-settings reads env once
+# at import time).
 
 import pymupdf  # noqa: E402
 

@@ -5,6 +5,12 @@ export interface CopilotConfig {
   sessionId: string;
   patientIds?: string[];
   providerName?: string;
+  /**
+   * HS256 JWT minted by the OpenEMR PHP layer (JwtMinter.php). Absent when
+   * COPILOT_JWT_SECRET is unset on the server — treat absence as "auth
+   * disabled" and skip the Authorization header (preserves dev workflow).
+   */
+  jwt?: string;
 }
 
 /** Legacy triage entry shape from /triage/census */

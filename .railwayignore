@@ -1,0 +1,29 @@
+# Railway upload exclusions. The Dockerfile's COPY layout is gated by
+# .dockerignore (whitelist), but `railway up` uploads the full working
+# tree before Docker even runs. Without this file the CLI tries to ship
+# 2.8GB and times out.
+
+.git/
+.claude/
+tmp-phpstan/
+node_modules/
+**/node_modules/
+vendor/
+**/vendor/
+Documentation/
+tools/
+.pytest_cache/
+**/.pytest_cache/
+__pycache__/
+**/__pycache__/
+*.pyc
+.venv/
+**/.venv/
+agent-ui/dist/
+agent-ui/node_modules/
+.idea/
+.vscode/
+.DS_Store
+**/.DS_Store
+.phpunit.result.cache
+.php-cs-fixer.cache

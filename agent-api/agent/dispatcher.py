@@ -44,7 +44,57 @@ from agent.tools import _normalize_patient_id
 from agent.schemas import DISPATCHER_TOOLS
 from agent.system_prompt import build_system_prompt
 from agent.tool_registry import TOOL_REGISTRY
+from audit.models import AuditEvent as _PHIAuditEvent
 from audit.openemr_log import emit_audit_event
+from audit.writer import emit as _emit_phi_audit
+
+
+def _phi_audit_tool(
+    *,
+    session_id: str,
+    provider_id: str | None,
+    tool_name: str,
+    outcome: str,
+    duration_ms: int,
+    patient_id: str | None = None,
+    failure_class: str | None = None,
+    event_type: str = "tool_call",
+) -> None:
+    """Schedule a fire-and-forget Postgres PHI-audit insert.
+
+    Distinct from :func:`emit_audit_event` (which writes to the OpenEMR
+    MySQL ``log`` table). Both pipelines fire on every tool call so the
+    cutover from MySQL → Postgres can be monitored side-by-side.
+    """
+    detail: dict[str, Any] = {}
+    if failure_class is not None:
+        detail["failure_class"] = failure_class
+    # Read request_id from the ambient ContextVar so the PHI audit row
+    # correlates with the same X-Request-ID header logs and metrics use.
+    try:
+        from observability.json_logging import request_id_var as _rid_var
+        rid = _rid_var.get()
+    except (LookupError, ImportError):
+        rid = None
+    event = _PHIAuditEvent(
+        event_type=event_type,
+        request_id=rid,
+        session_id=session_id,
+        provider_id=provider_id,
+        patient_id=patient_id,
+        tool_name=tool_name,
+        outcome=outcome,
+        duration_ms=duration_ms,
+        detail_json=detail,
+    )
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_emit_phi_audit(event))
+    except RuntimeError:
+        # No running loop (sync test contexts) — drop silently; the
+        # writer is fire-and-forget by contract.
+        return
+from auth import check_patient_scope, request_principal_var
 from config import settings
 from verification.dispatcher_response import verify_dispatcher_response
 from verification.domain_constraints import verify_conversation_answer
@@ -1932,33 +1982,56 @@ async def dispatch(
                             tool_input["patient_id"] = resolved_pid
                             requested_pid = resolved_pid
 
-                    if (
-                        requested_pid is not None
-                        and census_ids
-                        and requested_pid not in census_ids
-                    ):
-                        logger.warning(
-                            "Census scope violation blocked",
-                            extra={"session_id": session_id, "requested": requested_pid},
+                    # Pre-tool-call scope check (defense in depth). The
+                    # resolution block above already rewrote tool_input
+                    # when it could; check_patient_scope is the
+                    # authoritative deny — and unlike the inline check it
+                    # runs for every patient-keyed tool call, not only
+                    # when the planner emitted a non-canonical pid.
+                    scope_allowed, scope_reason = check_patient_scope(
+                        tool_name, tool_input, session_context
+                    )
+                    if not scope_allowed:
+                        principal = request_principal_var.get()
+                        provider_id = (
+                            (principal or {}).get("provider_id")
+                            or session_context.get("provider_id")
                         )
-                        tool_result_content = json.dumps({
-                            "error": "Patient not on active census. Please confirm patient identity before accessing records.",
-                            "scope_enforcement": True,
-                            "requested_patient_id": requested_pid,
-                        })
+                        principal_session_id = (principal or {}).get("session_id")
+                        logger.warning(
+                            "tool_scope_violation",
+                            extra={
+                                "tool_name": tool_name,
+                                "patient_id": requested_pid,
+                                "provider_id": provider_id,
+                                "session_id": principal_session_id or session_id,
+                                "ambiguous_name": ambiguous_name,
+                            },
+                        )
                         emit_audit_event(
                             session_id=session_id,
-                            provider_id=session_context.get("provider_id"),
+                            provider_id=provider_id,
                             tool_name=tool_name,
                             outcome="blocked",
                             duration_ms=0,
                             patient_id=requested_pid,
                             failure_class="ambiguous_name" if ambiguous_name else "census_scope_violation",
                         )
+                        _phi_audit_tool(
+                            session_id=session_id,
+                            provider_id=provider_id,
+                            tool_name=tool_name,
+                            outcome="denied",
+                            duration_ms=0,
+                            patient_id=requested_pid,
+                            failure_class="ambiguous_name" if ambiguous_name else "census_scope_violation",
+                            event_type="scope_violation",
+                        )
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": tool_use_id,
-                            "content": tool_result_content,
+                            "content": scope_reason or "scope_violation",
+                            "is_error": True,
                         })
                         continue
 
@@ -2044,6 +2117,14 @@ async def dispatch(
                                 duration_ms=_tool_duration_ms,
                                 patient_id=tool_input.get("patient_id"),
                             )
+                            _phi_audit_tool(
+                                session_id=session_id,
+                                provider_id=session_context.get("provider_id"),
+                                tool_name=tool_name,
+                                outcome="success",
+                                duration_ms=_tool_duration_ms,
+                                patient_id=tool_input.get("patient_id"),
+                            )
 
                         except Exception as exc:
                             failure_class = _classify_failure(exc)
@@ -2075,6 +2156,15 @@ async def dispatch(
                                 provider_id=session_context.get("provider_id"),
                                 tool_name=tool_name,
                                 outcome="error",
+                                duration_ms=_tool_duration_ms,
+                                patient_id=tool_input.get("patient_id"),
+                                failure_class=failure_class.value,
+                            )
+                            _phi_audit_tool(
+                                session_id=session_id,
+                                provider_id=session_context.get("provider_id"),
+                                tool_name=tool_name,
+                                outcome="failure",
                                 duration_ms=_tool_duration_ms,
                                 patient_id=tool_input.get("patient_id"),
                                 failure_class=failure_class.value,
