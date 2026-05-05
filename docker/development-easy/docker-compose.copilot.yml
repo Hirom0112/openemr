@@ -58,6 +58,9 @@ services:
       # browsers that enforce the allow_credentials/Origin pairing rule.
       OPENEMR_ORIGIN: "${OPENEMR_ORIGIN:-http://localhost:${WT_HTTP_PORT:-8300}}"
       AUDIT_DB_URL: "${AUDIT_DB_URL:-postgresql://copilot:copilot@copilot-audit-postgres:5432/copilot_audit}"
+      OCR_ENGINE: "${OCR_ENGINE:-tesseract}"
+      TESSERACT_PSM: "${TESSERACT_PSM:-3}"
+      TESSERACT_DPI: "${TESSERACT_DPI:-300}"
     depends_on:
       redis:
         condition: service_healthy
