@@ -1,0 +1,275 @@
+"""FHIR Binary + DocumentReference writer (W2 §4.2 step 3 / §4.4).
+
+Path B of document ingestion: round-trip an uploaded PDF into OpenEMR by
+writing the source bytes to a FHIR ``Binary`` and the metadata wrapper to a
+``DocumentReference``.  The split keeps the long-lived source-of-truth in
+OpenEMR's FHIR store and lets ``copilot_doc_extractions`` reference the
+DocumentReference id without duplicating the PDF blob.
+
+Risk #1 mitigation (W2 §12)
+---------------------------
+OpenEMR's FHIR Binary endpoint has historically choked on multi-MB PDFs.
+If either the Binary POST or the DocumentReference POST fails (4xx/5xx or
+network error), this module falls back to the legacy REST upload at
+``/apis/default/api/patient/{pid}/document``.  The synthetic
+``WriteResult`` carries ``path="rest_fallback"`` so callers can record it
+in the audit trail.
+
+Privacy
+-------
+The PDF bytes and their base64 encoding are NEVER logged.  Per
+``ARCHITECTURE.md`` §5.2 / §9.2 only sizes and ids cross the log boundary.
+"""
+
+from __future__ import annotations
+
+import base64
+import datetime as _dt
+import logging
+from typing import Any, Literal, NamedTuple
+
+import httpx
+
+# documents-isolated importlinter contract carves out auth.fhir_client
+# explicitly so this slice can reuse the existing OAuth-aware client + token
+# fetcher rather than reimplementing the password grant.
+from auth.fhir_client import fhir_client, get_access_token
+from config import settings
+
+_logger = logging.getLogger(__name__)
+
+
+# ── LOINC mapping for DocumentReference.type ────────────────────────────────
+# Source: https://loinc.org — picked from the standard outpatient document
+# vocabulary so OpenEMR's chart UI can render a sensible label.
+
+_LOINC_BY_HINT: dict[str, tuple[str, str]] = {
+    "lab_report": ("11502-2", "Laboratory report"),
+    "intake_form": ("34105-7", "Hospital admission Hx"),
+}
+_LOINC_DEFAULT: tuple[str, str] = ("34108-1", "Outpatient note")
+
+
+class WriteResult(NamedTuple):
+    """Outcome of :func:`write_document`.
+
+    ``binary_id`` is empty when ``path == "rest_fallback"`` because the
+    REST endpoint does not surface a Binary id.
+    """
+
+    document_reference_id: str
+    binary_id: str
+    path: Literal["fhir", "rest_fallback"]
+
+
+class FhirWriteError(RuntimeError):
+    """Raised when both the FHIR write path and the REST fallback fail.
+
+    The wrapped cause is logged via PSR-3 ``extra={"exception": ...}`` but
+    deliberately omitted from this exception's message — callers surface
+    it to clinicians via the audit / UI layer with a generic copy.
+    """
+
+
+def _now_rfc3339() -> str:
+    """RFC3339 / ISO-8601 timestamp with Z suffix for FHIR ``date`` field."""
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _pick_loinc(doc_type_hint: str | None) -> tuple[str, str]:
+    if doc_type_hint is None:
+        return _LOINC_DEFAULT
+    return _LOINC_BY_HINT.get(doc_type_hint, _LOINC_DEFAULT)
+
+
+def _fhir_base() -> str:
+    return settings.openemr_base_url.rstrip("/") + "/apis/default/fhir"
+
+
+def _rest_base() -> str:
+    return settings.openemr_base_url.rstrip("/") + "/apis/default/api"
+
+
+async def _post_fhir(resource: str, body: dict[str, Any]) -> dict[str, Any]:
+    """POST a FHIR resource using the cached bearer token from fhir_client.
+
+    Retries once on 400/401 by forcing a token refresh — mirrors the
+    behaviour of ``FHIRClient.get`` for the read path.
+    """
+    url = f"{_fhir_base()}/{resource}"
+
+    async def _attempt(force_refresh: bool) -> httpx.Response:
+        token = await get_access_token(force_refresh=force_refresh)
+        async with httpx.AsyncClient(timeout=60) as client:
+            return await client.post(
+                url,
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/fhir+json",
+                    "Accept": "application/fhir+json",
+                },
+            )
+
+    response = await _attempt(force_refresh=False)
+    if response.status_code in (400, 401):
+        response = await _attempt(force_refresh=True)
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or "id" not in payload:
+        raise RuntimeError(f"FHIR {resource} POST returned no id field")
+    return payload
+
+
+async def _write_via_fhir(
+    *,
+    patient_id: str,
+    pdf_bytes: bytes,
+    mime_type: str,
+    display: str | None,
+    doc_type_hint: str | None,
+) -> WriteResult:
+    """Primary path: Binary POST followed by DocumentReference POST."""
+    encoded = base64.b64encode(pdf_bytes).decode("ascii")
+    binary_payload = await _post_fhir(
+        "Binary",
+        {
+            "resourceType": "Binary",
+            "contentType": mime_type,
+            "data": encoded,
+        },
+    )
+    binary_id = str(binary_payload["id"])
+
+    code, code_display = _pick_loinc(doc_type_hint)
+    title = display or "Uploaded clinical document"
+    docref_body: dict[str, Any] = {
+        "resourceType": "DocumentReference",
+        "status": "current",
+        "type": {
+            "coding": [
+                {
+                    "system": "http://loinc.org",
+                    "code": code,
+                    "display": code_display,
+                }
+            ]
+        },
+        "subject": {"reference": f"Patient/{patient_id}"},
+        "content": [
+            {
+                "attachment": {
+                    "contentType": mime_type,
+                    "url": f"Binary/{binary_id}",
+                    "title": title,
+                }
+            }
+        ],
+        "date": _now_rfc3339(),
+    }
+    docref_payload = await _post_fhir("DocumentReference", docref_body)
+    return WriteResult(
+        document_reference_id=str(docref_payload["id"]),
+        binary_id=binary_id,
+        path="fhir",
+    )
+
+
+async def _write_via_rest(
+    *,
+    patient_id: str,
+    pdf_bytes: bytes,
+    mime_type: str,
+    display: str | None,
+) -> WriteResult:
+    """Fallback path: legacy multipart upload to /api/patient/{pid}/document."""
+    url = f"{_rest_base()}/patient/{patient_id}/document"
+    token = await get_access_token(force_refresh=False)
+    filename = (display or "document") + ".pdf"
+    files = {"file": (filename, pdf_bytes, mime_type)}
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.post(
+            url,
+            files=files,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or "documentId" not in payload:
+        raise RuntimeError("REST document upload returned no documentId field")
+    document_id = payload["documentId"]
+    return WriteResult(
+        document_reference_id=f"rest:{document_id}",
+        binary_id="",
+        path="rest_fallback",
+    )
+
+
+async def write_document(
+    *,
+    patient_id: str,
+    pdf_bytes: bytes,
+    mime_type: str = "application/pdf",
+    display: str | None = None,
+    doc_type_hint: str | None = None,
+) -> WriteResult:
+    """Persist ``pdf_bytes`` into OpenEMR via FHIR Binary + DocumentReference.
+
+    Falls back to the legacy multipart REST endpoint if either FHIR POST
+    fails (network error or non-2xx).  Raises :class:`FhirWriteError`
+    only if both paths fail; the underlying exception is logged with
+    ``extra={"exception": str(e)}`` and never bubbled to callers.
+    """
+    _logger.info(
+        "fhir_document_write_started",
+        extra={
+            "patient_id": patient_id,
+            "size_bytes": len(pdf_bytes),
+            "mime_type": mime_type,
+        },
+    )
+
+    # _ = fhir_client  # imported for the importlinter / auth carve-out audit
+    assert fhir_client is not None  # tested-mock anchor + import-keep
+
+    try:
+        result = await _write_via_fhir(
+            patient_id=patient_id,
+            pdf_bytes=pdf_bytes,
+            mime_type=mime_type,
+            display=display,
+            doc_type_hint=doc_type_hint,
+        )
+    except Exception as primary_exc:  # noqa: BLE001 — generic by design
+        _logger.warning(
+            "fhir_document_write_failed_falling_back",
+            extra={"error": str(primary_exc)},
+        )
+        try:
+            result = await _write_via_rest(
+                patient_id=patient_id,
+                pdf_bytes=pdf_bytes,
+                mime_type=mime_type,
+                display=display,
+            )
+        except Exception as fallback_exc:  # noqa: BLE001
+            _logger.error(
+                "fhir_document_write_all_failed",
+                extra={"error": str(fallback_exc)},
+            )
+            raise FhirWriteError(
+                "FHIR + REST fallback both failed"
+            ) from fallback_exc
+
+    _logger.info(
+        "fhir_document_write_ok",
+        extra={
+            "path": result.path,
+            "document_reference_id": result.document_reference_id,
+            "binary_id": result.binary_id,
+        },
+    )
+    return result
+
+
+__all__ = ["FhirWriteError", "WriteResult", "write_document"]

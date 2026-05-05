@@ -165,13 +165,15 @@ forbidden_modules =
 # It depends on audit (shared asyncpg pool) but must not reach into any
 # clinical sibling.  The dispatcher / HTTP layer consumes it; siblings
 # do not.
+# Slice 1.5 carve-out: documents.fhir_writer reuses auth.fhir_client for
+# OAuth + bearer-token rather than reimplementing the password grant, so
+# auth is dropped from the forbidden list (auth itself remains a leaf).
 [importlinter:contract:documents-isolated]
-name = documents must not depend on clinical siblings or auth
+name = documents must not depend on clinical siblings
 type = forbidden
 source_modules =
     documents
 forbidden_modules =
-    auth
     triage
     query
     briefing
