@@ -104,11 +104,19 @@ Buckets covering this: `lab_nominal` (17), `intake_nominal` (17), `unknown_nomin
 
 What we test: clinical questions are answered from one of the indexed sources (`kdigo-aki-2012`, `ada-inpatient-glycemic`, `ssc-2021`) with a keyword-grounded quote.
 
-Buckets covering this: `evidence_retrieval` (10). Total: **10 cases**. Each case carries `evidence_query`, `expected_must_cite_source_id`, and `expected_keywords_in_quote`. The mechanical `keyword_match_in_citation` rubric (in `agent-api/evals/rubrics_mechanical.py`) documents the contract every case must satisfy at registration time.
+Buckets covering this: `evidence_retrieval` (10). Total: **10 cases**. Each case carries `evidence_query`, `expected_must_cite_source_id`, and `expected_keywords_in_quote`. The mechanical `keyword_match_in_citation` rubric (in `agent-api/evals/rubrics_mechanical.py`) checks two conditions per case: (a) at least one returned snippet's `source_id` matches the expected source, and (b) at least one snippet's `quote_or_value` contains every required keyword (case-insensitive). Vacuously True off the evidence bucket; cleanly skipped (not counted) when `AUDIT_DB_URL` or `VOYAGE_API_KEY` is missing.
 
 ### c. Citations
 
 What we test: every clinical claim carries at least one citation that resolves into the OCR layout, AND every Observation that hits MySQL carries a `derivedFrom` chain back to the source DocumentReference. Runs over the full 88 via `citation_present`; `provenance_chain` runs over the labs that set `expected_provenance`. CI must run the MySQL service container so the provenance probe is live — without it, the rubric silently skips (tri-state `None`).
+
+Beyond presence, three Wave 2C mechanical rubrics gate citation quality at the token level:
+
+- `citation_resolvable` — every citation's `field_or_chunk_id` resolves to a real layout block (OCR bbox). Vacuously True when no layout is captured.
+- `citation_row_match` — the cited block's text contains every value-token (case + punctuation normalized), in any order. `"glucose: 92"` and `"92 glucose"` both pass.
+- `citation_token_match` — stricter subsequence match: value tokens must appear in the cited block in the same order. `"glucose 92"` passes; `"92 glucose"` fails.
+
+All three default to vacuously True when the extraction lacks document-type citations (guidelines, observations) or when OCR layout is unavailable. `run_full_suite.py` reports pass-rates for each, and `baseline.json` gates them with a per-rubric `min_threshold`.
 
 Buckets covering this: `lab_nominal` (17), `intake_nominal` (17). Total: **34 cases**.
 
