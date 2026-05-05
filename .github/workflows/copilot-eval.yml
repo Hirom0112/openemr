@@ -16,7 +16,10 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      ANTHROPIC_API_KEY: "not-needed-for-unit-tests"
+      # Empty (not a placeholder string) so live_api tests gated on
+      # `skipif(not os.environ.get("ANTHROPIC_API_KEY"))` actually skip —
+      # a truthy placeholder produces a real 401 against Anthropic.
+      ANTHROPIC_API_KEY: ""
       OPENEMR_BASE_URL: "http://localhost"
       FHIR_CLIENT_ID: ""
       FHIR_CLIENT_SECRET: ""
