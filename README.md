@@ -22,6 +22,8 @@ The deliverable ships in two additive passes. Week 1 (W1) is the structured-data
 
 Week 1 features are unchanged in Week 2 by architectural constraint #3 (additive, not a rewrite): the W2 graph and document path live behind their own routes, share observability primitives with W1, and never modify W1 code paths or contracts.
 
+On the deployed pilot, documents currently round-trip via a custom JWT-protected upload endpoint inside the existing `oe-module-clinical-copilot` module rather than the FHIR `Binary` POST or legacy REST upload, because both upstream paths are unavailable on the OpenEMR build we deploy (FHIR `Binary` advertises `read` only and returns `404` on POST; legacy REST is gated by an ACL the password-grant user does not carry). Documents still land in OpenEMR's own `documents` table and the FHIR `DocumentReference` read path still surfaces them — see [docs/SECURITY_TRADEOFFS.md](docs/SECURITY_TRADEOFFS.md) for the full deviation summary, secret-handling, and the four-gate REST investigation. The `W2_ARCHITECTURE.md` §4.2.1 + §4.2.2 sections describe the deviation and tradeoffs. The custom path is reversible — when OpenEMR's FHIR Binary write or legacy REST upload becomes available, the chain naturally falls back through them first.
+
 ## Prerequisites
 
 - Git

@@ -174,6 +174,74 @@ Sara drags a file into the chat mid-shift. A consultant just faxed a note. A fam
 
 Oversized Path B uploads route the user to Path A: large consultant charts attached via OpenEMR's Documents tab process overnight where Sara isn't waiting.
 
+### 4.2.1 Custom upload path (deployment deviation)
+
+The two write paths described in §4.2 — FHIR `Binary` POST and the legacy REST `/apis/default/api/patient/{pid}/document` upload — are both unavailable on the OpenEMR build deployed for the pilot. This subsection documents what shipped, why, and what about the architecture is preserved versus what deviates.
+
+**Why the documented paths fail upstream.**
+
+- The deployed OpenEMR's FHIR `CapabilityStatement` advertises `Binary` as `read` only, and `POST /apis/default/fhir/Binary` returns `404 Not Found`. The route is not registered in this OpenEMR build. This is an upstream limitation of the OpenEMR version we deploy, not a configuration choice.
+- The legacy REST upload `POST /apis/default/api/patient/{pid}/document` returns `401 Unauthorized` for the agent-api's password-grant client even when the bearer token is valid and the `api:oemr` scope is requested. The path is gated by four independent checks (full investigation in `docs/SECURITY_TRADEOFFS.md`); the most plausible source of the `401` is silent scope drop during finalization in `oauth_clients`, but the ACL gate (`aclCheckCore("patients", "docs", ..., ['write','addonly'])`) would still block even if the scope issue were fixed. Re-enabling this path requires both a scope change in `oauth_clients` and an ACL grant on the password-grant user — neither of which the agent-api can self-provision.
+
+Both failure modes are upstream-limited, not architectural choices.
+
+**What ships.** A custom JWT-protected endpoint inside the existing `oe-module-clinical-copilot` module, persisting documents through OpenEMR's own `Document::createDocument`:
+
+| Field | Value |
+|---|---|
+| URL | `/interface/modules/custom_modules/oe-module-clinical-copilot/public/upload.php` |
+| Auth | HS256 JWT shared between agent-api and the OpenEMR module via `COPILOT_JWT_SECRET` (≥32 chars). Same JWT shape that `JwtMinter.php` mints for the React iframe. |
+| Controller | `interface/modules/custom_modules/oe-module-clinical-copilot/src/UploadController.php` |
+| Persistence | OpenEMR's existing `Document::createDocument` — documents land in the standard `documents` table |
+| Response | `{documentId: int, patient_id, category_id}` JSON |
+
+The agent-api consumes this endpoint as the third tier of the fallback chain documented in Risk Register entry #1.
+
+**What this preserves.**
+
+- Documents still round-trip through OpenEMR's own `documents` table. The architecture's "no shadow document store; OpenEMR is the system of record" claim (§4.3, §4.4) still holds.
+- FHIR `DocumentReference` reads still surface uploaded documents — the read path is unchanged because OpenEMR generates DocumentReference resources from the underlying `documents` table.
+- Round-trip integrity, idempotency on `document_reference_id`, and the stub-row claim from §4.3 are unaffected.
+- Audit dual-target (§9.4) is preserved: `Document::createDocument` writes to OpenEMR's `log` table via its built-in audit hook, and the agent-api emits its own `document_ingested` event to `copilot_audit_events`.
+
+**What this deviates on.** The OpenEMR-side authentication moves from OAuth bearer + scope check + ACL gate to a single shared HMAC secret. This is a security-posture change. The detailed tradeoff is documented in §4.2.2 below and in `docs/SECURITY_TRADEOFFS.md`.
+
+**Updated fallback ordering.** The agent-api's `documents/fhir_writer.py` attempts writes in this order:
+
+1. FHIR `Binary` POST (the spec path; currently 404 on deployed build)
+2. Legacy REST `/api/patient/{pid}/document` (currently 401 on deployed build)
+3. **Custom upload endpoint** (the active path on the pilot deployment)
+4. Local-disk fallback into `/tmp` — last-resort persistence; ephemeral on Railway and surfaced as a degraded state
+
+Each tier only runs when the previous tier fails. The agent-api logs which tier succeeded so operators can see in telemetry whether tiers 1–2 have come back online.
+
+**Reversibility.** The custom path is not a fork of OpenEMR. It is an additive endpoint inside an already-installed custom module. When OpenEMR's FHIR `Binary` write or legacy REST upload becomes functional on the deployed build (either because we upgrade OpenEMR or because we provision the missing scope + ACL), the fallback chain naturally stops landing on tier 3 — no code change required to retire the custom path. Setting `COPILOT_JWT_SECRET` to empty disables tier 3 explicitly.
+
+### 4.2.2 Security tradeoff — shared HMAC secret
+
+The custom upload endpoint replaces OpenEMR's per-request OAuth bearer + ACL chain with a single shared HS256 secret. This is a deliberate, documented downgrade for the pilot, with a return path. We are recording it honestly because this is going on the record for a clinical product.
+
+**Blast radius.** A holder of `COPILOT_JWT_SECRET` can mint a valid JWT and write arbitrary documents to any patient's chart. This is equivalent to admin-level chart-write authority. There is no per-patient or per-user authorization gate on the custom endpoint; the JWT is a service-level credential, not a user credential.
+
+**Storage.** The secret must live in a secret manager:
+
+- Pilot (Railway): Railway environment variables qualify; values are encrypted at rest, scoped to the service, and not present in container images.
+- Production: AWS Secrets Manager, GCP Secret Manager, or HashiCorp Vault. The secret should never be checked into git, baked into images, or included in plaintext config files.
+
+**Distribution.** The same secret value must exist on both the `copilot-agent-api` service (which mints JWTs) and the `clinical-copilot-openemr` service (which verifies them). Asymmetry between the two — for example, after a partial rotation — causes all uploads to fail closed: the OpenEMR endpoint returns `401`, and the agent-api's fallback chain falls through to local-disk. There is no scenario in which the asymmetry produces an unauthorized accepted upload.
+
+**Rotation.**
+
+- Recommended cadence: every 90 days, and immediately on any suspicion of leak.
+- Procedure: generate a new secret (≥32 random bytes, base64- or hex-encoded), set the new value on both services, redeploy in either order. There is a transient window during the gap where the two services hold different values; uploads during that window fail closed and the agent-api logs the fallback. This is acceptable for a non-real-time persistence path.
+- Do not log or print the old or new secret during rotation. Verify only by observing post-deploy upload success.
+
+**Per-environment isolation.** Dev, staging, and production must use distinct secrets. A leaked dev secret must never grant access to staging or production. Reuse across environments collapses the blast-radius boundary and is forbidden.
+
+**Audit anchor.** Without OpenEMR's bearer-token chain, the per-request principal recorded by OpenEMR is the module's own service identity rather than an end-user OAuth subject. The audit anchor therefore moves to the agent-api side: `audit_writer.emit("document_ingested")` records the calling user, the patient, the document hash, and the resulting `document_reference_id`. The OpenEMR `log` table still receives an entry via `Document::createDocument`'s built-in audit hook, so the dual-target audit guarantee from §9.4 is preserved — both sides log every ingest, and the cross-reference key is the OpenEMR `documentId` returned by the custom endpoint.
+
+**Feature-flag / kill switch.** If `COPILOT_JWT_SECRET` is unset or empty, the agent-api's `_mint_copilot_jwt` returns `None` and tier 3 of the fallback chain is skipped entirely. Operationally this is the off switch: deployments where the agent-api is not trusted to write documents can leave the secret unset, and the chain falls through to tier 4 (local-disk) without ever invoking the custom endpoint. This makes the deviation opt-in per environment.
+
 ### 4.3 Round-trip integrity and concurrency
 
 The spec mandates documents and derived observations round-trip through OpenEMR without creating duplicate or untraceable records. Two separate concerns: idempotency of the extraction record, and concurrency of multiple agent-api workers seeing the same unprocessed `DocumentReference`.
