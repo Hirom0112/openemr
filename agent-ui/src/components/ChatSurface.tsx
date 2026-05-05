@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, type ReactElement } from 'react';
 import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff, refreshCensus } from '../api';
 import type { HandoffSummaryPayload } from '../api';
 import type { AgentResponse, CensusPatient, ErrorClass, HandoffData, HandoffPatient } from '../types';
@@ -6,6 +6,73 @@ import ResponseRenderer from './ResponseRenderer';
 import { RED, AMB, NEU, BRAND, SURFACE, cardStyle, secondaryButtonStyle } from '../styles/tokens';
 import { resolvePatientPid } from '../utils/citations';
 import { formatFriendly } from '../utils/datetime';
+import { subscribeToast } from '../auth/jwt';
+import SoftWarnBanner from './SoftWarnBanner';
+import CitationChip from './CitationChip';
+import DocumentViewer from './DocumentViewer';
+import type { Citation as W2Citation, BboxLayoutBlock, SoftWarn } from '../types/citation';
+
+/**
+ * Optional W2 extraction payload attached on AgentResponse.metadata.extraction.
+ * When present, ChatSurface mounts SoftWarnBanner + CitationChips and opens
+ * the DocumentViewer side panel on chip click. Absent on legacy responses
+ * (every existing renderer path) — purely additive.
+ */
+interface ExtractionPayload {
+  citations?: W2Citation[];
+  soft_warns?: SoftWarn[];
+  ocr_layout?: BboxLayoutBlock[];
+  pdf_url?: string;
+}
+
+function readExtraction(response: AgentResponse | undefined): ExtractionPayload | null {
+  if (!response?.metadata) return null;
+  const raw = (response.metadata as { extraction?: unknown }).extraction;
+  if (!raw || typeof raw !== 'object') return null;
+  return raw as ExtractionPayload;
+}
+
+/**
+ * One-line, top-right, auto-dismissing toast for JWT refresh failures.
+ * Subscribes to the auth module on mount; auto-hides 5s after the latest
+ * message. Intentionally lightweight — single string state, no animation,
+ * neutral border + RED accent so it reads as "warn" without being alarming.
+ */
+function AuthToast(): ReactElement | null {
+  const [message, setMessage] = useState<string | null>(null);
+  useEffect(() => {
+    const unsubscribe = subscribeToast((m) => setMessage(m));
+    return unsubscribe;
+  }, []);
+  useEffect(() => {
+    if (!message) return;
+    const id = window.setTimeout(() => setMessage(null), 5000);
+    return () => window.clearTimeout(id);
+  }, [message]);
+  if (!message) return null;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        position: 'absolute',
+        top: 8,
+        right: 8,
+        zIndex: 20,
+        background: SURFACE.bg,
+        border: `1px solid ${RED.border}`,
+        color: RED.text,
+        borderRadius: 6,
+        padding: '6px 10px',
+        fontSize: 12,
+        boxShadow: '0 2px 6px rgba(15, 23, 42, 0.12)',
+        maxWidth: '70%',
+      }}
+    >
+      {message}
+    </div>
+  );
+}
 
 function usePrefersReducedMotion(): boolean {
   const [prefers, setPrefers] = useState<boolean>(() => {
@@ -302,6 +369,16 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   const [messages, setMessages] = useState<Message[]>([
     { id: 'greeting', role: 'system', content: greeting },
   ]);
+  // W2 document-viewer state. `viewerSource` carries the citation list +
+  // bbox layout + pdf url for the currently-open document; null hides the
+  // side panel. Lifted to ChatSurface so the modal sits above the message
+  // list regardless of which message owns the chip click.
+  const [viewerSource, setViewerSource] = useState<{
+    citations: W2Citation[];
+    activeIndex: number;
+    bboxLayout: BboxLayoutBlock[];
+    pdfUrl?: string;
+  } | null>(null);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
@@ -1001,6 +1078,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       `}</style>
 
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', minHeight: 0, position: 'relative' }}>
+        <AuthToast />
         {/* pinned above input row */}
         {showNewMessagesPill && !isAtBottom && (
           <button
@@ -1118,6 +1196,11 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                 </button>
                 {!collapsed && (
                   <div style={styles.assistantBody}>
+                    {(() => {
+                      const ext = readExtraction(msg.response);
+                      if (!ext) return null;
+                      return <SoftWarnBanner warns={ext.soft_warns ?? []} />;
+                    })()}
                     {msg.response && msg.response.type === 'error' ? (
                       <ErrorCard
                         response={msg.response}
@@ -1157,6 +1240,30 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                     ) : (
                       <span style={{ color: SURFACE.subtle }}>…</span>
                     )}
+                    {(() => {
+                      const ext = readExtraction(msg.response);
+                      if (!ext || !ext.citations || ext.citations.length === 0) return null;
+                      const docCitations = ext.citations.filter((c) => c.source_type === 'document');
+                      if (docCitations.length === 0) return null;
+                      return (
+                        <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap' }}>
+                          {docCitations.map((c, i) => (
+                            <CitationChip
+                              key={`${c.source_id}-${c.field_or_chunk_id}-${i}`}
+                              citation={c}
+                              index={i}
+                              total={docCitations.length}
+                              onClick={() => setViewerSource({
+                                citations: docCitations,
+                                activeIndex: i,
+                                bboxLayout: ext.ocr_layout ?? [],
+                                pdfUrl: ext.pdf_url,
+                              })}
+                            />
+                          ))}
+                        </div>
+                      );
+                    })()}
                     {(() => {
                       const chartTarget = chartPatientIdForResponse(msg.response, patientIds);
                       if (!chartTarget) return null;
@@ -1231,6 +1338,16 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           </button>
         </div>
       </div>
+      {viewerSource && (
+        <DocumentViewer
+          pdfUrl={viewerSource.pdfUrl}
+          citations={viewerSource.citations}
+          activeIndex={viewerSource.activeIndex}
+          onActiveIndexChange={(idx) => setViewerSource((cur) => (cur ? { ...cur, activeIndex: idx } : cur))}
+          bboxLayout={viewerSource.bboxLayout}
+          onClose={() => setViewerSource(null)}
+        />
+      )}
     </>
   );
 }
