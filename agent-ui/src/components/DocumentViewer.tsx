@@ -74,9 +74,26 @@ export default function DocumentViewer(props: DocumentViewerProps): ReactElement
 
   // Load PDF (URL or bytes). Re-run only when source changes — the proxy is
   // reused across page renders.
+  //
+  // pdfjs transfers ArrayBuffer ownership to its worker, leaving the
+  // original buffer detached. If a parent component holds the same
+  // ArrayBuffer in state across multiple opens (chip click → close →
+  // chip click), the second loadPdf would fail with "Cannot perform
+  // Construct on a detached ArrayBuffer". Clone via slice(0) so pdfjs
+  // can transfer the clone and the original stays valid for next time.
   useEffect(() => {
     let cancelled = false;
-    const source = pdfBytes ?? pdfUrl;
+    let source: string | ArrayBuffer | undefined = undefined;
+    if (pdfBytes) {
+      try {
+        source = pdfBytes.slice(0);
+      } catch (err) {
+        console.error('[DocumentViewer] ArrayBuffer slice failed (already detached?)', err);
+        source = undefined;
+      }
+    } else if (pdfUrl) {
+      source = pdfUrl;
+    }
     if (!source) {
       setPdf(null);
       return;
