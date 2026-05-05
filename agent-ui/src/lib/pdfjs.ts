@@ -15,8 +15,11 @@ import * as pdfjs from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 
 function resolveWorkerUrl(): string {
-  // import.meta.url points at the bundle's own URL when loaded as a module.
-  // The worker file sits next to it. URL resolution handles deep sub-paths.
+  // The bundle is loaded as a plain <script> tag (not type="module"),
+  // so `import.meta` is a syntax error in this context. We resolve the
+  // worker URL by finding our own <script> element in the DOM and
+  // joining the worker filename against its src. The worker file sits
+  // next to copilot.js in the deployed asset directory.
   try {
     if (typeof document !== 'undefined') {
       const scripts = document.getElementsByTagName('script');
@@ -28,13 +31,9 @@ function resolveWorkerUrl(): string {
       }
     }
   } catch {
-    // Fall through to the import.meta.url path below.
+    // Fall through to the relative-URL fallback.
   }
-  try {
-    return new URL('./pdf.worker.min.mjs', import.meta.url).toString();
-  } catch {
-    return './pdf.worker.min.mjs';
-  }
+  return './pdf.worker.min.mjs';
 }
 
 pdfjs.GlobalWorkerOptions.workerSrc = resolveWorkerUrl();
