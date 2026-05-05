@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, asdict
 from enum import Enum
-from typing import Any, Iterable, List, Tuple
+from typing import Any, Iterable, List, Optional, Tuple
 
 import pymupdf  # PyMuPDF
 
@@ -103,6 +103,14 @@ class LayoutBlock:
     text: str
     ocr_confidence: float  # 0.0 - 1.0
     granularity: BlockGranularity = BlockGranularity.WORD
+    # Phase-3 source-shape preservation. None when the engine has no
+    # polygon source (tesseract, PDF text-layer extraction) OR when the
+    # block was synthesized via approximation (paddle word-level splits —
+    # we have no real per-word polygon, so we refuse to fabricate one).
+    # When present, points are in the SAME coordinate space as ``bbox``
+    # (image pixels for image input). Tuple, not list, to keep the dataclass
+    # frozen-hashable.
+    polygon: Optional[Tuple[Tuple[float, float], ...]] = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

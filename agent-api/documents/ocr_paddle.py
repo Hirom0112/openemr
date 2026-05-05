@@ -113,6 +113,10 @@ class PaddleEngine:
             line_w = x1 - x0
             line_h = y1 - y0
 
+            # Phase-3: preserve the source 4-point polygon on the LINE
+            # block. Same coordinate space as bbox (image pixels).
+            polygon = _quad_to_polygon(quad)
+
             line_blocks.append(
                 LayoutBlock(
                     bbox_id=_format_bbox_id(1, LINE_IDX_BASE + line_idx),
@@ -121,6 +125,7 @@ class PaddleEngine:
                     text=text,
                     ocr_confidence=max(0.0, min(1.0, conf)),
                     granularity=BlockGranularity.LINE,
+                    polygon=polygon,
                 )
             )
 
@@ -164,6 +169,17 @@ def _quad_to_bbox(quad: Any) -> Tuple[float, float, float, float]:
     xs = [float(p[0]) for p in quad]
     ys = [float(p[1]) for p in quad]
     return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _quad_to_polygon(quad: Any) -> Tuple[Tuple[float, float], ...]:
+    """Normalise paddle's quad (list of 4 [x, y] pairs) into a tuple of
+    (x, y) tuples for storage on ``LayoutBlock.polygon``.
+
+    We do NOT re-order points — paddle's detector emits them in a stable
+    clockwise order starting from top-left, and downstream Phase-3 IoU
+    consumers expect that ordering preserved.
+    """
+    return tuple((float(p[0]), float(p[1])) for p in quad)
 
 
 def _empty_block() -> List[LayoutBlock]:
