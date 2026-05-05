@@ -31,6 +31,22 @@ FIXTURES_DIR = EVAL_DIR.parent  # agent-api/tests/fixtures
 EXISTING_LAB_OSH_LACTATE = FIXTURES_DIR / "lab_osh_lactate.pdf"
 EXISTING_INTAKE_ADMISSION = FIXTURES_DIR / "intake_admission.pdf"
 
+# Real-shaped clinical documents (synthetic identities, safe to commit). Used
+# by 8 eval cases to exercise the pipeline against realistic layouts and a
+# raster-PNG OCR path. NOT regenerated — files live on disk under
+# ``real-examples/`` and are committed to the repo.
+REAL_EXAMPLES_DIR = EVAL_DIR / "real-examples"
+_REAL_FIXTURES: dict[str, str] = {
+    "chen_lab_lipid":      "p01-chen-lipid-panel.pdf",
+    "whitaker_lab_cbc":    "p02-whitaker-cbc.pdf",
+    "reyes_lab_hba1c_png": "p03-reyes-hba1c.png",
+    "kowalski_lab_cmp":    "p04-kowalski-cmp.pdf",
+    "chen_intake_typed":   "p01-chen-intake-typed.pdf",
+    "whitaker_intake":     "p02-whitaker-intake.pdf",
+    "reyes_intake_png":    "p03-reyes-intake.png",
+    "kowalski_intake_png": "p04-kowalski-intake.png",
+}
+
 
 # ---------------------------------------------------------------------------
 # Drawing helpers
@@ -616,11 +632,17 @@ _GENERATED: dict[str, tuple[str, Callable[[Path], Path]]] = {
 
 
 def generate_all() -> dict[str, Path]:
-    """Generate every PDF the eval set references.
+    """Generate every fixture the eval set references.
 
-    Returns a mapping from fixture key to absolute Path. The two pre-existing
-    fixtures (``lab_osh_lactate``, ``intake_admission``) are NOT regenerated —
-    the function asserts they exist on disk and returns their paths unchanged.
+    Returns a mapping from fixture key to absolute Path. Three classes of
+    fixtures are NOT regenerated and must already exist on disk:
+
+      * ``lab_osh_lactate`` / ``intake_admission`` — the original synthetic
+        reportlab fixtures pre-dating this generator.
+      * ``_REAL_FIXTURES`` (see top of module) — real-shaped clinical
+        documents under ``real-examples/`` (synthetic identities, committed).
+
+    The remaining ``_GENERATED`` keys are deterministically rebuilt every call.
     """
     out: dict[str, Path] = {}
 
@@ -636,6 +658,15 @@ def generate_all() -> dict[str, Path]:
         )
     out["lab_osh_lactate"] = EXISTING_LAB_OSH_LACTATE
     out["intake_admission"] = EXISTING_INTAKE_ADMISSION
+
+    for key, filename in _REAL_FIXTURES.items():
+        path = REAL_EXAMPLES_DIR / filename
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Real-example fixture missing: {path}. These files are "
+                "committed to the repo under tests/fixtures/eval/real-examples/."
+            )
+        out[key] = path
 
     for key, (filename, fn) in _GENERATED.items():
         path = EVAL_DIR / filename

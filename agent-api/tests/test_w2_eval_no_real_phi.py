@@ -31,6 +31,15 @@ SYNTHETIC_IDENTITIES: frozenset[tuple[str, str, str, str]] = frozenset({
     ("Hannah",   "Goldberg",   "100644", "2001-12-04"),
     ("Sven",     "Halvorsen",  "100805", "1968-05-17"),
     ("Yara",     "Olsson",     "100488", "1980-06-09"),
+    # Real-shaped document patients (synthetic identities, see
+    # tests/fixtures/eval/real-examples/). Chart-side MRNs use the standard
+    # 100xxx synthetic range; document-side MRNs are formatted as
+    # "MRN-2026-XXXXX" and intentionally do not match — the demographic
+    # check degrades gracefully when MRN formats differ (W2_ARCH §5.6).
+    ("Margaret", "Chen",       "100481", "1967-08-14"),
+    ("James",    "Whitaker",   "100492", "1958-11-03"),
+    ("Luis",     "Reyes",      "100503", "1972-05-18"),
+    ("Andrzej",  "Kowalski",   "100518", "1954-09-22"),
 })
 
 # Spot-check ranges: every synthetic MRN starts with "100" or "200" (W2 reserves
