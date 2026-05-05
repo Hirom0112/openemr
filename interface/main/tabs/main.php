@@ -617,6 +617,12 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
                 $_SESSION['copilot_session_nonce'] = bin2hex(random_bytes(8));
             }
             $copilotSessionId = 'copilot-' . hash('sha256', $copilotProviderId . '|' . date('Y-m-d') . '|' . $_SESSION['copilot_session_nonce']);
+            // Mint a short-lived HS256 JWT for the prefetch POST. Same secret
+            // (COPILOT_JWT_SECRET) the agent-api Python middleware verifies.
+            // Returns null when the secret is missing/short — omit the key in
+            // that case so the client doesn't send "Bearer " with no payload.
+            require_once $copilotModuleDir . '/src/JwtMinter.php';
+            $copilotJwt = \OpenEMR\Modules\ClinicalCopilot\JwtMinter::mint($copilotProviderId, $copilotSessionId);
             // 5-minute bucket so a page reload re-fires the prefetch after 5 min
             // (matches census_cache_ttl). Per-day debounce was too sticky — once
             // the script ran on the first reload of the morning, every subsequent
@@ -629,6 +635,9 @@ $twig = (new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel()))->get
                 'patientIds'  => $copilotPatientIds,
                 'flagKey'     => $copilotPrefetchKey,
             ];
+            if (is_string($copilotJwt) && $copilotJwt !== '') {
+                $copilotConfig['jwt'] = $copilotJwt;
+            }
             $copilotConfigJson = json_encode(
                 $copilotConfig,
                 JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_THROW_ON_ERROR
