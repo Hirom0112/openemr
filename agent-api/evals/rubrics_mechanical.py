@@ -136,9 +136,40 @@ def no_phi_in_logs(
     return True
 
 
+def keyword_match_in_citation(outcome: RunOutcome, *, case: Any = None) -> bool:
+    """Evidence-retrieval rubric — boolean.
+
+    Vacuously ``True`` for cases without evidence-retrieval expectations
+    (i.e. ``case.evidence_query`` is falsy or unset). For evidence-retrieval
+    cases, returns ``True`` iff:
+
+      * the case's expected source-id list is non-empty (definitional check
+        — guards against half-populated evidence cases sneaking in), AND
+      * the case's expected keyword list is non-empty.
+
+    The end-to-end retrieval check (does the agent actually surface a
+    quote whose chunk is in ``expected_must_cite_source_id`` and whose
+    text contains a keyword) lives in the Stage-4 retrieval integration
+    tests; this rubric documents the contract every evidence-retrieval
+    case must satisfy at registration time so the bucket can never
+    silently degrade into "questions without answers".
+    """
+    if case is None:
+        return True
+    query = getattr(case, "evidence_query", None)
+    if not query:
+        return True
+    sources = tuple(getattr(case, "expected_must_cite_source_id", ()) or ())
+    keywords = tuple(getattr(case, "expected_keywords_in_quote", ()) or ())
+    if not sources or not keywords:
+        return False
+    return True
+
+
 __all__ = [
     "schema_valid",
     "citation_present",
     "correct_critic_decision",
     "no_phi_in_logs",
+    "keyword_match_in_citation",
 ]

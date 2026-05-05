@@ -40,6 +40,15 @@ SYNTHETIC_IDENTITIES: frozenset[tuple[str, str, str, str]] = frozenset({
     ("James",    "Whitaker",   "100492", "1958-11-03"),
     ("Luis",     "Reyes",      "100503", "1972-05-18"),
     ("Andrzej",  "Kowalski",   "100518", "1954-09-22"),
+    # 88-case expansion identities (geriatric, pediatric, OB, non-English,
+    # off-by-one MRN refusal, stale-chart DOB drift, evidence-retrieval).
+    ("Bertha",   "Nieminen",   "100744", "1944-04-04"),
+    ("Darius",   "Okonkwo",    "100051", "2009-09-09"),
+    ("Elena",    "Vargas",     "100862", "1992-06-15"),
+    ("Felix",    "Dubois",     "100278", "1976-10-01"),
+    ("Casey",    "Stone",      "100999", "1980-01-01"),
+    ("Marcus",   "Webb",       "100848", "1962-03-14"),  # off-by-one MRN refusal variant
+    ("Marcus",   "Webb",       "100847", "1965-03-14"),  # stale-chart DOB-drift variant
 })
 
 # Spot-check ranges: every synthetic MRN starts with "100" or "200" (W2 reserves

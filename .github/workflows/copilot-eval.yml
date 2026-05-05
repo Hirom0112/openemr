@@ -134,10 +134,31 @@ jobs:
       contents: read
       pull-requests: write   # for sticky-pull-request-comment to post the eval table
 
+    # MySQL 8 service container so the provenance_chain rubric can probe the
+    # ``copilot_observations`` table instead of silently skipping (None →
+    # excluded from the pass-rate denominator). The runner reads
+    # ``COPILOT_OBSERVATIONS_MYSQL_URL`` to decide whether the probe runs.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: rootpw
+          MYSQL_DATABASE: openemr
+          MYSQL_USER: openemr
+          MYSQL_PASSWORD: openemr
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --host=127.0.0.1 --user=root --password=rootpw"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
       COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+      COPILOT_OBSERVATIONS_MYSQL_URL: "mysql://openemr:openemr@127.0.0.1:3306/openemr"
 
     steps:
       - uses: actions/checkout@v4
@@ -146,10 +167,25 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: agent-api/requirements.txt
-      - run: pip install -r agent-api/requirements.txt pytest
+      - run: pip install -r agent-api/requirements.txt pytest aiomysql
+      - name: Bootstrap copilot_observations schema
+        # Minimal schema so probe_observations() can read empty result-sets
+        # without errors. When real observations land (CI integration tests),
+        # they populate this table via the OpenEMR write path; the eval
+        # gate then asserts derivedFrom + citations end-to-end.
+        # TODO(stage-4-followup): replace with the canonical OpenEMR migration
+        # once the agent-api side is mounted alongside the PHP container.
+        run: |
+          mysql --host=127.0.0.1 --user=openemr --password=openemr openemr <<'SQL'
+          CREATE TABLE IF NOT EXISTS copilot_observations (
+            id VARCHAR(64) NOT NULL PRIMARY KEY,
+            fhir_resource JSON NOT NULL,
+            citations JSON NOT NULL
+          );
+          SQL
       - name: Generate eval fixture corpus
         run: python3 agent-api/tests/fixtures/eval/_generate_eval_corpus.py
-      - name: Run 50-case eval and emit results
+      - name: Run 88-case eval and emit results
         run: |
           cd agent-api
           python3 -m evals.run_full_suite --output ../eval_results.json

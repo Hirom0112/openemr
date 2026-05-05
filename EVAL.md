@@ -87,3 +87,81 @@ This rubric is the regression-protected contract for the §4.2.4 provenance chai
 **Synthetic data only.** No real patient data enters the test suite. The 25-patient synthetic dataset is derived from publicly documented clinical vignettes with all identifiers replaced.
 
 **Coverage gaps (v2 roadmap).** The eval suite does not yet include: end-to-end latency benchmarks against UC-1/2/3 SLA targets, adversarial prompt injection tests, or a comparison against a clinician gold standard for briefing quality. These are documented in `TODO.md` under "Queued."
+
+---
+
+## W2 88-case eval suite — Stage 4 category mapping
+
+The W2 fixture set (`agent-api/tests/fixtures/w2_eval_cases.py`) is the gating eval. Each case is a frozen `W2EvalCase`; the runner (`agent-api/evals/runner.py`) executes the W2 graph and the rubric layer (`agent-api/evals/rubrics_*.py`) scores the outcome. The 11 buckets map onto the 5 Stage 4 categories below.
+
+### a. Extraction
+
+What we test: lab + intake extractors produce schema-valid output, name the right fields, and survive low-quality / multi-page / non-English input without inventing values.
+
+Buckets covering this: `lab_nominal` (17), `intake_nominal` (17), `unknown_nominal` (8), `low_quality_scan` (5). Total: **47 cases**.
+
+### b. Evidence retrieval
+
+What we test: clinical questions are answered from one of the indexed sources (`kdigo-aki-2012`, `ada-inpatient-glycemic`, `ssc-2021`) with a keyword-grounded quote.
+
+Buckets covering this: `evidence_retrieval` (10). Total: **10 cases**. Each case carries `evidence_query`, `expected_must_cite_source_id`, and `expected_keywords_in_quote`. The mechanical `keyword_match_in_citation` rubric (in `agent-api/evals/rubrics_mechanical.py`) documents the contract every case must satisfy at registration time.
+
+### c. Citations
+
+What we test: every clinical claim carries at least one citation that resolves into the OCR layout, AND every Observation that hits MySQL carries a `derivedFrom` chain back to the source DocumentReference. Runs over the full 88 via `citation_present`; `provenance_chain` runs over the labs that set `expected_provenance`. CI must run the MySQL service container so the provenance probe is live — without it, the rubric silently skips (tri-state `None`).
+
+Buckets covering this: `lab_nominal` (17), `intake_nominal` (17). Total: **34 cases**.
+
+### d. Refusals
+
+What we test: when the agent should refuse, it refuses cleanly. Hard-block on identity / unreadable failures; soft-warn on conflicts and demographic drift.
+
+Buckets covering this: `wrong_patient` (7), `wrong_type_hint` (6), `mixed_content` (6), `intra_doc_conflict` (3). Total: **22 cases**.
+
+### e. Missing data
+
+What we test: when fields are absent, the agent records absence rather than inventing values. When the document itself is empty / encrypted / all-noise, the agent refuses cleanly.
+
+Buckets covering this: `missing_data` (4), `blank_noise` (5). Total: **9 cases**.
+
+### Inventory
+
+| Bucket               | Count |
+| -------------------- | ----- |
+| `lab_nominal`        | 17    |
+| `intake_nominal`     | 17    |
+| `unknown_nominal`    | 8     |
+| `wrong_type_hint`    | 6     |
+| `wrong_patient`      | 7     |
+| `blank_noise`        | 5     |
+| `mixed_content`      | 6     |
+| `low_quality_scan`   | 5     |
+| `intra_doc_conflict` | 3     |
+| `evidence_retrieval` | 10    |
+| `missing_data`       | 4     |
+| **Total**            | **88**|
+
+### Running the W2 suite
+
+```bash
+# Generate the deterministic fixture corpus.
+python3 agent-api/tests/fixtures/eval/_generate_eval_corpus.py
+# Run the full 88-case suite locally.
+cd agent-api && python3 -m evals.run_full_suite --output ../eval_results.json
+# Diff against the rolling baseline (gates the PR on >5pp drop).
+python3 agent-api/evals/diff_baseline.py \
+  --baseline agent-api/evals/baseline.json \
+  --results eval_results.json
+```
+
+CI runs the same flow under `.github/workflows/copilot-eval.yml`. The `w2-eval` job mounts a MySQL 8 service so `provenance_chain` actually fires; without it the rubric is silently skipped via the tri-state path in `evals/scoring.py::_score_provenance_chain`.
+
+### Adding a case
+
+1. Add the `W2EvalCase` to `tests/fixtures/w2_eval_cases.py`.
+2. Bump the matching entry in `BUCKET_COUNTS` and `TOTAL_CASES`.
+3. If the case introduces a new synthetic identity, add it to the whitelist in `tests/test_w2_eval_no_real_phi.py`.
+4. If the case references a fixture key that is not yet generated, add a builder to `tests/fixtures/eval/_generate_eval_corpus.py` and regenerate the corpus.
+5. Run `python3 -m pytest agent-api/tests -k "eval" -q` to confirm bucket-count and PHI guards pass before opening a PR.
+
+After a new rubric is added, refresh `agent-api/evals/baseline.json` so the diff gate has a non-zero floor for the new metric.

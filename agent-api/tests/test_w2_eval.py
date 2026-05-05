@@ -14,6 +14,7 @@ _VALID_BUCKETS = {
     "lab_nominal", "intake_nominal", "unknown_nominal",
     "wrong_type_hint", "wrong_patient", "blank_noise",
     "mixed_content", "low_quality_scan", "intra_doc_conflict",
+    "evidence_retrieval", "missing_data",
 }
 _VALID_KINDS = {"lab_report", "intake_form", "unknown"}
 _VALID_DECISIONS = {"pass", "soft_warn", "hard_block"}
