@@ -84,3 +84,32 @@ CREATE TABLE IF NOT EXISTS copilot_doc_extractions (
 );
 CREATE INDEX IF NOT EXISTS copilot_doc_extractions_status_idx ON copilot_doc_extractions (status, processing_started_at);
 CREATE INDEX IF NOT EXISTS copilot_doc_extractions_doc_ref_idx ON copilot_doc_extractions (document_reference_id);
+
+-- ── Hybrid-RAG guideline corpus (W2 §6 / §17.4) ─────────────────────────────
+--
+-- One row per chunk of indexed clinical guideline text. Sparse retrieval uses
+-- the GENERATED tsvector + GIN index; dense retrieval uses pgvector cosine
+-- distance via ivfflat. Both indices are built from the same row so the
+-- merge step in rag.retrieve.search can dedupe on chunk_id.
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS copilot_guideline_chunks (
+    chunk_id              TEXT PRIMARY KEY,
+    source_id             TEXT NOT NULL,
+    document_title        TEXT NOT NULL,
+    section               TEXT,
+    page_number           INTEGER,
+    indexed_version_date  DATE NOT NULL,
+    content               TEXT NOT NULL,
+    content_tsv           TSVECTOR
+                            GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
+    embedding             vector(1024),
+    indexed_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS copilot_guideline_chunks_tsv_idx
+    ON copilot_guideline_chunks USING GIN (content_tsv);
+CREATE INDEX IF NOT EXISTS copilot_guideline_chunks_embedding_idx
+    ON copilot_guideline_chunks USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS copilot_guideline_chunks_source_idx
+    ON copilot_guideline_chunks (source_id);

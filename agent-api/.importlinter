@@ -15,6 +15,7 @@ root_packages =
     documents
     graph
     demographics
+    rag
 
 # audit is a leaf: HIPAA-style audit emission must not depend on any
 # business sibling — it is consumed by the dispatcher and HTTP layer only.
@@ -219,3 +220,28 @@ forbidden_modules =
     graph
     checkpointer
     observability
+
+# rag is a leaf: hybrid sparse+dense retrieval (W2 §6). It owns its own
+# Postgres reads via audit's shared asyncpg pool (audit is itself a leaf)
+# and must not reach into any clinical sibling. The graph retriever node
+# consumes it via a local import so graph.* stays importable without
+# numpy / pgvector being pulled into the collection path.
+[importlinter:contract:rag-isolated]
+name = rag must be a leaf
+type = forbidden
+source_modules =
+    rag
+forbidden_modules =
+    auth
+    triage
+    query
+    briefing
+    extractors
+    documents
+    demographics
+    agent
+    graph
+    checkpointer
+    verification
+    handoff
+    medication

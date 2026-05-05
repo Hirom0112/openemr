@@ -1220,6 +1220,33 @@ def _flatten_citations(extraction: Any) -> list[dict[str, Any]]:
         for fact in getattr(extraction, "key_facts", []) or []:
             for cit in getattr(fact, "citations", []) or []:
                 out.append(cit.model_dump(mode="json"))
+    elif kind == "intake_form":
+        # Walk every cite-bearing IntakeForm field. Demographics holds
+        # TextField sub-fields; chief_concern is a TextField; meds /
+        # allergies / family_history / code_status own their own citations.
+        demographics = getattr(extraction, "demographics", None)
+        if demographics is not None:
+            for attr in ("name", "dob", "sex", "mrn", "address"):
+                tf = getattr(demographics, attr, None)
+                if tf is not None:
+                    for cit in getattr(tf, "citations", []) or []:
+                        out.append(cit.model_dump(mode="json"))
+        chief = getattr(extraction, "chief_concern", None)
+        if chief is not None:
+            for cit in getattr(chief, "citations", []) or []:
+                out.append(cit.model_dump(mode="json"))
+        for collection_attr in (
+            "current_medications",
+            "allergies",
+            "family_history",
+        ):
+            for item in getattr(extraction, collection_attr, []) or []:
+                for cit in getattr(item, "citations", []) or []:
+                    out.append(cit.model_dump(mode="json"))
+        cs = getattr(extraction, "code_status", None)
+        if cs is not None:
+            for cit in getattr(cs, "citations", []) or []:
+                out.append(cit.model_dump(mode="json"))
     return out
 
 
@@ -1234,6 +1261,16 @@ def _count_extracted_fields(extraction: Any) -> int:
         return len(getattr(extraction, "values", []) or [])
     if kind == "unknown":
         return len(getattr(extraction, "key_facts", []) or [])
+    if kind == "intake_form":
+        n = 0
+        n += len(getattr(extraction, "current_medications", []) or [])
+        n += len(getattr(extraction, "allergies", []) or [])
+        n += len(getattr(extraction, "family_history", []) or [])
+        if getattr(extraction, "chief_concern", None) is not None:
+            n += 1
+        if getattr(extraction, "code_status", None) is not None:
+            n += 1
+        return n
     return 0
 
 
@@ -1332,7 +1369,10 @@ async def document_ingest(
     # canonical module path.
     from documents import fhir_writer as _fhir_writer
     from documents import store as _store
+    from documents.ocr import extract_layout as _extract_layout
+    from extractors import intake as _intake
     from extractors import lab as _lab
+    from extractors.classifier import classify_keywords as _classify_keywords
 
     rid = request_id_var.get()
     try:
@@ -1443,13 +1483,24 @@ async def document_ingest(
             },
         )
 
-    # 5) Run extraction.
+    # 5) Run extraction. Classifier-first dispatch: intake_form goes to the
+    #    intake extractor; everything else (lab_report, unknown, no-verdict)
+    #    flows through the lab extractor's existing fallback logic.
     try:
-        extraction = await _lab.extract(
-            pdf_bytes,
-            patient_id=patient_id,
-            document_reference_id=write_result.document_reference_id,
-        )
+        _layout_blocks = _extract_layout(pdf_bytes)
+        _verdict = _classify_keywords(_layout_blocks) if _layout_blocks else None
+        if _verdict is not None and _verdict.kind == "intake_form":
+            extraction = await _intake.extract_intake(
+                pdf_bytes,
+                patient_id=patient_id,
+                document_reference_id=write_result.document_reference_id,
+            )
+        else:
+            extraction = await _lab.extract(
+                pdf_bytes,
+                patient_id=patient_id,
+                document_reference_id=write_result.document_reference_id,
+            )
     except _lab.ExtractionFailed as exc:
         try:
             await _store.fail(extraction_id=claim.extraction_id, error="extraction failed")
@@ -1536,6 +1587,42 @@ async def document_ingest(
             "page_count": page_count,
         },
     }
+
+
+# ── Evidence search (W2 Slice 4.4) ───────────────────────────────────────────
+#
+# POST /evidence/search — hybrid sparse+dense retrieval against
+# copilot_guideline_chunks, optionally re-ranked by Cohere. Returns the top
+# k snippets (chunk metadata + content + score). The retriever_node in the
+# LangGraph pipeline calls rag.retrieve.search() directly; this route is the
+# external surface for ad-hoc queries from agent-ui or evals.
+
+class EvidenceSearchRequest(BaseModel):
+    query: str
+    k: int = 5
+
+
+@app.post("/evidence/search")
+async def evidence_search(body: EvidenceSearchRequest) -> dict:
+    if not body.query or not body.query.strip():
+        raise HTTPException(status_code=400, detail="query must not be empty")
+
+    # Local import keeps the optional numpy / pgvector deps out of the
+    # /health and /agent/query critical paths.
+    from rag import retrieve as _rag_retrieve
+
+    snippets = await _rag_retrieve.search(body.query, k=body.k)
+    out: list[dict[str, Any]] = []
+    for s in snippets:
+        d = s._asdict()
+        ivd = d.get("indexed_version_date")
+        if ivd is not None and not isinstance(ivd, str):
+            try:
+                d["indexed_version_date"] = ivd.isoformat()
+            except Exception:
+                d["indexed_version_date"] = str(ivd)
+        out.append(d)
+    return {"query": body.query, "snippets": out}
 
 
 # ── W2 Dispatch (Slice 3.9) ──────────────────────────────────────────────────

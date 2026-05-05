@@ -98,11 +98,82 @@ class UnknownDocument(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Discriminated union (§7.4) — IntakeForm intentionally deferred for spike.
+# IntakeForm (§7.2)
+# --------------------------------------------------------------------------- #
+
+
+class TextField(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    value: str
+    citations: List[Citation] = Field(min_length=1)
+
+
+class Demographics(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    name: Optional[TextField] = None
+    dob: Optional[TextField] = None
+    sex: Optional[TextField] = None
+    mrn: Optional[TextField] = None
+    address: Optional[TextField] = None
+
+
+class MedicationItem(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    name: str
+    dose: Optional[str] = None
+    citations: List[Citation] = Field(min_length=1)
+
+
+class AllergyItem(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    substance: str
+    reaction: Optional[str] = None
+    citations: List[Citation] = Field(min_length=1)
+
+
+class FamilyHistoryItem(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    relation: str
+    condition: str
+    citations: List[Citation] = Field(min_length=1)
+
+
+class CodeStatus(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    value: Literal["full_code", "DNR", "DNI", "comfort_care", "POLST", "unknown"]
+    citations: List[Citation] = Field(min_length=1)
+
+
+class IntakeForm(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    kind: Literal["intake_form"] = "intake_form"
+    schema_version: Literal["1.0"] = "1.0"
+    patient_id: str
+    document_reference_id: str
+    demographics: Optional[Demographics] = None
+    chief_concern: Optional[TextField] = None
+    current_medications: List[MedicationItem] = Field(default_factory=list)
+    allergies: List[AllergyItem] = Field(default_factory=list)
+    family_history: List[FamilyHistoryItem] = Field(default_factory=list)
+    code_status: Optional[CodeStatus] = None
+    classifier_confidence: float
+    ocr_confidence_range: Tuple[float, float]
+    extracted_at: datetime
+
+
+# --------------------------------------------------------------------------- #
+# Discriminated union (§7.4)
 # --------------------------------------------------------------------------- #
 
 
 ExtractionResult = Annotated[
-    Union[LabReport, UnknownDocument],
+    Union[LabReport, IntakeForm, UnknownDocument],
     Field(discriminator="kind"),
 ]
