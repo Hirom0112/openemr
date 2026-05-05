@@ -85,6 +85,13 @@ CREATE TABLE IF NOT EXISTS copilot_doc_extractions (
 CREATE INDEX IF NOT EXISTS copilot_doc_extractions_status_idx ON copilot_doc_extractions (status, processing_started_at);
 CREATE INDEX IF NOT EXISTS copilot_doc_extractions_doc_ref_idx ON copilot_doc_extractions (document_reference_id);
 
+-- Phase-2 follow-up: per-LabValue FHIR Observation provenance ids.
+-- ``/document/ingest`` writes one Observation per extracted lab value
+-- (deterministic id "copilot-{document_id}-{loinc_code}") via the custom
+-- oe-module-clinical-copilot endpoint and records the resulting ids here.
+ALTER TABLE copilot_doc_extractions
+    ADD COLUMN IF NOT EXISTS observation_ids JSONB;
+
 -- ── Hybrid-RAG guideline corpus (W2 §6 / §17.4) ─────────────────────────────
 --
 -- One row per chunk of indexed clinical guideline text. Sparse retrieval uses

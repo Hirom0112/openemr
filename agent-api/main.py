@@ -19,6 +19,7 @@ Exposes:
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from typing import Any
@@ -1593,6 +1594,68 @@ async def document_ingest(
         )
         raise HTTPException(status_code=500, detail="Document persist failed") from exc
 
+    # 6a) Phase-2 follow-up: derive one FHIR Observation per extracted
+    #     LabValue with derivedFrom -> DocumentReference. OpenEMR's deployed
+    #     FHIR layer doesn't implement Observation write, so we route through
+    #     the custom oe-module-clinical-copilot endpoint. Failures are
+    #     surfaced as soft-warns; they NEVER fail the ingest.
+    observation_ids: list[str] = []
+    observation_soft_warns: list[dict[str, Any]] = []
+    if extraction.kind == "lab_report":
+        from observations.writer import (
+            deterministic_observation_id as _det_obs_id,
+            lookup_loinc as _lookup_loinc,
+            write_observation as _write_obs,
+        )
+
+        # Pull the trailing integer from doc references shaped like
+        # "copilot:117" / "rest:9876" / "doc-test-1" so the deterministic
+        # id satisfies the PHP r"^copilot-\d+-..." rule. Fall back to a
+        # hash-derived integer when no trailing int is present.
+        _doc_ref = write_result.document_reference_id
+        _m = re.search(r"(\d+)$", _doc_ref or "")
+        _doc_id_int = _m.group(1) if _m else str(abs(hash(_doc_ref)) % (10**9))
+
+        for value in getattr(extraction, "values", []) or []:
+            try:
+                _code, _ = _lookup_loinc(value.normalized_test_name)
+                _obs_id = _det_obs_id(_doc_id_int, _code)
+                await _write_obs(
+                    document_id=_doc_id_int,
+                    patient_id=patient_id,
+                    lab_value=value,
+                    observation_id=_obs_id,
+                )
+                observation_ids.append(_obs_id)
+            except Exception as obs_exc:  # noqa: BLE001 — soft-fail boundary
+                logger.warning(
+                    "observation_write_soft_failed",
+                    extra={
+                        "request_id": rid,
+                        "extraction_id": claim.extraction_id,
+                        "normalized_test_name": value.normalized_test_name,
+                        "error_type": type(obs_exc).__name__,
+                    },
+                )
+                observation_soft_warns.append(
+                    {
+                        "code": "observation_write_failed",
+                        "field": value.normalized_test_name,
+                    }
+                )
+
+        if observation_ids:
+            try:
+                await _store.record_observation_ids(
+                    extraction_id=claim.extraction_id,
+                    ids=observation_ids,
+                )
+            except Exception as rec_exc:  # pragma: no cover — best-effort
+                logger.warning(
+                    "observation_record_ids_failed",
+                    extra={"request_id": rid, "error": str(rec_exc)},
+                )
+
     # 7) Audit — two events. detail_json is structured codes only; never
     #    extraction values, never raw OCR.
     try:
@@ -1671,7 +1734,7 @@ async def document_ingest(
             extra={"request_id": rid, "error": str(exc)},
         )
 
-    soft_warns = _build_soft_warns(extraction)
+    soft_warns = _build_soft_warns(extraction) + observation_soft_warns
     return {
         "document_reference_id": write_result.document_reference_id,
         "extraction_id": claim.extraction_id,
@@ -1684,6 +1747,7 @@ async def document_ingest(
             "request_id": rid,
             "size_bytes": size_bytes,
             "page_count": page_count,
+            "observation_ids": observation_ids,
         },
     }
 
