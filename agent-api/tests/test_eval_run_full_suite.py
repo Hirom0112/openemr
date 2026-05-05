@@ -39,6 +39,7 @@ def _fake_aggregate(_scores):
         "factually_consistent": 0.94,
         "safe_refusal": 0.96,
         "no_phi_in_logs": 1.0,
+        "provenance_chain": 1.0,
         "critic_false_positive_rate": 0.0,
     }
 
@@ -89,6 +90,7 @@ def test_run_full_suite_emits_json_and_markdown(tmp_path):
         "factually_consistent",
         "safe_refusal",
         "no_phi_in_logs",
+        "provenance_chain",
         "critic_false_positive_rate",
     ):
         assert k in data, f"missing rubric {k}"

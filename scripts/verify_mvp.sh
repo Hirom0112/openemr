@@ -147,11 +147,13 @@ fi
 #   3a. Direct row in OpenEMR.documents (what clinicians see in the
 #       Documents tab UI, and what the agent's Postgres extraction record
 #       references). This is the definitive chart-presence signal.
-#   3b. FHIR DocumentReference read for the same patient. OpenEMR's FHIR
-#       layer does not currently expose docs written via
-#       Document::createDocument as DocumentReference resources — this
-#       is an OpenEMR FHIR-mapping gap, not a writer bug. Reported as an
-#       INFO line, not a hard fail. See W2_ARCHITECTURE.md §4.2.1.
+#   3b. FHIR DocumentReference read for the same patient. The deployed
+#       OpenEMR returns total=0 because DocumentService::search (line
+#       282-286 in OpenEMR core) filters by ACL via $document->can_access(),
+#       and the OAuth user lacks the patients/docs ACL grant on this
+#       deploy. Granting it via Administration UI activates the FHIR
+#       read path without code changes. Reported as an INFO line, not a
+#       hard fail. See W2_ARCHITECTURE.md §4.2.3.
 # ---------------------------------------------------------------------------
 
 bold "3. Chart round-trip — document persisted in OpenEMR"
@@ -206,9 +208,9 @@ PY
     fi
 
     # 3b. FHIR read uses the OAuth password grant (same path as W1 reads).
-    # Reported as INFO — not a hard fail — because OpenEMR's FHIR
-    # DocumentReference layer is incomplete for docs written via
-    # Document::createDocument (W2_ARCHITECTURE §4.2.1).
+    # Reported as INFO — not a hard fail — because DocumentService::search
+    # ACL-filters out docs the OAuth user can't access (the pilot user
+    # lacks patients/docs); see W2_ARCHITECTURE §4.2.3.
     # Source creds from Railway — local docker-compose uses its own
     # OpenEMR install with different random secrets, so .env.copilot
     # creds won't authenticate against the DEPLOYED OpenEMR.
@@ -246,7 +248,7 @@ PY
         if [[ "${DOCREF_CODE}" == "200" ]]; then
             TOTAL=$(python3 -c "import json,sys; d=json.load(open('${DOCREF_OUT}')); print(d.get('total','?'))" 2>/dev/null || echo "?")
             if [[ "${TOTAL}" == "0" ]] || [[ "${TOTAL}" == "?" ]]; then
-                echo "  [INFO] FHIR DocumentReference total=${TOTAL} for patient ${PATIENT_ID} — OpenEMR's FHIR layer doesn't auto-expose docs written via Document::createDocument; this is an upstream FHIR-mapping gap (see W2_ARCHITECTURE §4.2.1), not a writer bug. The doc IS in the chart."
+                echo "  [INFO] FHIR DocumentReference total=${TOTAL} for patient ${PATIENT_ID} — DocumentService::search filters by ACL (line 282-286 in OpenEMR core); the OAuth user lacks the patients/docs ACL grant on this deploy. Granting it via Administration UI activates the FHIR read path without code changes. The doc IS in the chart and reachable via Postgres copilot_doc_extractions (see W2_ARCHITECTURE §4.2.3)."
             else
                 ok "FHIR DocumentReference search returned ${DOCREF_CODE}, total=${TOTAL}"
             fi
@@ -256,6 +258,164 @@ PY
         rm -f "${DOCREF_OUT}"
     fi
     unset FHIR_TOKEN FHIR_TOKEN_RESP
+fi
+
+# ---------------------------------------------------------------------------
+# Check 5 — Provenance chain — Observation.derivedFrom resolves to source PDF
+#
+# We assert the chain end-to-end across the agent-api response and OpenEMR's
+# module-private MySQL ``copilot_observations`` table:
+#
+#   1. metadata.observation_ids is non-empty (the chain is being produced).
+#   2. Every id has the deterministic shape ``copilot-{doc_id}-{loinc}``.
+#   3. Every id has a row in MySQL.openemr.copilot_observations whose
+#      fhir_resource JSON's derivedFrom[0].reference points at
+#      DocumentReference/copilot-<doc_id> for the same doc.
+#   4. The corresponding documents.id row exists with deleted=0
+#      (the source PDF still resolvable from the chart).
+#   5. Each row's _copilot_citations is a non-empty array of
+#      {bbox_id, quote_or_value} dicts (citation provenance).
+#
+# Note: We can't (yet) round-trip Observation as a queryable FHIR resource
+# because OpenEMR's deployed FHIR Observation read surface is gated by the
+# same OAuth-bearer/PHP-session bind issue as DocumentReference search
+# (W2_ARCHITECTURE §4.2.3). The MySQL probe is the canonical chain check.
+# ---------------------------------------------------------------------------
+
+bold "5. Provenance chain — Observation.derivedFrom resolves to source PDF"
+
+if [[ -z "${EXPECTED_DOC_NUM:-}" ]] || [[ -z "${DOC_REF:-}" ]]; then
+    fail "no document reference from Check 2 — provenance chain cannot be verified"
+elif ! command -v railway >/dev/null 2>&1; then
+    echo "  [SKIP] railway CLI unavailable; provenance chain cannot probe MySQL"
+else
+    JWT2="$(mint_jwt)" || JWT2=""
+    if [[ -z "${JWT2}" ]]; then
+        fail "could not mint JWT for Check 5"
+    else
+        INGEST5_OUT="$(mktemp)"
+        HTTP_CODE5="$(curl -sS -m 90 -o "${INGEST5_OUT}" -w '%{http_code}' \
+            -X POST \
+            -H "Authorization: Bearer ${JWT2}" \
+            -F "file=@${FIXTURE}" \
+            -F "patient_id=${PATIENT_ID}" \
+            -F "doc_type_hint=lab_report" \
+            "${AGENT_API}/document/ingest" 2>/dev/null || echo 000)"
+        unset JWT2
+
+        if [[ "${HTTP_CODE5}" != "200" ]]; then
+            fail "Check 5 ingest re-probe returned HTTP ${HTTP_CODE5}"
+        else
+            OBS_IDS=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(" ".join((d.get("metadata") or {}).get("observation_ids") or []))' "${INGEST5_OUT}" 2>/dev/null || echo "")
+            N_OBS="$(echo "${OBS_IDS}" | tr ' ' '\n' | grep -cE '^.+$' || echo 0)"
+
+            if [[ "${N_OBS}" -lt 1 ]]; then
+                fail "metadata.observation_ids is empty — provenance chain not produced"
+            else
+                # Validate id shape locally before hitting MySQL.
+                BAD_SHAPE=""
+                for OID in ${OBS_IDS}; do
+                    if [[ ! "${OID}" =~ ^copilot-${EXPECTED_DOC_NUM}-[A-Za-z0-9._-]+$ ]]; then
+                        BAD_SHAPE="${OID}"
+                        break
+                    fi
+                done
+                if [[ -n "${BAD_SHAPE}" ]]; then
+                    fail "observation_id has unexpected shape: ${BAD_SHAPE}"
+                else
+                    ok "${N_OBS} observation_ids returned, all match copilot-${EXPECTED_DOC_NUM}-{loinc}"
+                fi
+
+                # Pull MySQL URL.
+                railway service MySQL >/dev/null 2>&1 || true
+                DB_PUB5="$(railway variables --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("MYSQL_PUBLIC_URL",""))' 2>/dev/null || echo "")"
+
+                if [[ -z "${DB_PUB5}" ]]; then
+                    echo "  [SKIP] MYSQL_PUBLIC_URL unavailable; provenance MySQL probe skipped"
+                else
+                    PROBE_RESULT=$(DB_PUB="${DB_PUB5}" OBS_IDS="${OBS_IDS}" DOC_NUM="${EXPECTED_DOC_NUM}" PID="${PATIENT_ID}" python3 - 2>/dev/null <<'PY'
+import asyncio, aiomysql, urllib.parse, os, json, sys
+async def run():
+    u = urllib.parse.urlparse(os.environ['DB_PUB'])
+    obs_ids = [x for x in os.environ['OBS_IDS'].split() if x]
+    doc_num = int(os.environ['DOC_NUM'])
+    conn = await aiomysql.connect(host=u.hostname, port=u.port, user=u.username, password=u.password, db='openemr', autocommit=True)
+    cur = await conn.cursor()
+    fail_msgs = []
+    derived_ok = True
+    citations_ok = True
+    for oid in obs_ids:
+        await cur.execute('SELECT fhir_resource, citations FROM copilot_observations WHERE id=%s', (oid,))
+        row = await cur.fetchone()
+        if not row:
+            derived_ok = False
+            fail_msgs.append(f"missing_row:{oid}")
+            continue
+        try:
+            fhir = json.loads(row[0]) if isinstance(row[0], (str, bytes)) else (row[0] or {})
+        except Exception:
+            fhir = {}
+        derived = fhir.get('derivedFrom') or []
+        if not derived or not isinstance(derived, list):
+            derived_ok = False
+            fail_msgs.append(f"no_derivedFrom:{oid}")
+            continue
+        ref = (derived[0] or {}).get('reference', '') if isinstance(derived[0], dict) else ''
+        if ref != f'DocumentReference/copilot-{doc_num}':
+            derived_ok = False
+            fail_msgs.append(f"wrong_ref:{oid}:{ref}")
+        try:
+            cits = json.loads(row[1]) if isinstance(row[1], (str, bytes)) else (row[1] or [])
+        except Exception:
+            cits = []
+        if not cits or not isinstance(cits, list):
+            citations_ok = False
+            fail_msgs.append(f"no_citations:{oid}")
+            continue
+        cit0 = cits[0] if cits else {}
+        if not isinstance(cit0, dict) or not cit0.get('bbox_id') or not cit0.get('quote_or_value'):
+            citations_ok = False
+            fail_msgs.append(f"citation_shape:{oid}")
+    # Also confirm the source PDF row exists and isn't deleted.
+    await cur.execute('SELECT COUNT(*) FROM documents WHERE id=%s AND deleted=0', (doc_num,))
+    row = await cur.fetchone()
+    doc_ok = bool(row and int(row[0]) >= 1)
+    conn.close()
+    print(json.dumps({'derived_ok': derived_ok, 'citations_ok': citations_ok, 'doc_ok': doc_ok, 'fail': fail_msgs}))
+asyncio.run(run())
+PY
+)
+                    if [[ -z "${PROBE_RESULT}" ]]; then
+                        fail "provenance MySQL probe errored"
+                    else
+                        DERIVED_OK=$(echo "${PROBE_RESULT}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('derived_ok'))" 2>/dev/null || echo "False")
+                        CIT_OK=$(echo "${PROBE_RESULT}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('citations_ok'))" 2>/dev/null || echo "False")
+                        DOC_OK=$(echo "${PROBE_RESULT}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('doc_ok'))" 2>/dev/null || echo "False")
+                        FAIL_LIST=$(echo "${PROBE_RESULT}" | python3 -c "import json,sys; print(','.join(json.load(sys.stdin).get('fail') or []))" 2>/dev/null || echo "")
+
+                        if [[ "${DERIVED_OK}" == "True" ]]; then
+                            ok "Each row in MySQL.copilot_observations has fhir_resource.derivedFrom -> DocumentReference/copilot-${EXPECTED_DOC_NUM}"
+                        else
+                            fail "derivedFrom chain broken: ${FAIL_LIST}"
+                        fi
+                        if [[ "${DOC_OK}" == "True" ]]; then
+                            ok "documents.id=${EXPECTED_DOC_NUM} row exists with deleted=0"
+                        else
+                            fail "documents.id=${EXPECTED_DOC_NUM} missing or deleted"
+                        fi
+                        if [[ "${CIT_OK}" == "True" ]]; then
+                            ok "Each row's _copilot_citations carries at least one {bbox_id, quote_or_value}"
+                        else
+                            fail "citation chain broken: ${FAIL_LIST}"
+                        fi
+                    fi
+                fi
+                # Restore service link.
+                railway service copilot-agent-api >/dev/null 2>&1 || true
+            fi
+        fi
+        rm -f "${INGEST5_OUT}"
+    fi
 fi
 
 # ---------------------------------------------------------------------------

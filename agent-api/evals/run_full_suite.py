@@ -115,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         "factually_consistent",
         "safe_refusal",
         "no_phi_in_logs",
+        "provenance_chain",
         "critic_false_positive_rate",
     )
     results: dict[str, float] = {}

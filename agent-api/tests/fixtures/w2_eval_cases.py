@@ -45,6 +45,17 @@ class W2EvalCase:
     expected_softwarn_codes: tuple[str, ...] = ()
     expected_field_assertions: tuple[tuple[str, str], ...] = ()
     notes: str = ""
+    # Phase 3 — Observation.derivedFrom provenance chain assertions.
+    # When set on a case (lab_nominal cases that produce real Observations),
+    # the rubric layer probes the MySQL ``copilot_observations`` table and
+    # checks the chain end-to-end. When None, the rubric is skipped.
+    # Shape:
+    #   {
+    #     "observations_min": int,        # >= N Observation rows expected
+    #     "all_have_derivedFrom": bool,   # every Observation.derivedFrom non-empty
+    #     "all_citations_resolve": bool,  # every citation bbox_id is in ocr_layout
+    #   }
+    expected_provenance: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +182,11 @@ CASES: list[W2EvalCase] = [
         expected_critic_decision="pass",
         expected_field_assertions=(("values[?test_name=='lactate'].value", "4.2"),),
         notes="Demo headline value: critical lactate.",
+        expected_provenance={
+            "observations_min": 1,
+            "all_have_derivedFrom": True,
+            "all_citations_resolve": True,
+        },
     ),
     W2EvalCase(
         case_id="lab_nominal_002_osh_lactate_no_hint",
@@ -182,6 +198,11 @@ CASES: list[W2EvalCase] = [
         expected_critic_decision="pass",
         expected_field_assertions=(("values[?test_name=='lactate'].value", "4.2"),),
         notes="No type hint — classifier alone must resolve.",
+        expected_provenance={
+            "observations_min": 1,
+            "all_have_derivedFrom": True,
+            "all_citations_resolve": True,
+        },
     ),
     W2EvalCase(
         case_id="lab_nominal_003_cbc_bmp",
@@ -202,6 +223,11 @@ CASES: list[W2EvalCase] = [
         expected_kind="lab_report",
         expected_critic_decision="pass",
         expected_field_assertions=(("values[?test_name=='hgb'].value", "13.4"),),
+        expected_provenance={
+            "observations_min": 1,
+            "all_have_derivedFrom": True,
+            "all_citations_resolve": True,
+        },
     ),
     W2EvalCase(
         case_id="lab_nominal_005_lipid",
@@ -221,6 +247,11 @@ CASES: list[W2EvalCase] = [
         chart_patient=PT_CARLOS_REYES,
         expected_kind="lab_report",
         expected_critic_decision="pass",
+        expected_provenance={
+            "observations_min": 1,
+            "all_have_derivedFrom": True,
+            "all_citations_resolve": True,
+        },
     ),
     W2EvalCase(
         case_id="lab_nominal_007_critical_glucose",
@@ -240,6 +271,11 @@ CASES: list[W2EvalCase] = [
         chart_patient=PT_PRIYA_NATARAJAN,
         expected_kind="lab_report",
         expected_critic_decision="pass",
+        expected_provenance={
+            "observations_min": 1,
+            "all_have_derivedFrom": True,
+            "all_citations_resolve": True,
+        },
     ),
     W2EvalCase(
         case_id="lab_nominal_009_osh_lactate_male_only_chart",
@@ -257,6 +293,11 @@ CASES: list[W2EvalCase] = [
         expected_kind="lab_report",
         expected_critic_decision="pass",
         notes="Chart name carries middle initial — should still pass.",
+        expected_provenance={
+            "observations_min": 1,
+            "all_have_derivedFrom": True,
+            "all_citations_resolve": True,
+        },
     ),
     W2EvalCase(
         case_id="lab_nominal_010_cbc_bmp_alt_chart",
@@ -267,6 +308,11 @@ CASES: list[W2EvalCase] = [
         expected_kind="lab_report",
         expected_critic_decision="pass",
         expected_field_assertions=(("values[?test_name=='cr'].value", "0.9"),),
+        expected_provenance={
+            "observations_min": 1,
+            "all_have_derivedFrom": True,
+            "all_citations_resolve": True,
+        },
     ),
     W2EvalCase(
         case_id="lab_nominal_011_lipid_repeat",
@@ -289,6 +335,11 @@ CASES: list[W2EvalCase] = [
         expected_kind="lab_report",
         expected_critic_decision="pass",
         expected_field_assertions=(("values[?test_name=='anion_gap'].value", "22"),),
+        expected_provenance={
+            "observations_min": 1,
+            "all_have_derivedFrom": True,
+            "all_citations_resolve": True,
+        },
     ),
     # =====================================================================
     # Bucket: intake_nominal — 10 cases

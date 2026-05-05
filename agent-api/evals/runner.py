@@ -35,6 +35,14 @@ class RunOutcome:
     soft_warns: List[Dict[str, Any]] = field(default_factory=list)
     captured_logs: List[Dict[str, Any]] = field(default_factory=list)
     error: Optional[str] = None
+    # Phase 3 — provenance chain probe. ``ocr_layout`` mirrors graph state
+    # (one entry per OCR block, keyed by ``bbox_id``); ``observations`` is
+    # the list of FHIR-shaped Observation rows fetched from
+    # ``copilot_observations`` (one per id in ``metadata.observation_ids``).
+    # When the MySQL probe is unavailable the runner leaves ``observations``
+    # as ``None`` and the rubric records ``provenance_chain=None`` (skipped).
+    ocr_layout: Optional[List[Dict[str, Any]]] = None
+    observations: Optional[List[Dict[str, Any]]] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -238,6 +246,8 @@ async def run_case(
             soft_warns=list(final.get("soft_warns") or []),
             captured_logs=list(handler.records),
             error=None,
+            ocr_layout=list(final.get("ocr_layout") or []) if final.get("ocr_layout") is not None else None,
+            observations=None,  # populated by probe_observations() if MySQL is reachable
         )
     except Exception as exc:  # noqa: BLE001 — runner is policy-free
         logger.exception(
@@ -257,4 +267,94 @@ async def run_case(
         _detach_capture(handler)
 
 
-__all__ = ["RunOutcome", "run_case", "resolve_fixture_path"]
+# --------------------------------------------------------------------------- #
+# Optional MySQL probe — Observation provenance chain (Phase 3)
+# --------------------------------------------------------------------------- #
+
+
+_OBS_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+async def probe_observations(
+    observation_ids: List[str],
+    *,
+    mysql_url: Optional[str] = None,
+) -> Optional[List[Dict[str, Any]]]:
+    """Fetch ``copilot_observations`` rows for the given ids.
+
+    Returns a list of ``{"id", "fhir_resource", "_copilot_citations"}`` dicts
+    when the MySQL probe is reachable. Returns ``None`` when MySQL is not
+    available — the caller treats that as "skipped".
+
+    Reads ``COPILOT_OBSERVATIONS_MYSQL_URL`` from the env when no URL is
+    provided. The URL must be of the shape ``mysql://user:pass@host:port/db``;
+    the runner uses ``aiomysql`` which is an optional dep on the host.
+    """
+    import os
+    import json as _json
+
+    if not observation_ids:
+        return []
+
+    url = mysql_url or os.environ.get("COPILOT_OBSERVATIONS_MYSQL_URL", "")
+    if not url:
+        return None
+
+    try:
+        import aiomysql  # type: ignore
+        import urllib.parse as _u
+    except Exception:  # pragma: no cover — optional dep
+        return None
+
+    parsed = _u.urlparse(url)
+    out: List[Dict[str, Any]] = []
+    try:
+        conn = await aiomysql.connect(
+            host=parsed.hostname,
+            port=parsed.port or 3306,
+            user=parsed.username,
+            password=parsed.password,
+            db=(parsed.path or "/openemr").lstrip("/") or "openemr",
+            autocommit=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("probe_observations_connect_failed", extra={"error_type": type(exc).__name__})
+        return None
+
+    try:
+        cur = await conn.cursor()
+        for obs_id in observation_ids:
+            if obs_id in _OBS_CACHE:
+                out.append(_OBS_CACHE[obs_id])
+                continue
+            await cur.execute(
+                "SELECT id, fhir_resource, citations FROM copilot_observations WHERE id=%s",
+                (obs_id,),
+            )
+            row = await cur.fetchone()
+            if not row:
+                continue
+            try:
+                fhir_resource = _json.loads(row[1]) if isinstance(row[1], (str, bytes)) else (row[1] or {})
+            except Exception:
+                fhir_resource = {}
+            try:
+                citations = _json.loads(row[2]) if isinstance(row[2], (str, bytes)) else (row[2] or [])
+            except Exception:
+                citations = []
+            entry = {
+                "id": row[0],
+                "fhir_resource": fhir_resource,
+                "_copilot_citations": citations,
+            }
+            _OBS_CACHE[obs_id] = entry
+            out.append(entry)
+        return out
+    finally:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover
+            pass
+
+
+__all__ = ["RunOutcome", "run_case", "resolve_fixture_path", "probe_observations"]
