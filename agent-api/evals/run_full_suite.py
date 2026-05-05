@@ -15,12 +15,39 @@ Wires the contracted public APIs:
 from __future__ import annotations
 
 import argparse
+import asyncio
+import inspect
 import json
+import logging
+import os
+import random
 import sys
+import time
+import uuid
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+# Default batch size for asyncio.gather over cases. Tunable via env var so
+# CI can drop it without a code change if upstream rate limits tighten.
+DEFAULT_BATCH_SIZE = 8
+
+# Backoff schedule for HTTP-429 (or transient) errors emitted by run_case /
+# score_case. Three retries: 1s, 2s, 4s — total worst-case 7s additional
+# wall-time per case. Anything beyond that is treated as a permanent failure
+# and surfaced as an "ERROR" row in the results table.
+_RETRY_BACKOFF_SCHEDULE = (1.0, 2.0, 4.0)
+_MAX_RETRIES = len(_RETRY_BACKOFF_SCHEDULE)
+
+
+# Indirected so tests can monkeypatch the backoff sleep without touching
+# ``asyncio.sleep`` globally (which would also slow down asyncio.gather's
+# internal scheduling).
+async def _retry_sleep(seconds: float) -> None:
+    await asyncio.sleep(seconds)
 
 # Allow running both via `python3 -m evals.run_full_suite` (cwd=agent-api)
 # and directly. Tests patch the module-level symbols, so import lazily inside main.
@@ -61,39 +88,241 @@ def _markdown_report(case_rows: list[dict], aggregates: dict) -> str:
     return "\n".join(lines)
 
 
+async def _maybe_await(value: Any) -> Any:
+    """Await ``value`` if it is awaitable; otherwise return it as-is.
+
+    Tests patch ``run_case`` / ``score_case`` with plain (sync) lambdas — the
+    serial implementation tolerated this because awaiting a non-coroutine
+    raises a TypeError that the outer try/except swallowed. The parallel
+    implementation must be more careful: we don't want a "TypeError: object
+    int can't be used in 'await' expression" failure to silently turn every
+    case into an ERROR row.
+    """
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+def _is_retryable_exception(exc: BaseException) -> bool:
+    """Return True for transient errors worth retrying (429 / 503 / network).
+
+    We do not import the Anthropic / Voyage SDKs here — that would couple the
+    eval driver to specific client libraries. Instead we sniff the exception's
+    type name and string for the classic transient signals.
+    """
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    if "ratelimit" in name or "rate_limit" in name:
+        return True
+    if "429" in msg or "rate limit" in msg or "rate-limit" in msg:
+        return True
+    if "503" in msg or "overloaded" in msg or "service unavailable" in msg:
+        return True
+    if "timeout" in name or "timeout" in msg:
+        return True
+    return False
+
+
+async def _call_with_retry(
+    fn: Any,
+    *args: Any,
+    case_id: str,
+    request_id: str,
+    op: str,
+    **kwargs: Any,
+) -> Any:
+    """Invoke ``fn`` with up to _MAX_RETRIES backoff retries on transient errors.
+
+    Logs every retry with PSR-3-style structured ``extra`` so the JSON log
+    formatter preserves request_id / case_id / attempt for the eval gate's
+    post-mortem.
+    """
+    last_exc: Optional[BaseException] = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            result = fn(*args, **kwargs)
+            return await _maybe_await(result)
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= _MAX_RETRIES or not _is_retryable_exception(exc):
+                raise
+            backoff = _RETRY_BACKOFF_SCHEDULE[attempt]
+            # Tiny jitter so 8 cases sharing a batch don't synchronise their
+            # retries into the same 1s window.
+            jitter = random.uniform(0.0, 0.25)
+            logger.warning(
+                "eval.retry",
+                extra={
+                    "case_id": case_id,
+                    "request_id": request_id,
+                    "op": op,
+                    "attempt": attempt + 1,
+                    "max_attempts": _MAX_RETRIES,
+                    "backoff_seconds": backoff,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc)[:200],
+                },
+            )
+            await _retry_sleep(backoff + jitter)
+    # Defensive: loop should have either returned or re-raised.
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("eval._call_with_retry: unreachable")
+
+
+async def _process_one_case(
+    case: Any,
+    *,
+    run_case: Any,
+    score_case: Any,
+    fixtures_root: Path,
+) -> dict[str, Any]:
+    """Run + score one case. Always returns a dict (never raises).
+
+    The dict has keys ``row`` (always present), ``score`` / ``case`` /
+    ``outcome`` (present only on success), and ``error`` (present on failure).
+    """
+    case_id = getattr(case, "case_id", "?")
+    request_id = uuid.uuid4().hex[:12]
+    try:
+        outcome = await _call_with_retry(
+            run_case,
+            case,
+            fixtures_root=fixtures_root,
+            case_id=case_id,
+            request_id=request_id,
+            op="run_case",
+        )
+        score = await _call_with_retry(
+            score_case,
+            case,
+            outcome,
+            case_id=case_id,
+            request_id=request_id,
+            op="score_case",
+        )
+        score_d = _serialize(score)
+        case_d = _serialize(case)
+        status = score_d.get("status") if isinstance(score_d, dict) else "?"
+        row = {
+            "case_id": (case_d.get("case_id") if isinstance(case_d, dict) else case_id),
+            "bucket": (case_d.get("bucket") if isinstance(case_d, dict) else getattr(case, "bucket", "?")),
+            "status": status if status is not None else "scored",
+            "notes": (score_d.get("notes", "") if isinstance(score_d, dict) else ""),
+        }
+        return {
+            "row": row,
+            "score": score,
+            "case": case,
+            "outcome": outcome,
+            "case_id": case_id,
+            "ok": True,
+        }
+    except Exception as exc:
+        return {
+            "row": {
+                "case_id": case_id,
+                "bucket": getattr(case, "bucket", "?"),
+                "status": "ERROR",
+                "notes": str(exc),
+            },
+            "case_id": case_id,
+            "ok": False,
+            "error": str(exc),
+        }
+
+
 async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], list[Any], dict[str, Any]]:
     # Lazy imports — let tests patch these.
     from tests.fixtures.w2_eval_cases import CASES  # type: ignore
     from evals.runner import run_case  # type: ignore
     from evals.scoring import aggregate, score_case  # type: ignore
 
+    # Counter / histogram are imported lazily — they live in agent.metrics
+    # which pulls in prometheus_client. The eval suite is the only consumer
+    # outside the FastAPI app, so do this once per run.
+    try:
+        from agent.metrics import (  # type: ignore
+            agent_eval_batch_duration_seconds,
+            agent_eval_cases_completed_total,
+        )
+    except Exception:  # pragma: no cover — metrics are best-effort
+        agent_eval_batch_duration_seconds = None
+        agent_eval_cases_completed_total = None
+
+    cases = list(CASES)
+    max_cases = getattr(args, "max_cases", None)
+    if max_cases is not None and max_cases > 0:
+        cases = cases[:max_cases]
+
+    batch_size = max(1, int(args.batch_size))
+
     case_rows: list[dict] = []
     scores: list[Any] = []
-    scored_cases: list[Any] = []  # parallel to scores — for per-modality breakdown
+    scored_cases: list[Any] = []
     outcomes_by_case_id: dict[str, Any] = {}
-    for case in CASES:
-        try:
-            outcome = await run_case(case, fixtures_root=args.fixtures_root)
-            outcomes_by_case_id[getattr(case, "case_id", "")] = outcome
-            score = await score_case(case, outcome)
-            scores.append(score)
-            scored_cases.append(case)
-            score_d = _serialize(score)
-            case_d = _serialize(case)
-            status = score_d.get("status") if isinstance(score_d, dict) else "?"
-            case_rows.append({
-                "case_id": (case_d.get("case_id") if isinstance(case_d, dict) else getattr(case, "case_id", "?")),
-                "bucket": (case_d.get("bucket") if isinstance(case_d, dict) else getattr(case, "bucket", "?")),
-                "status": status if status is not None else "scored",
-                "notes": (score_d.get("notes", "") if isinstance(score_d, dict) else ""),
-            })
-        except Exception as e:  # never blow up the run; record the error
-            case_rows.append({
-                "case_id": getattr(case, "case_id", "?"),
-                "bucket": getattr(case, "bucket", "?"),
-                "status": "ERROR",
-                "notes": str(e),
-            })
+
+    total = len(cases)
+    completed = 0
+    for batch_index in range(0, total, batch_size):
+        batch = cases[batch_index : batch_index + batch_size]
+        t0 = time.perf_counter()
+        results = await asyncio.gather(
+            *(
+                _process_one_case(
+                    c,
+                    run_case=run_case,
+                    score_case=score_case,
+                    fixtures_root=args.fixtures_root,
+                )
+                for c in batch
+            ),
+            return_exceptions=False,
+        )
+        wall = time.perf_counter() - t0
+
+        success = sum(1 for r in results if r.get("ok"))
+        errors = len(results) - success
+        completed += len(results)
+
+        if agent_eval_batch_duration_seconds is not None:
+            try:
+                agent_eval_batch_duration_seconds.observe(wall)
+            except Exception:  # pragma: no cover
+                pass
+        if agent_eval_cases_completed_total is not None:
+            try:
+                if success:
+                    agent_eval_cases_completed_total.labels(outcome="success").inc(success)
+                if errors:
+                    agent_eval_cases_completed_total.labels(outcome="error").inc(errors)
+            except Exception:  # pragma: no cover
+                pass
+
+        logger.info(
+            "eval.batch_complete",
+            extra={
+                "batch_index": batch_index // batch_size,
+                "batch_size": len(batch),
+                "duration_seconds": round(wall, 3),
+                "success": success,
+                "errors": errors,
+                "completed": completed,
+                "total": total,
+                "cache": "n/a",
+            },
+        )
+
+        for r in results:
+            case_rows.append(r["row"])
+            if r.get("ok"):
+                scores.append(r["score"])
+                scored_cases.append(r["case"])
+                outcomes_by_case_id[r["case_id"]] = r["outcome"]
+
+    # Deterministic output ordering — sort by case_id so the JSON / Markdown
+    # diff cleanly across runs regardless of asyncio.gather completion order.
+    case_rows.sort(key=lambda row: str(row.get("case_id") or ""))
 
     return case_rows, scores, scored_cases, outcomes_by_case_id
 
@@ -275,11 +504,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True, help="Path to JSON results")
     parser.add_argument("--md", type=Path, default=None, help="Path to Markdown report")
     parser.add_argument("--fixtures-root", type=Path, default=REPO_AGENT_API / "tests" / "fixtures" / "eval")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=int(os.environ.get("EVAL_PARALLEL_BATCH_SIZE", DEFAULT_BATCH_SIZE)),
+        help="asyncio.gather batch size (default: $EVAL_PARALLEL_BATCH_SIZE or 8)",
+    )
+    parser.add_argument(
+        "--max-cases",
+        type=int,
+        default=None,
+        help="If set, only run the first N cases (for dry-run smoke tests)",
+    )
     args = parser.parse_args(argv)
 
     md_path = args.md or args.output.with_suffix(".md")
 
-    import asyncio
     case_rows, scores, scored_cases, outcomes_by_case_id = asyncio.run(_run_async(args))
 
     from evals.scoring import aggregate  # type: ignore

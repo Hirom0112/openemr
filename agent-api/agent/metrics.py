@@ -235,3 +235,18 @@ agent_ocr_extraction_duration_seconds = Histogram(
     ["engine"],
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0),
 )
+
+# ── Eval suite parallelization (Wave 2C+) ────────────────────────────────────
+# Emitted by ``evals/run_full_suite.py`` once per asyncio.gather batch and
+# once per case completion. ``outcome`` ∈ {"success", "error"}.
+agent_eval_batch_duration_seconds = Histogram(
+    "agent_eval_batch_duration_seconds",
+    "Wall-clock seconds spent running one eval-suite batch via asyncio.gather",
+    buckets=(0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0),
+)
+
+agent_eval_cases_completed_total = Counter(
+    "agent_eval_cases_completed_total",
+    "Eval-suite cases completed by outcome (success|error)",
+    ["outcome"],
+)
