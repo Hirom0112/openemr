@@ -269,9 +269,26 @@ async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], l
         agent_eval_cases_completed_total = None
 
     cases = list(CASES)
-    max_cases = getattr(args, "max_cases", None)
-    if max_cases is not None and max_cases > 0:
-        cases = cases[:max_cases]
+
+    # --smoke overrides --max-cases: select the deterministic 10-case subset.
+    smoke = getattr(args, "smoke", False)
+    if smoke:
+        from evals._smoke_subset import SMOKE_CASE_IDS  # type: ignore
+        case_by_id = {c.case_id: c for c in cases}
+        cases = [case_by_id[cid] for cid in SMOKE_CASE_IDS if cid in case_by_id]
+        logger.info(
+            "eval.smoke_mode",
+            extra={
+                "mode": "SMOKE",
+                "n_cases": len(cases),
+                "case_ids": list(SMOKE_CASE_IDS),
+            },
+        )
+        print(f"eval running in SMOKE mode, n={len(cases)} cases")
+    else:
+        max_cases = getattr(args, "max_cases", None)
+        if max_cases is not None and max_cases > 0:
+            cases = cases[:max_cases]
 
     batch_size = max(1, int(args.batch_size))
 
@@ -632,6 +649,16 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=None,
         help="If set, only run the first N cases (for dry-run smoke tests)",
+    )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        default=False,
+        help=(
+            "Run the deterministic 10-case smoke subset instead of the full suite. "
+            "Overrides --max-cases when both are passed. "
+            "Costs ~$1 API spend vs ~$15-30 for the full 124-case suite."
+        ),
     )
     args = parser.parse_args(argv)
 
