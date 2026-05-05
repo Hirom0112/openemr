@@ -158,6 +158,7 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
       COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+      AUDIT_DB_URL: ${{ secrets.AUDIT_DB_URL }}
       COPILOT_OBSERVATIONS_MYSQL_URL: "mysql://openemr:openemr@127.0.0.1:3306/openemr"
 
     steps:
