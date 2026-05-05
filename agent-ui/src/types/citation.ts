@@ -44,6 +44,14 @@ export interface BboxLayoutBlock {
   bbox: [number, number, number, number];
   text: string;
   ocr_confidence: number;
+  /**
+   * Block granularity, set by the backend extraction layer. "word" = a single
+   * word-level OCR box; "line" = an aggregated line-level box. The frontend
+   * uses this purely for an affordance hint (dashed vs solid bbox border).
+   * Optional for backwards-compatibility with cached responses produced
+   * before this field was introduced.
+   */
+  granularity?: 'word' | 'line';
 }
 
 /** A non-fatal extraction warning the UI surfaces as a yellow banner. */

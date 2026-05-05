@@ -17,6 +17,12 @@ export interface BboxOverlayProps {
   /** [x, y, w, h] in PDF points. Origin top-left. Null = nothing to draw. */
   bbox: [number, number, number, number] | null;
   color?: string;
+  /**
+   * Optional granularity hint from the OCR layout block. Renders a dashed
+   * border for word-level citations and a solid border for line-level (or
+   * unspecified) citations — a subtle visual affordance, no geometry change.
+   */
+  granularity?: 'word' | 'line';
 }
 
 export function computeOverlayRect(
@@ -38,12 +44,24 @@ export function computeOverlayRect(
 }
 
 export default function BboxOverlay(props: BboxOverlayProps): ReactElement | null {
-  const { bbox, canvasWidth, canvasHeight, pdfPageWidth, pdfPageHeight, color = '#f97316' } = props;
+  const {
+    bbox,
+    canvasWidth,
+    canvasHeight,
+    pdfPageWidth,
+    pdfPageHeight,
+    color = '#f97316',
+    granularity,
+  } = props;
   if (!bbox || !pdfPageWidth || !pdfPageHeight) return null;
   const rect = computeOverlayRect(bbox, canvasWidth, canvasHeight, pdfPageWidth, pdfPageHeight);
+  // Word-level boxes get a dashed border to signal "tighter, narrower
+  // citation"; line and undefined granularity keep the existing solid border.
+  const borderStyle = granularity === 'word' ? 'dashed' : 'solid';
   return (
     <div
       data-testid="bbox-overlay"
+      data-granularity={granularity ?? 'unknown'}
       aria-hidden="true"
       style={{
         position: 'absolute',
@@ -51,7 +69,7 @@ export default function BboxOverlay(props: BboxOverlayProps): ReactElement | nul
         top: rect.top,
         width: rect.width,
         height: rect.height,
-        border: `2px solid ${color}`,
+        border: `2px ${borderStyle} ${color}`,
         borderRadius: 2,
         pointerEvents: 'none',
         boxShadow: `0 0 0 1px rgba(255,255,255,0.6)`,

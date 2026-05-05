@@ -41,6 +41,18 @@ interface PageRender {
   pageHeight: number;
 }
 
+type ImageMime = 'image/png' | 'image/jpeg';
+
+function sniffImageMime(buf: ArrayBuffer): ImageMime | null {
+  if (buf.byteLength < 4) return null;
+  const u = new Uint8Array(buf, 0, 4);
+  // PNG: 89 50 4E 47
+  if (u[0] === 0x89 && u[1] === 0x50 && u[2] === 0x4e && u[3] === 0x47) return 'image/png';
+  // JPEG: FF D8 FF
+  if (u[0] === 0xff && u[1] === 0xd8 && u[2] === 0xff) return 'image/jpeg';
+  return null;
+}
+
 function pageNumberFromCitation(c: Citation | undefined): number {
   if (!c) return 1;
   // Prefer the explicit numeric `page` (new contract) when the backend supplies
@@ -72,11 +84,30 @@ export default function DocumentViewer(props: DocumentViewerProps): ReactElement
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
 
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [pageInfo, setPageInfo] = useState<PageRender | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
+
+  // When the source is a raster image (PNG/JPEG), pdf.js can't parse it.
+  // Sniff the magic bytes once and short-circuit to an <img> render path
+  // — bbox coords from the OCR layout are already in image-pixel space,
+  // so the same overlay math works without a viewport scale.
+  const imageMime = useMemo<ImageMime | null>(() => {
+    if (!pdfBytes) return null;
+    return sniffImageMime(pdfBytes);
+  }, [pdfBytes]);
+  const imageUrl = useMemo<string | null>(() => {
+    if (!pdfBytes || !imageMime) return null;
+    const blob = new Blob([pdfBytes.slice(0)], { type: imageMime });
+    return URL.createObjectURL(blob);
+  }, [pdfBytes, imageMime]);
+  useEffect(() => {
+    if (!imageUrl) return;
+    return () => URL.revokeObjectURL(imageUrl);
+  }, [imageUrl]);
 
   // Load PDF (URL or bytes). Re-run only when source changes — the proxy is
   // reused across page renders.
@@ -89,6 +120,15 @@ export default function DocumentViewer(props: DocumentViewerProps): ReactElement
   // can transfer the clone and the original stays valid for next time.
   useEffect(() => {
     let cancelled = false;
+    // Image branch: pdfjs path is skipped entirely. Loading state is
+    // driven by the <img>'s onLoad/onError below.
+    if (imageMime) {
+      setPdf(null);
+      setPageInfo(null);
+      setLoadError(null);
+      setLoading(true);
+      return;
+    }
     let source: string | ArrayBuffer | undefined = undefined;
     if (pdfBytes) {
       try {
@@ -117,7 +157,7 @@ export default function DocumentViewer(props: DocumentViewerProps): ReactElement
     return () => {
       cancelled = true;
     };
-  }, [pdfUrl, pdfBytes]);
+  }, [pdfUrl, pdfBytes, imageMime]);
 
   // Render the page indicated by the active citation.
   const targetPage = pageNumberFromCitation(activeCitation);
@@ -165,6 +205,17 @@ export default function DocumentViewer(props: DocumentViewerProps): ReactElement
     const block = bboxLayout.find((b) => b.bbox_id === activeCitation.field_or_chunk_id);
     if (!block) return null;
     return block.bbox;
+  }, [activeCitation, bboxLayout]);
+
+  // Look up the granularity for the active citation from the layout table.
+  // Citations themselves don't carry granularity on the wire — only the
+  // layout blocks do — so we resolve by `field_or_chunk_id -> bbox_id`.
+  // Undefined when the layout doesn't include the block (older response, or
+  // bbox supplied inline only) — BboxOverlay falls back to its solid default.
+  const activeGranularity = useMemo<'word' | 'line' | undefined>(() => {
+    if (!activeCitation) return undefined;
+    const block = bboxLayout.find((b) => b.bbox_id === activeCitation.field_or_chunk_id);
+    return block?.granularity;
   }, [activeCitation, bboxLayout]);
 
   // Keyboard cycling. Only attaches when we have multiple citations.
@@ -277,7 +328,48 @@ export default function DocumentViewer(props: DocumentViewerProps): ReactElement
         {hasSource && !loadError && loading && !pdf && (
           <div style={{ color: '#e5e7eb', fontSize: 13, marginTop: 24 }}>Loading document…</div>
         )}
-        {hasSource && !loadError && (
+        {hasSource && !loadError && imageMime && imageUrl && (
+          <div style={{ position: 'relative', display: 'inline-block' }}>
+            <img
+              ref={imgRef}
+              src={imageUrl}
+              alt="Document"
+              data-testid="document-image"
+              onLoad={(e) => {
+                const el = e.currentTarget;
+                setPageInfo({
+                  width: el.clientWidth,
+                  height: el.clientHeight,
+                  pageWidth: el.naturalWidth,
+                  pageHeight: el.naturalHeight,
+                });
+                setLoading(false);
+              }}
+              onError={() => {
+                setLoadError('Could not load document');
+                setLoading(false);
+              }}
+              style={{
+                display: 'block',
+                maxWidth: 'min(720px, 100%)',
+                height: 'auto',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+                background: 'white',
+              }}
+            />
+            {pageInfo && (
+              <BboxOverlay
+                canvasWidth={pageInfo.width}
+                canvasHeight={pageInfo.height}
+                pdfPageWidth={pageInfo.pageWidth}
+                pdfPageHeight={pageInfo.pageHeight}
+                bbox={activeBbox}
+                granularity={activeGranularity}
+              />
+            )}
+          </div>
+        )}
+        {hasSource && !loadError && !imageMime && (
           <div style={{ position: 'relative', display: 'inline-block' }}>
             <canvas
               ref={canvasRef}
@@ -291,6 +383,7 @@ export default function DocumentViewer(props: DocumentViewerProps): ReactElement
                 pdfPageWidth={pageInfo.pageWidth}
                 pdfPageHeight={pageInfo.pageHeight}
                 bbox={activeBbox}
+                granularity={activeGranularity}
               />
             )}
           </div>
