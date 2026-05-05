@@ -50,6 +50,13 @@ services:
       LANGFUSE_HOST: "${LANGFUSE_HOST:-https://cloud.langfuse.com}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       COPILOT_JWT_SECRET: "${COPILOT_JWT_SECRET:-}"
+      # CORS allowlist origin — when allow_credentials=True the browser
+      # rejects "*", so this MUST be the iframe's origin (default: the
+      # local OpenEMR's host port). Override via env if you serve OpenEMR
+      # on a non-default port. Without this, the agent-api logs a startup
+      # warning and falls back to "*", which is insecure AND breaks
+      # browsers that enforce the allow_credentials/Origin pairing rule.
+      OPENEMR_ORIGIN: "${OPENEMR_ORIGIN:-http://localhost:${WT_HTTP_PORT:-8300}}"
       AUDIT_DB_URL: "${AUDIT_DB_URL:-postgresql://copilot:copilot@copilot-audit-postgres:5432/copilot_audit}"
     depends_on:
       redis:
