@@ -228,7 +228,11 @@ async def _write_via_custom_endpoint(
 
     url = _custom_upload_url()
     filename = (display or "document") + ".pdf"
-    files = {"document": (filename, pdf_bytes, mime_type)}
+    # Field name "file" — UploadController.php reads $_FILES['file'].
+    # The legacy REST tier (_write_via_rest) uses "document" because
+    # OpenEMR's RestApiController reads $_FILES['document'] there.
+    # Two endpoints, two different field-name contracts — do not unify.
+    files = {"file": (filename, pdf_bytes, mime_type)}
     data: dict[str, str] = {"patient_id": patient_id}
     if doc_type_hint:
         data["doc_type_hint"] = doc_type_hint
