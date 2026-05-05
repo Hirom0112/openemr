@@ -81,6 +81,20 @@ class Settings(BaseSettings):
     # ``OCR_ENGINE=tesseract``.
     ocr_engine: str = "tesseract"
 
+    # ── Tesseract tuning knobs (Wave 2D) ─────────────────────────────────────
+    # PSM (page segmentation mode) and DPI passed to ``pytesseract.image_to_data``
+    # via the ``config`` arg. Defaults match Wave 2A measured behavior — do NOT
+    # change defaults without re-running the grid runner in
+    # ``scripts/tune_ocr_grid.py`` and confirming a Pareto win across modality
+    # buckets. PSM 3 is fully-automatic page segmentation; DPI 300 is the
+    # rasterization density used when the input arrives as an image.
+    #   TESSERACT_PSM ∈ {0..13}; common values: 3 (default), 4 (single column
+    #   variable text), 6 (single uniform block).
+    #   TESSERACT_DPI ∈ [72, 1200]; clamped at parse time. Note: DPI is only
+    #   honored when we rasterize internally; for raw PNG/JPG it is metadata.
+    tesseract_psm: int = 3
+    tesseract_dpi: int = 300
+
     # ── Auth / CORS ──────────────────────────────────────────────────────────
     # HS256 secret used to verify JWTs minted by the OpenEMR PHP layer.
     # Empty string disables JWT verification (middleware logs a startup

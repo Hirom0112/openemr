@@ -51,6 +51,48 @@ class BlockGranularity(str, Enum):
 _WORD_BBOX_PAD_PCT: float = 0.15
 
 
+# Wave 2D — tesseract tuning defaults. Kept here (not in config.py) so the
+# "is this default?" check in ``_tesseract_extract_image`` reads from a
+# single source of truth and can't drift if the env override changes.
+_TESSERACT_DEFAULT_PSM: int = 3
+_TESSERACT_DEFAULT_DPI: int = 300
+# PSM values tesseract accepts. Anything outside this range raises
+# ``ValueError`` so a typo in the env var fails fast at extraction time
+# instead of silently degrading to whatever tesseract decides to do.
+_VALID_PSM_RANGE: range = range(0, 14)
+# DPI bounds — below 72dpi tesseract degrades sharply; above 1200dpi the
+# image_to_data dict balloons without quality gain.
+_MIN_DPI: int = 72
+_MAX_DPI: int = 1200
+
+
+def _resolve_tesseract_tuning() -> Tuple[int, int]:
+    """Load (psm, dpi) from settings, validating each.
+
+    Invalid PSM raises ``ValueError`` (the grid runner relies on this to
+    surface bad cells loudly). Invalid DPI is clamped to ``[_MIN_DPI,
+    _MAX_DPI]`` with a warning — DPI is metadata-only on raw image input,
+    so a bad value should not 500 every upload.
+    """
+    # Local import — avoids an import cycle if config.py grows to reach
+    # back into documents.* at import time.
+    from config import settings
+
+    psm = int(settings.tesseract_psm)
+    dpi = int(settings.tesseract_dpi)
+    if psm not in _VALID_PSM_RANGE:
+        raise ValueError(
+            f"invalid tesseract_psm={psm!r}; must be in {list(_VALID_PSM_RANGE)}"
+        )
+    if dpi < _MIN_DPI or dpi > _MAX_DPI:
+        logger.warning(
+            "ocr_tesseract_dpi_out_of_range",
+            extra={"requested": dpi, "min": _MIN_DPI, "max": _MAX_DPI},
+        )
+        dpi = max(_MIN_DPI, min(_MAX_DPI, dpi))
+    return psm, dpi
+
+
 @dataclass(frozen=True)
 class LayoutBlock:
     """A single OCR/layout region with a stable, page-scoped identifier."""
@@ -167,10 +209,21 @@ def _tesseract_extract_image(image_bytes: bytes, *, filetype: str) -> List[Layou
         # Force load and a sane RGB-ish mode for Tesseract.
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
-        # TODO(post-2A): tesseract PSM mode + DPI uplift evaluation —
-        # separate slice with its own eval; default PSM (3 = fully automatic
-        # page segmentation) and source DPI are intentionally unchanged here.
-        data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+        # Wave 2D — PSM/DPI knobs sourced from settings. Defaults (PSM=3,
+        # DPI=300) match historical behavior: when both are at default we
+        # call ``image_to_data`` with no config/dpi kwargs so the output is
+        # bit-identical to the Wave 2A baseline (regression-guarded by
+        # tests/test_ocr_psm_dpi.py::test_default_matches_baseline).
+        psm, dpi = _resolve_tesseract_tuning()
+        kwargs: dict[str, Any] = {"output_type": pytesseract.Output.DICT}
+        if psm != _TESSERACT_DEFAULT_PSM:
+            kwargs["config"] = f"--psm {psm}"
+        if dpi != _TESSERACT_DEFAULT_DPI:
+            # ``image_to_data`` exposes DPI via the ``config`` string only.
+            # Append rather than overwrite when PSM is also non-default.
+            cfg = kwargs.get("config", "")
+            kwargs["config"] = (cfg + f" --dpi {dpi}").strip()
+        data = pytesseract.image_to_data(img, **kwargs)
     except Exception as exc:  # noqa: BLE001 — tesseract optional
         logger.info(
             "ocr_image_no_tesseract",
