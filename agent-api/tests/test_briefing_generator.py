@@ -34,7 +34,11 @@ from briefing.schema import BriefingResponse
 
 
 def _run(coro: Any) -> Any:  # noqa: ANN401
-    return asyncio.get_event_loop().run_until_complete(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def _citation(code: str = "12345", display: str = "Test", value: str = "v") -> Citation:

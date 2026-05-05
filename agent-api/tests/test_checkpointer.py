@@ -35,7 +35,7 @@ class TestSqliteSaverBehavior:
             assert turns[0]["role"] == "user"
             assert turns[0]["content"] == "What is her K+?"
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_turns_returned_in_insertion_order(self, saver):
         async def run():
@@ -46,7 +46,7 @@ class TestSqliteSaverBehavior:
             turns = await saver.load("sess-2")
             assert [t["content"] for t in turns] == ["first", "second", "third"]
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_clear_removes_session(self, saver):
         async def run():
@@ -58,7 +58,7 @@ class TestSqliteSaverBehavior:
             turns = await saver.load("sess-3")
             assert turns == []
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_sessions_are_isolated(self, saver):
         async def run():
@@ -72,7 +72,7 @@ class TestSqliteSaverBehavior:
             assert len(turns_b) == 1
             assert turns_b[0]["content"] == "session B message"
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_load_nonexistent_session_returns_empty(self, saver):
         async def run():
@@ -80,7 +80,7 @@ class TestSqliteSaverBehavior:
             turns = await saver.load("does-not-exist")
             assert turns == []
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_metadata_roundtrip(self, saver):
         async def run():
@@ -91,7 +91,7 @@ class TestSqliteSaverBehavior:
             assert turns[0]["tool"] == "query_patient_records"
             assert turns[0]["patient_id"] == "p-001"
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_turn_index_increments_sequentially(self, saver):
         async def run():
@@ -103,7 +103,7 @@ class TestSqliteSaverBehavior:
             assert idx1 == 1
             assert idx2 == 2
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
 
 # ── Redis → SQLite fallback logic ────────────────────────────────────────────
@@ -137,7 +137,7 @@ class TestRedisToSqliteFallback:
             assert len(turns) == 1
             assert turns[0]["content"] == "test message"
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_fallback_preserves_turn_order_across_failures(self, tmp_path):
         """Multiple Redis failures should produce correctly ordered SQLite turns."""
@@ -152,4 +152,4 @@ class TestRedisToSqliteFallback:
             turns = await sqlite.load("sess-order")
             assert [t["content"] for t in turns] == ["first", "second", "third"]
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())

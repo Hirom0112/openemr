@@ -32,7 +32,11 @@ from briefing.schema import BriefingResponse
 
 
 def _run(coro: Any) -> Any:  # noqa: ANN401
-    return asyncio.get_event_loop().run_until_complete(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def _med_bundle() -> tuple[dict[str, Any], dict[str, Any]]:

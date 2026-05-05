@@ -43,7 +43,7 @@ class TestTokenCaching:
             assert token == "tok-abc"
             mock_fetch.assert_awaited_once()
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_cached_token_returned_without_refetch(self):
         async def run():
@@ -55,7 +55,7 @@ class TestTokenCaching:
             # Only one fetch despite two calls — cache hit on second
             assert mock_fetch.await_count == 1
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_expired_token_triggers_refetch(self):
         async def run():
@@ -71,7 +71,7 @@ class TestTokenCaching:
             assert token == new_token
             mock_fetch.assert_awaited_once()
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_token_expiring_soon_triggers_refetch(self):
         """The 30-second buffer in _fetch_token means expiry = now + (ttl - 30).
@@ -89,7 +89,7 @@ class TestTokenCaching:
             assert token == "tok-renewed"
             mock_fetch.assert_awaited_once()
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_fetch_failure_propagates(self):
         async def run():
@@ -98,7 +98,7 @@ class TestTokenCaching:
                 with pytest.raises(RuntimeError, match="OAuth endpoint unreachable"):
                     await get_access_token()
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
 
     def test_cache_updated_after_successful_fetch(self):
         async def run():
@@ -110,4 +110,4 @@ class TestTokenCaching:
             assert fhir_auth_module._token_cache["token"] == "tok-new"
             assert fhir_auth_module._token_cache["expiry"] == pytest.approx(expiry, abs=1.0)
 
-        asyncio.get_event_loop().run_until_complete(run())
+        asyncio.run(run())
