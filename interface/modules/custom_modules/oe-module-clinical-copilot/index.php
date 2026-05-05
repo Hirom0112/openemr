@@ -17,8 +17,10 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../../../globals.php';
+require_once __DIR__ . '/src/JwtMinter.php';
 
 use OpenEMR\Common\Acl\AclMain;
+use OpenEMR\Modules\ClinicalCopilot\JwtMinter;
 
 if (!AclMain::aclCheckCore('patients', 'med')) {
     http_response_code(403);
@@ -120,6 +122,15 @@ $config = [
     // as list[str], and coerce_numbers_to_str doesn't reach nested list items.
     'patientIds'   => array_map('strval', array_values($patientIds)),
 ];
+
+// Mint a short-lived HS256 JWT the React iframe attaches as a Bearer token on
+// every request to the agent-api. JwtMinter returns null when COPILOT_JWT_SECRET
+// is missing/short — in that case omit the key entirely so the client treats
+// auth as disabled (dev) rather than sending an empty Authorization header.
+$copilotJwt = $providerId > 0 ? JwtMinter::mint($providerId, $sessionId) : null;
+if (is_string($copilotJwt) && $copilotJwt !== '') {
+    $config['jwt'] = $copilotJwt;
+}
 
 $configJson = json_encode($config, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_THROW_ON_ERROR);
 
