@@ -37,9 +37,11 @@ from __future__ import annotations
 
 import functools
 import logging
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Optional
 
 from langgraph.graph import END, StateGraph
+
+from config import settings
 
 from .nodes.critic import critic_node
 from .nodes.demographics import demographics_node
@@ -75,6 +77,9 @@ def build_graph(
     *,
     file_bytes_provider: Callable[[str], Awaitable[bytes]] | None = None,
     fhir_patient_provider: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+    page_bytes_provider: Optional[
+        Callable[[dict[str, Any]], Awaitable[Optional[bytes]]]
+    ] = None,
 ) -> StateGraph:
     """Build (but do not compile) the W2 graph.
 
@@ -101,6 +106,21 @@ def build_graph(
     graph.add_node("critic", critic_node)
     graph.add_node("finalize", finalize_node)
 
+    # ── Wave 2C — optional citation_verifier node ───────────────────────────
+    # Inserted before the critic on the document path so the critic still
+    # runs over the verified citations. Off-by-default behaviour: when
+    # ``settings.verify_citations == "off"`` we skip the wiring entirely;
+    # the node is not even registered, so the graph topology is unchanged.
+    verify_mode = (settings.verify_citations or "off").lower()
+    verifier_enabled = verify_mode in ("sample", "all")
+    if verifier_enabled:
+        from agent.citation_verifier import citation_verifier_node
+
+        bound_verifier = functools.partial(
+            citation_verifier_node, page_bytes_provider=page_bytes_provider
+        )
+        graph.add_node("citation_verifier", bound_verifier)
+
     graph.set_entry_point("supervisor")
     graph.add_conditional_edges(
         "supervisor",
@@ -112,8 +132,17 @@ def build_graph(
             "finalize": "finalize",
         },
     )
-    graph.add_edge("intake_extractor", "demographics")
-    graph.add_edge("demographics", "critic")
+    if verifier_enabled:
+        # demographics → citation_verifier → critic. The verifier is a
+        # post-extraction pass; demographics has already finished by the
+        # time we run, and the critic reads the (possibly mutated)
+        # extraction afterwards.
+        graph.add_edge("intake_extractor", "demographics")
+        graph.add_edge("demographics", "citation_verifier")
+        graph.add_edge("citation_verifier", "critic")
+    else:
+        graph.add_edge("intake_extractor", "demographics")
+        graph.add_edge("demographics", "critic")
     graph.add_edge("structured", "critic")
     graph.add_edge("evidence_retriever", "critic")
     graph.add_edge("critic", "finalize")
@@ -127,11 +156,15 @@ def compile_graph(
     checkpointer: Any | None = None,
     file_bytes_provider: Callable[[str], Awaitable[bytes]] | None = None,
     fhir_patient_provider: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+    page_bytes_provider: Optional[
+        Callable[[dict[str, Any]], Awaitable[Optional[bytes]]]
+    ] = None,
 ) -> Any:
     """Build and compile the graph with optional injected providers."""
     graph = build_graph(
         file_bytes_provider=file_bytes_provider,
         fhir_patient_provider=fhir_patient_provider,
+        page_bytes_provider=page_bytes_provider,
     )
     return graph.compile(checkpointer=checkpointer)
 
