@@ -250,11 +250,59 @@ async def _process_one_case(
         }
 
 
-async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], list[Any], dict[str, Any]]:
+async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], list[Any], dict[str, Any], dict[str, Any]]:
     # Lazy imports — let tests patch these.
     from tests.fixtures.w2_eval_cases import CASES  # type: ignore
-    from evals.runner import run_case  # type: ignore
+    from evals.runner import run_case as _run_case_raw  # type: ignore
     from evals.scoring import aggregate, score_case  # type: ignore
+    from evals._response_cache import (  # type: ignore
+        cache_reads_enabled,
+        derive_cache_key,
+        get_default_cache,
+        resolve_cache_mode,
+    )
+    from evals.runner import resolve_fixture_path  # type: ignore
+
+    # Resolve cache mode from CLI flag (overrides env var when provided).
+    _cache_mode_arg: Optional[str] = getattr(args, "cache", None)
+    _effective_cache_mode = resolve_cache_mode(_cache_mode_arg)
+    _cache_obj = get_default_cache()
+
+    # Running tallies — written back into the _run_async return tuple's
+    # accompanying log at batch completion.
+    _cache_hits = 0
+    _cache_misses = 0
+
+    async def run_case(case: Any, *, fixtures_root: Any, **kw: Any) -> Any:  # type: ignore[misc]
+        """Thin wrapper that injects cache kwargs into the underlying run_case."""
+        nonlocal _cache_hits, _cache_misses
+        # Pre-sniff: check the cache ourselves (cheap) so we can tally.
+        _hit = False
+        if cache_reads_enabled(_effective_cache_mode):
+            try:
+                bucket = getattr(case, "bucket", None)
+                if bucket == "evidence_retrieval":
+                    _key = derive_cache_key(b"")
+                else:
+                    _fp = resolve_fixture_path(getattr(case, "fixture_key", ""), fixtures_root)
+                    _fb = _fp.read_bytes() if _fp.exists() else b""
+                    _key = derive_cache_key(_fb) if _fb else ""
+                if _key and _cache_obj.read(_key) is not None:
+                    _hit = True
+            except Exception:
+                pass
+        if _hit:
+            _cache_hits += 1
+        elif _effective_cache_mode != "off":
+            _cache_misses += 1
+
+        return await _run_case_raw(
+            case,
+            fixtures_root=fixtures_root,
+            cache=_cache_obj,
+            cache_mode=_effective_cache_mode,
+            **kw,
+        )
 
     # Counter / histogram are imported lazily — they live in agent.metrics
     # which pulls in prometheus_client. The eval suite is the only consumer
@@ -344,7 +392,9 @@ async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], l
                 "errors": errors,
                 "completed": completed,
                 "total": total,
-                "cache": "n/a",
+                "cache_mode": _effective_cache_mode,
+                "cache_hits_cumulative": _cache_hits,
+                "cache_misses_cumulative": _cache_misses,
             },
         )
 
@@ -359,7 +409,20 @@ async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], l
     # diff cleanly across runs regardless of asyncio.gather completion order.
     case_rows.sort(key=lambda row: str(row.get("case_id") or ""))
 
-    return case_rows, scores, scored_cases, outcomes_by_case_id
+    logger.info(
+        "eval.cache_summary",
+        extra={
+            "cache_mode": _effective_cache_mode,
+            "cache_hits": _cache_hits,
+            "cache_misses": _cache_misses,
+            "total_cases": total,
+        },
+    )
+    return case_rows, scores, scored_cases, outcomes_by_case_id, {
+        "cache_mode": _effective_cache_mode,
+        "cache_hits": _cache_hits,
+        "cache_misses": _cache_misses,
+    }
 
 
 def _load_gt_sidecar(fixture_path: Path) -> Optional[dict]:
@@ -660,11 +723,25 @@ def main(argv: list[str] | None = None) -> int:
             "Costs ~$1 API spend vs ~$15-30 for the full 124-case suite."
         ),
     )
+    parser.add_argument(
+        "--cache",
+        type=str,
+        default=None,
+        choices=["off", "read", "write", "readwrite"],
+        help=(
+            "Eval response cache mode. Overrides EVAL_USE_CACHE env var. "
+            "off=disabled (default), read=read-only, write=write-only, "
+            "readwrite=read then write on miss. "
+            "Cache key: sha256(fixture_bytes || EVAL_CACHE_PROMPT_HASH || "
+            "EVAL_MODEL_ID || EVAL_CACHE_VERSION). "
+            "Bump EVAL_CACHE_VERSION to invalidate when prompts change."
+        ),
+    )
     args = parser.parse_args(argv)
 
     md_path = args.md or args.output.with_suffix(".md")
 
-    case_rows, scores, scored_cases, outcomes_by_case_id = asyncio.run(_run_async(args))
+    case_rows, scores, scored_cases, outcomes_by_case_id, cache_stats = asyncio.run(_run_async(args))
 
     from evals.scoring import aggregate  # type: ignore
     # Existing rubric pass-rates are computed over the original (pre-Wave-2C)
@@ -737,12 +814,21 @@ def main(argv: list[str] | None = None) -> int:
         for k, v in block.items():
             results["per_modality"][mod][k] = v
 
+    # Cache statistics — written to results JSON for CI dashboards.
+    results["_cache"] = cache_stats
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(results, indent=2) + "\n")
     md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text(_markdown_report(case_rows, results))
 
-    print(f"Wrote {args.output} and {md_path}")
+    _cache_hits = cache_stats.get("cache_hits", 0)
+    _cache_misses = cache_stats.get("cache_misses", 0)
+    _cache_mode_str = cache_stats.get("cache_mode", "off")
+    print(
+        f"Wrote {args.output} and {md_path} "
+        f"[cache={_cache_mode_str} hits={_cache_hits} misses={_cache_misses}]"
+    )
     return 0
 
 

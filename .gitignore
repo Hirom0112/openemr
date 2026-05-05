@@ -35,6 +35,9 @@ ccdaservice/node_modules
 __pycache__/
 *.py[cod]
 
+# eval response cache — filesystem store for content-hash cached graph outputs
+agent-api/.eval_cache/
+
 # claude code worktrees / scratch
 .claude/
 

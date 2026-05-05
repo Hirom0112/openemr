@@ -8,13 +8,23 @@ interprets the outcome — the runner just collects.
 The fixture set itself is owned by the parallel agent under
 ``tests.fixtures.w2_eval_cases``; we import lazily so an absent fixture
 package does not prevent the rubric/scoring tests from running.
+
+Cache integration
+-----------------
+When ``EVAL_USE_CACHE`` is set to ``read``, ``write``, or ``readwrite``, the
+runner wraps the graph invocation with a content-hash filesystem cache
+(see :mod:`evals._response_cache`). The cache is keyed by:
+
+    sha256(fixture_bytes || EVAL_CACHE_PROMPT_HASH || EVAL_MODEL_ID || EVAL_CACHE_VERSION)
+
+The default mode is ``off`` — the cache is a no-op until the operator opts in.
 """
 from __future__ import annotations
 
 import logging
 import threading
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 
@@ -272,6 +282,25 @@ def resolve_fixture_path(fixture_key: str, fixtures_root: Path) -> Path:
 
 
 # --------------------------------------------------------------------------- #
+# Cache helpers
+# --------------------------------------------------------------------------- #
+
+
+def _outcome_to_dict(outcome: "RunOutcome") -> Dict[str, Any]:
+    """Serialise a RunOutcome to a plain dict for caching."""
+    return asdict(outcome)
+
+
+def _outcome_from_dict(data: Dict[str, Any], case_id: str) -> "RunOutcome":
+    """Reconstruct a RunOutcome from a cached plain dict."""
+    # Guard: unknown keys from future schema additions are silently dropped.
+    known = {f.name for f in RunOutcome.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+    filtered = {k: v for k, v in data.items() if k in known}
+    filtered.setdefault("case_id", case_id)
+    return RunOutcome(**filtered)
+
+
+# --------------------------------------------------------------------------- #
 # Public entry point
 # --------------------------------------------------------------------------- #
 
@@ -281,6 +310,8 @@ async def run_case(
     *,
     fixtures_root: Path,
     compile_graph_factory: Optional[Callable[..., Any]] = None,
+    cache: Optional[Any] = None,
+    cache_mode: Optional[str] = None,
 ) -> RunOutcome:
     """Execute the W2 graph for one case and return a captured outcome.
 
@@ -295,7 +326,30 @@ async def run_case(
         Optional override for graph compilation (used by tests). Defaults
         to :func:`graph.compile_graph` resolved lazily so the import stays
         cheap when only the dataclass is needed.
+    cache:
+        Optional :class:`evals._response_cache.EvalResponseCache` instance.
+        When ``None`` the module-level default cache is used, but only when
+        ``cache_mode`` enables reads or writes.
+    cache_mode:
+        One of ``"off"``, ``"read"``, ``"write"``, ``"readwrite"``.
+        Defaults to the ``EVAL_USE_CACHE`` environment variable (``"off"``
+        when absent). Passed as an override so the test suite can control it
+        without touching the environment.
     """
+    # ── Cache bootstrap ──────────────────────────────────────────────────────
+    from evals._response_cache import (  # local import — keep startup cheap
+        EvalResponseCache,
+        cache_reads_enabled,
+        cache_writes_enabled,
+        derive_cache_key,
+        get_default_cache,
+        resolve_cache_mode,
+    )
+
+    effective_mode = resolve_cache_mode(cache_mode)
+    effective_cache: EvalResponseCache = cache if cache is not None else get_default_cache()
+    do_read = cache_reads_enabled(effective_mode)
+    do_write = cache_writes_enabled(effective_mode)
     case_id = getattr(case, "case_id", "<unknown>")
     # Per-case log isolation. Bind a fresh records list to the ContextVar
     # so this task's emissions (and only this task's) accumulate here. Under
@@ -349,6 +403,17 @@ async def run_case(
                     skipped_reason=reason,
                 )
 
+            # ── Cache lookup (evidence-retrieval path, fixture_bytes = b"") ──
+            _ev_cache_key = derive_cache_key(b"") if (do_read or do_write) else ""
+            if do_read and _ev_cache_key:
+                _cached = effective_cache.read(_ev_cache_key)
+                if _cached is not None:
+                    logger.debug(
+                        "eval_cache.runner_hit",
+                        extra={"case_id": case_id, "branch": "evidence_retrieval"},
+                    )
+                    return _outcome_from_dict(_cached, case_id)
+
             chart_patient = dict(getattr(case, "chart_patient", {}) or {})
 
             async def _empty_file_bytes_provider(_ref: str) -> bytes:
@@ -392,7 +457,7 @@ async def run_case(
             config = {"configurable": {"thread_id": f"eval-thread-{case_id}"}}
             final = await compiled.ainvoke(initial, config=config)
 
-            return RunOutcome(
+            outcome_ev = RunOutcome(
                 case_id=case_id,
                 extraction=final.get("extraction"),
                 critic_decision=final.get("critic_decision"),
@@ -403,12 +468,39 @@ async def run_case(
                 retrieval=final.get("retrieval"),
                 finalized=final.get("finalized"),
             )
+            if do_write and _ev_cache_key:
+                effective_cache.write(_ev_cache_key, _outcome_to_dict(outcome_ev))
+            return outcome_ev
 
         # Resolve fixture bytes lazily; the fixture key may not exist on disk
         # yet for some experimental cases.
         fixture_path = resolve_fixture_path(
             getattr(case, "fixture_key", ""), fixtures_root
         )
+
+        # ── Cache lookup (document path) ─────────────────────────────────
+        # Read fixture bytes once for the cache key; the provider closure
+        # will re-read them if the graph actually runs (bytes are not held
+        # in memory after key derivation).
+        _fixture_bytes: bytes = b""
+        _cache_key = ""
+        if do_read or do_write:
+            try:
+                _fixture_bytes = fixture_path.read_bytes()
+            except OSError:
+                # Fixture absent — can't derive a stable key; bypass cache.
+                pass
+            if _fixture_bytes:
+                _cache_key = derive_cache_key(_fixture_bytes)
+
+        if do_read and _cache_key:
+            _cached = effective_cache.read(_cache_key)
+            if _cached is not None:
+                logger.debug(
+                    "eval_cache.runner_hit",
+                    extra={"case_id": case_id, "branch": "document"},
+                )
+                return _outcome_from_dict(_cached, case_id)
 
         async def _file_bytes_provider(_ref: str) -> bytes:
             return fixture_path.read_bytes()
@@ -443,7 +535,7 @@ async def run_case(
         config = {"configurable": {"thread_id": f"eval-thread-{case_id}"}}
         final = await compiled.ainvoke(initial, config=config)
 
-        return RunOutcome(
+        outcome_doc = RunOutcome(
             case_id=case_id,
             extraction=final.get("extraction"),
             critic_decision=final.get("critic_decision"),
@@ -454,6 +546,9 @@ async def run_case(
             ocr_layout=list(final.get("ocr_layout") or []) if final.get("ocr_layout") is not None else None,
             observations=None,  # populated by probe_observations() if MySQL is reachable
         )
+        if do_write and _cache_key:
+            effective_cache.write(_cache_key, _outcome_to_dict(outcome_doc))
+        return outcome_doc
     except Exception as exc:  # noqa: BLE001 — runner is policy-free
         logger.exception(
             "eval_run_case_failed",
