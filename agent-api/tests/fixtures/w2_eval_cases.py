@@ -1485,3 +1485,58 @@ def _validate() -> None:
 
 
 _validate()
+
+
+# ---------------------------------------------------------------------------
+# Wave 2E — annotated bbox-GT loader
+#
+# Scans ``tests/fixtures/annotated/*.gt.json`` (populated by humans via the
+# Label Studio import script) and registers each one as a ``bbox_gt`` case.
+# The sidecar shape matches the existing Wave 2C contract, so the rubric
+# layer needs no changes — only the case roster grows.
+#
+# This block is intentionally placed after ``_validate()`` so the static
+# bucket-count contract above remains a true accounting of fabricated
+# cases. Annotated cases are an additive bolt-on; we update
+# ``BUCKET_COUNTS["bbox_gt"]`` and ``TOTAL_CASES`` to keep the
+# post-load contract consistent.
+#
+# A missing or empty ``annotated/`` directory is correct on first ship —
+# the loader is a no-op until humans drop their first sidecar.
+# ---------------------------------------------------------------------------
+
+
+def _annotated_dir():
+    from pathlib import Path
+    return Path(__file__).resolve().parent / "annotated"
+
+
+def _load_annotated_cases() -> int:
+    """Append annotated cases to ``CASES``. Returns the count appended."""
+    d = _annotated_dir()
+    if not d.exists():
+        return 0
+    appended = 0
+    for sidecar in sorted(d.glob("*.gt.json")):
+        stem = sidecar.name.removesuffix(".gt.json")
+        case_id = f"annotated_{stem}"
+        CASES.append(W2EvalCase(
+            case_id=case_id,
+            bucket="bbox_gt",
+            fixture_key=stem,
+            doc_type_hint=None,
+            chart_patient=PT_BBOX_GT,
+            expected_kind="unknown",
+            expected_critic_decision="pass",
+            notes="Wave 2E annotated bbox-GT case (human-labeled).",
+            document_modality="synthetic",
+        ))
+        appended += 1
+    if appended:
+        BUCKET_COUNTS["bbox_gt"] = BUCKET_COUNTS.get("bbox_gt", 0) + appended
+        global TOTAL_CASES
+        TOTAL_CASES = TOTAL_CASES + appended
+    return appended
+
+
+_load_annotated_cases()

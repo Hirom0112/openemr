@@ -206,6 +206,7 @@ jobs:
           path: |
             eval_results.json
             eval_results.md
+            repoint_trace.jsonl
       - name: Post PR comment
         if: github.event_name == 'pull_request' && always()
         uses: marocchino/sticky-pull-request-comment@v2

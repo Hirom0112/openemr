@@ -60,13 +60,23 @@ def test_run_full_suite_emits_json_and_markdown(tmp_path):
     sys.modules["tests.fixtures.w2_eval_cases"] = w2_mod
 
     runner_mod = types.ModuleType("evals.runner")
-    runner_mod.run_case = lambda case, root: _FakeOutcome()
+    runner_mod.run_case = lambda case, *args, **kwargs: _FakeOutcome()
+    runner_mod.resolve_fixture_path = lambda key, root: Path(root) / f"{key}.bin"
     sys.modules["evals.runner"] = runner_mod
 
     scoring_mod = types.ModuleType("evals.scoring")
     scoring_mod.score_case = lambda case, outcome: _FakeScore(case_id=case.case_id)
     scoring_mod.aggregate = _fake_aggregate
     sys.modules["evals.scoring"] = scoring_mod
+
+    rubrics_mech_mod = types.ModuleType("evals.rubrics_mechanical")
+    rubrics_mech_mod.citation_iou = lambda *a, **kw: False
+    rubrics_mech_mod.citation_pixel_distance = lambda *a, **kw: None
+    sys.modules["evals.rubrics_mechanical"] = rubrics_mech_mod
+
+    rubrics_llm_mod = types.ModuleType("evals.rubrics_llm")
+    rubrics_llm_mod.nearest_label_grounded = lambda *a, **kw: None
+    sys.modules["evals.rubrics_llm"] = rubrics_llm_mod
 
     out_json = tmp_path / "results.json"
     out_md = tmp_path / "results.md"
