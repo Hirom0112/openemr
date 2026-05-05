@@ -205,21 +205,54 @@ async def test_fallback_to_rest_when_binary_post_fails() -> None:
     assert rest_calls[0]["url"].endswith("/api/patient/42/document")
 
 
-async def test_raises_when_all_paths_fail() -> None:
-    handler = _make_handler(binary_raise=True, rest_raise=True)
+async def test_falls_back_to_local_disk_when_fhir_and_rest_fail(tmp_path) -> None:
+    """Risk #1 third-tier fallback: when FHIR and REST both 4xx/5xx, the
+    writer persists locally so the rest of the ingest pipeline still runs.
 
-    with _patch_httpx(handler):
-        with pytest.raises(FhirWriteError) as excinfo:
-            await write_document(
+    On Railway this is the documented MVP behaviour for OpenEMR builds
+    that advertise FHIR Binary as read-only and don't expose the
+    legacy REST upload either.
+    """
+    import os
+    handler = _make_handler(binary_raise=True, rest_raise=True)
+    os.environ["LOCAL_DOC_FALLBACK_DIR"] = str(tmp_path)
+
+    try:
+        with _patch_httpx(handler):
+            result = await write_document(
                 patient_id="42",
                 pdf_bytes=_PDF_BYTES,
             )
+    finally:
+        os.environ.pop("LOCAL_DOC_FALLBACK_DIR", None)
+
+    assert result.path == "local_disk_fallback"
+    assert result.document_reference_id.startswith("local:")
+    # Deterministic id from content hash → re-ingest of same bytes is idempotent.
+    expected_id = result.document_reference_id
+    with _patch_httpx(handler):
+        result2 = await write_document(patient_id="99", pdf_bytes=_PDF_BYTES)
+    assert result2.document_reference_id == expected_id
+
+
+async def test_raises_when_local_disk_also_fails(tmp_path, monkeypatch) -> None:
+    handler = _make_handler(binary_raise=True, rest_raise=True)
+    # Point the fallback at an unwritable path to force the third tier to fail.
+    monkeypatch.setenv("LOCAL_DOC_FALLBACK_DIR", "/nonexistent/forbidden")
+
+    def _boom(*_a, **_kw):
+        raise OSError("simulated unwritable")
+    monkeypatch.setattr("os.makedirs", _boom)
+
+    with _patch_httpx(handler):
+        with pytest.raises(FhirWriteError) as excinfo:
+            await write_document(patient_id="42", pdf_bytes=_PDF_BYTES)
 
     msg = str(excinfo.value)
-    # Generic message only — must NOT leak the underlying httpx error text.
-    assert "FHIR + REST fallback both failed" in msg
+    assert "all failed" in msg
+    # Generic — must NOT leak the underlying error text.
     assert "simulated" not in msg
-    assert "ConnectError" not in msg
+    assert "forbidden" not in msg
 
 
 @pytest.mark.parametrize(
