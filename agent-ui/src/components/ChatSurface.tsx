@@ -25,6 +25,7 @@ interface ExtractionPayload {
   soft_warns?: SoftWarn[];
   ocr_layout?: BboxLayoutBlock[];
   pdf_url?: string;
+  pdf_bytes?: ArrayBuffer;
 }
 
 function readExtraction(response: AgentResponse | undefined): ExtractionPayload | null {
@@ -380,6 +381,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     activeIndex: number;
     bboxLayout: BboxLayoutBlock[];
     pdfUrl?: string;
+    pdfBytes?: ArrayBuffer;
   } | null>(null);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1080,7 +1082,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   const ingestPatientId: string | null = patientIds.length > 0 ? patientIds[0] : null;
   const ingestBaseUrl: string = (window.__COPILOT_CONFIG__?.agentApiUrl as string | undefined) ?? '';
 
-  const handleIngestExtraction = useCallback((resp: IngestResponse, file: File): void => {
+  const handleIngestExtraction = useCallback(async (resp: IngestResponse, file: File): Promise<void> => {
     // Compose an AgentResponse of type 'text' whose narrative summarises the
     // extraction. The W2 metadata.extraction field carries citations + soft
     // warns + (optional) ocr_layout / pdf_url so the existing CitationChip /
@@ -1113,15 +1115,19 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       narrativeLines.push(`Written to FHIR: \`${fhirPath}\`.`);
     }
 
-    // Stash the dropped File as an object URL so DocumentViewer has bytes to
-    // render. The agent-api response carries a document_reference_id but no
-    // back-channel to fetch the bytes (the architecture's §4.7
-    // /document/{id}/preview endpoint is Phase 8 / not yet built). Until
-    // then the iframe-side file blob is the source of truth for the PDF
-    // viewer. Object URLs live for the page lifetime — fine for a session.
-    const dropPdfUrl = (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function')
-      ? URL.createObjectURL(file)
-      : undefined;
+    // Read the dropped File into memory so DocumentViewer can render it
+    // without needing a blob:// URL fetch. pdfjs accepts ArrayBuffer via
+    // its `data:` parameter — sidesteps the blob URL category entirely
+    // (some browser/iframe contexts refuse blob URL XHR). The agent-api
+    // /document/{id}/preview endpoint (architecture §4.7) is Phase 8 and
+    // not yet built; until then the iframe-side blob is the source of
+    // truth for the PDF viewer.
+    let dropPdfBytes: ArrayBuffer | undefined;
+    try {
+      dropPdfBytes = await file.arrayBuffer();
+    } catch (err) {
+      console.error('[ChatSurface] Failed to read dropped file as ArrayBuffer', err);
+    }
 
     const response: AgentResponse = {
       type: 'text',
@@ -1135,8 +1141,12 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           citations: resp.citations,
           soft_warns: resp.soft_warns,
           ocr_layout: ext?.ocr_layout,
-          pdf_url: ext?.pdf_url || dropPdfUrl,
-        },
+          pdf_url: ext?.pdf_url,
+          // Non-serializable but stays in React state fine; consumed by
+          // DocumentViewer via the {pdfBytes} prop. Lives for the page
+          // lifetime; new ingest replaces it.
+          pdf_bytes: dropPdfBytes,
+        } as Record<string, unknown>,
       },
     };
 
@@ -1346,6 +1356,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                                 activeIndex: i,
                                 bboxLayout: ext.ocr_layout ?? [],
                                 pdfUrl: ext.pdf_url,
+                                pdfBytes: ext.pdf_bytes,
                               })}
                             />
                           ))}
@@ -1441,6 +1452,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       {viewerSource && (
         <DocumentViewer
           pdfUrl={viewerSource.pdfUrl}
+          pdfBytes={viewerSource.pdfBytes}
           citations={viewerSource.citations}
           activeIndex={viewerSource.activeIndex}
           onActiveIndexChange={(idx) => setViewerSource((cur) => (cur ? { ...cur, activeIndex: idx } : cur))}
