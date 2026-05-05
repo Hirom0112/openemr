@@ -1,13 +1,17 @@
-"""Slice 3.1 — LangGraph skeleton smoke tests.
+"""LangGraph skeleton smoke tests.
 
 Verifies:
   * W2State factory returns the expected required keys.
   * The graph compiles against `MemorySaver`.
-  * End-to-end execution routes message-only inputs through the worker stub.
-  * Empty inputs route straight to finalize and skip the worker.
-  * File-only inputs reach the worker stub.
+  * End-to-end execution routes message-only inputs through the structured
+    worker (dispatcher patched).
+  * Empty inputs route straight to finalize and skip the workers.
+  * File-only inputs reach the extractor (with provider unwired → soft
+    failure routed to finalize).
 """
 from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
@@ -21,7 +25,6 @@ def test_w2state_initial_shape() -> None:
     state: W2State = make_initial_state(
         request_id="r", session_id="s", provider_id="p"
     )
-    # Required keys present.
     for key in (
         "request_id",
         "patient_id",
@@ -46,24 +49,29 @@ def test_w2state_initial_shape() -> None:
 def test_graph_compiles() -> None:
     compiled = compile_graph(checkpointer=MemorySaver())
     assert compiled is not None
-    # Sanity: the uncompiled builder also returns a usable StateGraph.
     assert build_graph() is not None
 
 
 @pytest.mark.asyncio
 async def test_graph_runs_end_to_end_with_message() -> None:
-    compiled = compile_graph(checkpointer=MemorySaver())
-    initial = make_initial_state(
-        request_id="req-msg",
-        session_id="sess-msg",
-        provider_id="prov-1",
-        message="hello",
-    )
-    config = {"configurable": {"thread_id": "sess-msg"}}
-    final = await compiled.ainvoke(initial, config=config)
+    stub_response = {"narrative": "stub", "data": None, "citations": []}
+    with patch(
+        "agent.dispatcher.dispatch",
+        new=AsyncMock(return_value=stub_response),
+    ):
+        compiled = compile_graph(checkpointer=MemorySaver())
+        initial = make_initial_state(
+            request_id="req-msg",
+            session_id="sess-msg",
+            provider_id="prov-1",
+            message="hello",
+        )
+        config = {"configurable": {"thread_id": "sess-msg"}}
+        final = await compiled.ainvoke(initial, config=config)
     assert final["critic_decision"] == "pass"
     assert final["structured_response"]["narrative"] == "stub"
     assert final["structured_response"]["citations"] == []
+    assert "finalized" in final
 
 
 @pytest.mark.asyncio
@@ -76,13 +84,15 @@ async def test_graph_routes_to_finalize_when_empty() -> None:
     )
     config = {"configurable": {"thread_id": "sess-empty"}}
     final = await compiled.ainvoke(initial, config=config)
-    # supervisor went straight to finalize → worker_stub never ran.
-    assert "structured_response" not in final or final.get("structured_response") in (None, {})
-    assert final.get("next_node") == "finalize_stub"
+    # No worker ran → no structured_response.
+    assert final.get("structured_response") in (None, {})
+    assert final.get("next_node") == "finalize"
+    assert "finalized" in final
 
 
 @pytest.mark.asyncio
-async def test_supervisor_routes_file_to_worker() -> None:
+async def test_supervisor_routes_file_to_extractor() -> None:
+    """File-only input routes to extractor; with no provider it soft-fails to finalize."""
     compiled = compile_graph(checkpointer=MemorySaver())
     initial = make_initial_state(
         request_id="req-file",
@@ -92,6 +102,6 @@ async def test_supervisor_routes_file_to_worker() -> None:
     )
     config = {"configurable": {"thread_id": "sess-file"}}
     final = await compiled.ainvoke(initial, config=config)
-    assert final.get("structured_response") is not None
-    assert final["structured_response"]["narrative"] == "stub"
-    assert final["critic_decision"] == "pass"
+    # No provider was injected → extractor pushes an error and routes to finalize.
+    assert any("extractor" in e for e in final.get("errors", []))
+    assert "finalized" in final
