@@ -54,3 +54,7 @@ docker/development-easy-redis/docker-compose.override.yml
 
 # Personal/working plan — keep local
 todo.md
+
+# Personal demo artifacts — keep local
+Clinical_Copilot_Demo.pptx
+demo.html
