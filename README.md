@@ -4,6 +4,18 @@
 
 This branch is the W2 deliverable. The single-page submission summary lives in [`SUBMISSION.md`](./SUBMISSION.md) — live URLs, eval-gate evidence (regression PR #1 hard-failing the 50-case suite), the deployed-vs-spec table, and the honest deferral list. The reproducible 4-minute demo walkthrough lives in [`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md). Demo video: `[VIDEO_LINK_HERE]`. The architecture single-source-of-truth is [`W2_ARCHITECTURE.md`](./W2_ARCHITECTURE.md), with the deployed-build deviation called out in §4.2.1 and its security tradeoff in §4.2.2 / [`docs/SECURITY_TRADEOFFS.md`](./docs/SECURITY_TRADEOFFS.md).
 
+### Submission documents (one-stop index)
+
+| Doc | Purpose |
+| --- | --- |
+| [`SUBMISSION.md`](./SUBMISSION.md) | Single-page summary, live URLs, deployed-vs-spec, deferrals |
+| [`W2_ARCHITECTURE.md`](./W2_ARCHITECTURE.md) | Architecture single-source-of-truth (supervisor, workers, RAG, observability) |
+| [`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md) | Reproducible 4-minute demo walkthrough |
+| [`docs/latency_cost_report.md`](./docs/latency_cost_report.md) | Live `/metrics` scrape — p50/p95 latency, cost per 100 turns, 98% prompt-cache hit rate |
+| [`agent-api/evals/README.md`](./agent-api/evals/README.md) | 98-case golden set, 14 boolean rubrics, CI gate + pre-push hook docs |
+| [`docs/SECURITY_TRADEOFFS.md`](./docs/SECURITY_TRADEOFFS.md) | FHIR Binary write deviation + secret handling + four-gate REST investigation |
+| Deployed agent-api | <https://copilot-agent-api-production.up.railway.app/health> |
+
 ---
 
 A Gauntlet AI project building a Clinical Co-Pilot agent on top of OpenEMR.
