@@ -1,0 +1,78 @@
+{
+  "bucket": "nafld_masld",
+  "source_date": "2023 (AASLD Practice Guidance on the Clinical Assessment and Management of NAFLD)",
+  "entries": [
+    {
+      "id": "aasld-2023-suspect",
+      "condition_tags": ["nafld", "masld", "transaminitis", "metabolic-syndrome"],
+      "title": "When to suspect MASLD/NAFLD",
+      "snippet": "MASLD/NAFLD should be suspected in patients with hepatic steatosis on imaging or persistently elevated aminotransferases who have one or more cardiometabolic risk factors (overweight/obesity, type 2 diabetes, hypertension, atherogenic dyslipidemia) and absence of significant alcohol consumption or other competing etiologies. (Paraphrased.)",
+      "source_org": "American Association for the Study of Liver Diseases",
+      "source_doc": "AASLD Practice Guidance on the Clinical Assessment and Management of Nonalcoholic Fatty Liver Disease (2023)",
+      "source_section": "Diagnosis",
+      "source_url": "https://www.aasld.org/practice-guidelines/clinical-assessment-and-management-metabolic-dysfunction-associated-steatotic",
+      "applies_when": "adult with hepatic steatosis or persistent ALT/AST elevation and ≥1 metabolic risk factor",
+      "demo_relevance": "Kowalski: ALT 56, AST 48, hypertriglyceridemia, glucose 108 (prediabetes range), RUQ pain — high pretest probability for MASLD."
+    },
+    {
+      "id": "aasld-2023-fib4",
+      "condition_tags": ["nafld", "masld", "fib-4", "fibrosis-staging"],
+      "title": "FIB-4 as primary noninvasive risk stratifier",
+      "snippet": "FIB-4 is the recommended first-line noninvasive index for risk-stratifying patients with NAFLD/MASLD for advanced fibrosis. FIB-4 <1.3 indicates low risk and patients may be managed in primary care; FIB-4 1.3–2.67 (or >2.0 for age >65) indicates indeterminate/high risk warranting secondary assessment with VCTE (FibroScan) or ELF; FIB-4 >2.67 suggests high risk and hepatology referral. (Paraphrased.)",
+      "source_org": "American Association for the Study of Liver Diseases",
+      "source_doc": "AASLD Practice Guidance on the Clinical Assessment and Management of Nonalcoholic Fatty Liver Disease (2023)",
+      "source_section": "Noninvasive Assessment of Fibrosis",
+      "source_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10735173/",
+      "applies_when": "adult with suspected MASLD; needs age, AST, ALT, and platelet count",
+      "demo_relevance": "Kowalski's labs (ALT/AST/age/plt) make FIB-4 directly computable as the first triage step."
+    },
+    {
+      "id": "aasld-2023-alcohol",
+      "condition_tags": ["nafld", "masld", "alcohol-use", "metALD"],
+      "title": "Quantify alcohol use; differentiate MASLD vs MetALD vs ALD",
+      "snippet": "Alcohol consumption should be carefully quantified using validated tools (e.g., AUDIT-C). Patients with cardiometabolic risk and steatosis are classified as MASLD when intake is below thresholds (<140 g/week women, <210 g/week men) and as MetALD at intermediate intake; greater intake suggests alcohol-associated liver disease (ALD). (Paraphrased.)",
+      "source_org": "American Association for the Study of Liver Diseases",
+      "source_doc": "AASLD Practice Guidance / 2023 Multisociety MASLD nomenclature",
+      "source_section": "Definitions / Alcohol assessment",
+      "source_url": "https://www.aasld.org/practice-guidelines/clinical-assessment-and-management-metabolic-dysfunction-associated-steatotic",
+      "applies_when": "patient with steatosis and any reported alcohol use",
+      "demo_relevance": "Kowalski has documented alcohol use — alcohol quantification is required to classify MASLD vs MetALD vs ALD."
+    },
+    {
+      "id": "aasld-2023-lifestyle",
+      "condition_tags": ["nafld", "masld", "weight-loss", "lifestyle"],
+      "title": "Weight loss is the cornerstone intervention",
+      "snippet": "In adults with overweight or obesity and MASLD, weight loss achieved through hypocaloric diet and physical activity is recommended; ≥5% body-weight reduction reduces hepatic steatosis, ≥7–10% improves steatohepatitis and fibrosis. (Paraphrased.)",
+      "source_org": "American Association for the Study of Liver Diseases",
+      "source_doc": "AASLD Practice Guidance on the Clinical Assessment and Management of Nonalcoholic Fatty Liver Disease (2023)",
+      "source_section": "Lifestyle Management",
+      "source_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10735173/",
+      "applies_when": "adult with MASLD and BMI ≥25",
+      "demo_relevance": "Kowalski: lifestyle counseling is primary therapy; reinforce alongside alcohol reduction."
+    },
+    {
+      "id": "aasld-2023-comorbid",
+      "condition_tags": ["nafld", "masld", "t2dm-screening", "ascvd-risk"],
+      "title": "Screen MASLD patients for T2DM and treat cardiovascular risk",
+      "snippet": "Patients with MASLD should be screened for type 2 diabetes (fasting glucose and/or HbA1c) and have cardiovascular risk factors aggressively managed, as ASCVD is the leading cause of death in this population. (Paraphrased.)",
+      "source_org": "American Association for the Study of Liver Diseases",
+      "source_doc": "AASLD Practice Guidance on the Clinical Assessment and Management of Nonalcoholic Fatty Liver Disease (2023)",
+      "source_section": "Comorbidity Management",
+      "source_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10735173/",
+      "applies_when": "adult with confirmed or suspected MASLD",
+      "demo_relevance": "Kowalski glucose 108 (impaired fasting glucose) — confirm with HbA1c; address lipids, BP."
+    },
+    {
+      "id": "aasld-2023-imaging",
+      "condition_tags": ["nafld", "masld", "imaging", "ruq-pain"],
+      "title": "Abdominal ultrasound is the first-line imaging modality",
+      "snippet": "Conventional B-mode abdominal ultrasound is the recommended first-line imaging modality to detect hepatic steatosis in patients suspected of having MASLD. (Paraphrased.)",
+      "source_org": "American Association for the Study of Liver Diseases",
+      "source_doc": "AASLD Practice Guidance on the Clinical Assessment and Management of Nonalcoholic Fatty Liver Disease (2023)",
+      "source_section": "Imaging",
+      "source_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10735173/",
+      "applies_when": "adult with suspected hepatic steatosis or RUQ pain with transaminitis",
+      "demo_relevance": "Kowalski has RUQ pain + transaminitis — abdominal US is the first imaging step (also rules out gallbladder pathology)."
+    }
+  ]
+}

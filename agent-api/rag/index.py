@@ -20,7 +20,7 @@ from typing import Any
 import yaml
 
 from audit.writer import get_pool
-from rag.chunker import Chunk, chunk_guideline_pdf
+from rag.chunker import Chunk, chunk_guideline_json, chunk_guideline_pdf
 from rag.embed import embed
 
 _logger = logging.getLogger(__name__)
@@ -67,17 +67,30 @@ async def _index_one_source(
     version_date = source["indexed_version_date"]
     if isinstance(version_date, str):
         version_date = _dt.date.fromisoformat(version_date)
-    pdf_path = corpus_dir / source["file"]
+    source_path = (corpus_dir / source["file"]).resolve()
 
-    if not pdf_path.exists():
+    if not source_path.exists():
         _logger.warning(
             "rag_index_source_missing",
-            extra={"source_id": source_id, "path": str(pdf_path)},
+            extra={"source_id": source_id, "path": str(source_path)},
         )
         return 0
 
-    pdf_bytes = pdf_path.read_bytes()
-    chunks: list[Chunk] = chunk_guideline_pdf(pdf_bytes)
+    # Dispatch by file extension. PDFs flow through the section-aware
+    # PyMuPDF chunker; JSON bucket files (data/guidelines/*.json) flow
+    # through the structured-entry chunker. Both produce ``Chunk`` objects
+    # consumed identically below — JSON chunks carry ``chunk_id_override``.
+    suffix = source_path.suffix.lower()
+    if suffix == ".pdf":
+        chunks: list[Chunk] = chunk_guideline_pdf(source_path.read_bytes())
+    elif suffix == ".json":
+        chunks = chunk_guideline_json(source_path)
+    else:
+        _logger.warning(
+            "rag_index_source_unsupported_ext",
+            extra={"source_id": source_id, "path": str(source_path), "ext": suffix},
+        )
+        return 0
     if not chunks:
         return 0
 
@@ -96,7 +109,12 @@ async def _index_one_source(
     for chunk, vec in zip(chunks, embeddings):
         idx = per_page_idx.get(chunk.page_number, 0)
         per_page_idx[chunk.page_number] = idx + 1
-        chunk_id = f"{source_id}-p{chunk.page_number}-{idx:03d}"
+        # JSON entries carry their own canonical id; PDFs derive id from
+        # source-id + page + ordinal so re-runs are idempotent.
+        if chunk.chunk_id_override:
+            chunk_id = chunk.chunk_id_override
+        else:
+            chunk_id = f"{source_id}-p{chunk.page_number}-{idx:03d}"
         rows_for_insert.append(
             (
                 chunk_id,

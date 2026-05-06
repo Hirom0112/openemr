@@ -1,0 +1,78 @@
+{
+  "bucket": "chest_pain",
+  "source_date": "2021-10 (2021 AHA/ACC Chest Pain Guideline)",
+  "entries": [
+    {
+      "id": "aha-acc-cp-2021-stable-def",
+      "condition_tags": ["stable-angina", "chest-pain", "evaluation"],
+      "title": "Definition of stable chest pain",
+      "snippet": "Stable chest pain is a symptom of myocardial ischemia characterized by chest pain that is provoked with exertion or emotional stress and relieved with rest or nitroglycerin. (Paraphrased.)",
+      "source_org": "AHA / ACC / ASE / CHEST / SAEM / SCCT / SCMR",
+      "source_doc": "2021 Guideline for the Evaluation and Diagnosis of Chest Pain",
+      "source_section": "Section 4 (Definitions and Classification)",
+      "source_url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000001029",
+      "applies_when": "adult with chest pain for outpatient or ED evaluation",
+      "demo_relevance": "Chen reports exertional chest tightness — fits stable angina pattern; triggers structured CAD workup."
+    },
+    {
+      "id": "aha-acc-cp-2021-pretest",
+      "condition_tags": ["stable-angina", "pretest-probability", "diabetes"],
+      "title": "Use pretest probability (age, sex, symptoms) to guide testing",
+      "snippet": "For patients with stable chest pain and no known CAD, clinicians should estimate pretest probability of obstructive CAD using a validated tool incorporating age, sex, and symptom characteristics. Diabetes mellitus is a risk-enhancing factor that raises pretest probability. (Paraphrased.)",
+      "source_org": "AHA / ACC / ASE / CHEST / SAEM / SCCT / SCMR",
+      "source_doc": "2021 Guideline for the Evaluation and Diagnosis of Chest Pain",
+      "source_section": "Section 5.2",
+      "source_url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000001029",
+      "applies_when": "stable chest pain, no known CAD",
+      "demo_relevance": "Chen: T2DM + HTN + dyslipidemia + FHx premature MI raises pretest probability into intermediate-high range."
+    },
+    {
+      "id": "aha-acc-cp-2021-ccta",
+      "condition_tags": ["stable-angina", "ccta", "diagnostic-testing"],
+      "title": "CCTA for intermediate-high risk stable chest pain without known CAD",
+      "snippet": "For intermediate-high risk patients with stable chest pain and no known CAD, coronary CT angiography (CCTA) is effective for diagnosis of CAD, for risk stratification, and for guiding treatment decisions. (Paraphrased; Class I.)",
+      "source_org": "AHA / ACC / ASE / CHEST / SAEM / SCCT / SCMR",
+      "source_doc": "2021 Guideline for the Evaluation and Diagnosis of Chest Pain",
+      "source_section": "Section 6.2",
+      "source_url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000001029",
+      "applies_when": "intermediate-high pretest probability, stable chest pain, no known CAD",
+      "demo_relevance": "Chen: CCTA is a guideline-supported first-line diagnostic test."
+    },
+    {
+      "id": "aha-acc-cp-2021-stress",
+      "condition_tags": ["stable-angina", "stress-imaging", "ischemia"],
+      "title": "Stress imaging is an alternative for ischemia and risk stratification",
+      "snippet": "For intermediate-high risk patients with stable chest pain and no known CAD, stress imaging (stress echocardiography, stress nuclear MPI, or stress CMR) is effective for the diagnosis of myocardial ischemia and for estimating risk of MACE. (Paraphrased.)",
+      "source_org": "AHA / ACC / ASE / CHEST / SAEM / SCCT / SCMR",
+      "source_doc": "2021 Guideline for the Evaluation and Diagnosis of Chest Pain",
+      "source_section": "Section 6.2",
+      "source_url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000001029",
+      "applies_when": "intermediate-high pretest probability, stable chest pain",
+      "demo_relevance": "Chen: stress imaging is acceptable alternative to CCTA, especially if functional ischemia info is desired."
+    },
+    {
+      "id": "aha-acc-cp-2021-low-risk",
+      "condition_tags": ["chest-pain", "low-risk", "deferral"],
+      "title": "Defer testing in low-probability patients",
+      "snippet": "Patients at low pretest probability of obstructive CAD with a favorable prognosis can be identified using a pretest probability model that incorporates age, sex, and presenting symptoms; among these patients, additional diagnostic testing can be deferred. (Paraphrased.)",
+      "source_org": "AHA / ACC / ASE / CHEST / SAEM / SCCT / SCMR",
+      "source_doc": "2021 Guideline for the Evaluation and Diagnosis of Chest Pain",
+      "source_section": "Section 5.2",
+      "source_url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000001029",
+      "applies_when": "stable chest pain, low pretest probability",
+      "demo_relevance": "Counterfactual control for Chen — explains why a low-risk patient would not get CCTA/stress."
+    },
+    {
+      "id": "aha-acc-cp-2021-shared",
+      "condition_tags": ["chest-pain", "shared-decision-making"],
+      "title": "Shared decision-making and patient-centered evaluation",
+      "snippet": "A patient-centered approach with shared decision-making — including discussion of testing options, risks, benefits, and downstream consequences — is recommended for the evaluation of chest pain. (Paraphrased.)",
+      "source_org": "AHA / ACC / ASE / CHEST / SAEM / SCCT / SCMR",
+      "source_doc": "2021 Guideline for the Evaluation and Diagnosis of Chest Pain",
+      "source_section": "Top Take-Home Messages",
+      "source_url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000001029",
+      "applies_when": "any chest pain evaluation",
+      "demo_relevance": "Frames how the copilot should present options to Chen rather than dictate a single test."
+    }
+  ]
+}

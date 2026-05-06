@@ -11,3 +11,36 @@ sources:
     title: ADA Inpatient Glycemic Management
     indexed_version_date: 2024-01-01
     file: ada_glycemic_excerpt.pdf
+
+  # Structured-JSON guideline corpus (data/guidelines/*.json). One bucket
+  # per source — entries are short, hand-curated paraphrases. The JSON
+  # chunker emits one chunk per entry and uses the entry id as chunk_id
+  # (see rag/chunker.py::chunk_guideline_json).
+  - id: ada-2025-t2dm
+    title: ADA Standards of Care in Diabetes — 2025
+    indexed_version_date: 2024-12-01
+    file: ../data/guidelines/diabetes_t2dm.json
+  - id: aha-acc-2018-lipids
+    title: AHA/ACC Multisociety Cholesterol Guideline 2018
+    indexed_version_date: 2018-11-01
+    file: ../data/guidelines/lipids_ascvd.json
+  - id: aasld-2023-nafld
+    title: AASLD Practice Guidance on NAFLD/MASLD 2023
+    indexed_version_date: 2023-01-01
+    file: ../data/guidelines/nafld_masld.json
+  - id: kdigo-2024-ckd
+    title: KDIGO 2024 CKD Clinical Practice Guideline
+    indexed_version_date: 2024-03-01
+    file: ../data/guidelines/ckd_kdigo.json
+  - id: acc-aha-afib-2023
+    title: 2023 ACC/AHA/ACCP/HRS AFib Guideline (+ AGA IDA 2020)
+    indexed_version_date: 2023-11-01
+    file: ../data/guidelines/afib_anticoag.json
+  - id: uspstf-2018-alcohol
+    title: USPSTF Unhealthy Alcohol Use Screening 2018
+    indexed_version_date: 2018-11-01
+    file: ../data/guidelines/alcohol_screening.json
+  - id: aha-acc-2021-chest-pain
+    title: 2021 AHA/ACC Chest Pain Guideline
+    indexed_version_date: 2021-10-01
+    file: ../data/guidelines/chest_pain.json

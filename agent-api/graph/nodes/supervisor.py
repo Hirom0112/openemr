@@ -17,6 +17,7 @@ from typing import Any
 
 from audit.models import AuditEvent
 from audit import writer as audit_writer
+from agent.metrics import agent_supervisor_handoff_total
 
 from ..state import W2State
 
@@ -53,6 +54,7 @@ async def supervisor(state: W2State) -> dict[str, Any]:
             "session_id": state.get("session_id"),
         },
     )
+    agent_supervisor_handoff_total.labels(**{"from": "supervisor", "to": next_node}).inc()
 
     # Pull request_id from ambient ContextVar so the audit row correlates
     # with the inbound HTTP request. Fall back to the state value when no

@@ -1,0 +1,78 @@
+{
+  "bucket": "lipids_ascvd",
+  "source_date": "2018-11 (2018 AHA/ACC Multisociety Cholesterol Guideline)",
+  "entries": [
+    {
+      "id": "aha-acc-2018-4.4.1",
+      "condition_tags": ["t2dm", "ldl", "statin", "primary-prevention"],
+      "title": "Moderate-intensity statin in adults 40–75 with diabetes regardless of ASCVD risk",
+      "snippet": "In adults 40 to 75 years of age with diabetes mellitus, regardless of estimated 10-year ASCVD risk, moderate-intensity statin therapy is indicated.",
+      "source_org": "American Heart Association / American College of Cardiology (Multisociety)",
+      "source_doc": "2018 Guideline on the Management of Blood Cholesterol",
+      "source_section": "4.4.1, Recommendation 1",
+      "source_url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000000625",
+      "applies_when": "adult age 40–75 with diabetes mellitus",
+      "demo_relevance": "Chen (T2DM, LDL 158, exertional chest tightness, FHx premature MI) and Reyes (T2DM age-eligible) both have a class I indication for statin."
+    },
+    {
+      "id": "aha-acc-2018-4.4.1-high",
+      "condition_tags": ["t2dm", "ldl", "statin", "high-intensity", "ascvd-risk-enhancers"],
+      "title": "High-intensity statin in higher-risk diabetes",
+      "snippet": "In adults 40 to 75 years of age with diabetes mellitus and multiple ASCVD risk factors, it is reasonable to prescribe high-intensity statin therapy with the aim to reduce LDL-C levels by 50% or more.",
+      "source_org": "American Heart Association / American College of Cardiology (Multisociety)",
+      "source_doc": "2018 Guideline on the Management of Blood Cholesterol",
+      "source_section": "4.4.1, Recommendation 2",
+      "source_url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000000625",
+      "applies_when": "adult 40–75 with DM and ≥1 ASCVD risk-enhancing factor (e.g., FHx premature ASCVD, CKD, long-duration DM, retinopathy/neuropathy/albuminuria, ABI <0.9)",
+      "demo_relevance": "Chen has T2DM + HTN + dyslipidemia + FHx premature MI + exertional chest pain — multiple risk enhancers warrant high-intensity statin."
+    },
+    {
+      "id": "aha-acc-2018-4.1",
+      "condition_tags": ["ldl", "ascvd-secondary-prevention", "statin", "high-intensity"],
+      "title": "High-intensity statin (or maximally tolerated) for clinical ASCVD",
+      "snippet": "In patients who are 75 years of age or younger with clinical ASCVD, high-intensity statin therapy should be initiated or continued with the aim of achieving a 50% or greater reduction in LDL-C levels.",
+      "source_org": "American Heart Association / American College of Cardiology (Multisociety)",
+      "source_doc": "2018 Guideline on the Management of Blood Cholesterol",
+      "source_section": "4.1, Recommendation 1",
+      "source_url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000000625",
+      "applies_when": "patient ≤75 with established clinical ASCVD",
+      "demo_relevance": "If Chen's chest tightness workup confirms CAD, immediately escalates to high-intensity secondary-prevention statin."
+    },
+    {
+      "id": "aha-acc-2018-4.3",
+      "condition_tags": ["ldl", "primary-prevention", "severe-hypercholesterolemia"],
+      "title": "LDL-C ≥190 mg/dL: high-intensity statin without risk assessment",
+      "snippet": "In patients 20 to 75 years of age with an LDL-C level of 190 mg/dL (≥4.9 mmol/L) or higher, maximally tolerated statin therapy is recommended.",
+      "source_org": "American Heart Association / American College of Cardiology (Multisociety)",
+      "source_doc": "2018 Guideline on the Management of Blood Cholesterol",
+      "source_section": "4.3, Recommendation 1",
+      "source_url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000000625",
+      "applies_when": "adult 20–75 with LDL-C ≥190 mg/dL",
+      "demo_relevance": "Boundary check: Chen LDL 158 — does NOT trigger this rule on LDL alone, but does via DM pathway."
+    },
+    {
+      "id": "aha-acc-2018-4.4.2",
+      "condition_tags": ["ldl", "primary-prevention", "ascvd-risk", "intermediate-risk"],
+      "title": "Intermediate 10-yr ASCVD risk (7.5–<20%) — moderate-intensity statin",
+      "snippet": "In adults 40 to 75 years of age without diabetes mellitus and with LDL-C levels ≥70 mg/dL, at a 10-year ASCVD risk of ≥7.5%, start a moderate-intensity statin if a discussion of treatment options favors statin therapy. Risk-enhancing factors favor statin therapy.",
+      "source_org": "American Heart Association / American College of Cardiology (Multisociety)",
+      "source_doc": "2018 Guideline on the Management of Blood Cholesterol",
+      "source_section": "4.4.2",
+      "source_url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000000625",
+      "applies_when": "adult 40–75 without DM, LDL 70–189, 10-yr ASCVD risk 7.5–<20%",
+      "demo_relevance": "Default framework when DM rule does not apply (e.g., Whitaker, Kowalski) — needs ASCVD score."
+    },
+    {
+      "id": "aha-acc-2018-risk-enhancers",
+      "condition_tags": ["ldl", "ascvd-risk-enhancers", "fhx-premature-mi"],
+      "title": "ASCVD risk-enhancing factors (incl. family history of premature ASCVD)",
+      "snippet": "Risk-enhancing factors include family history of premature ASCVD (men <55 y, women <65 y), persistently elevated LDL-C ≥160 mg/dL, chronic kidney disease, metabolic syndrome, conditions specific to women (e.g., preeclampsia, premature menopause), inflammatory diseases, ethnicity, and persistently elevated triglycerides ≥175 mg/dL.",
+      "source_org": "American Heart Association / American College of Cardiology (Multisociety)",
+      "source_doc": "2018 Guideline on the Management of Blood Cholesterol",
+      "source_section": "Table 6 / 4.4.1.4",
+      "source_url": "https://www.ahajournals.org/doi/10.1161/CIR.0000000000000625",
+      "applies_when": "borderline or intermediate ASCVD risk decision",
+      "demo_relevance": "Chen: FHx premature MI + TG 178 + LDL 158 → multiple risk enhancers; supports high-intensity statin."
+    }
+  ]
+}

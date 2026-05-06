@@ -12,8 +12,10 @@ the retrieval pipeline does not need.
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 
 # ── Public types ────────────────────────────────────────────────────────────
@@ -21,11 +23,18 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Chunk:
-    """One unit of indexed text. Source location lives at the indexer."""
+    """One unit of indexed text. Source location lives at the indexer.
+
+    ``chunk_id_override`` is set only by JSON ingestion, where each guideline
+    entry already carries a stable, source-of-truth id (e.g. ``ada-2025-6.5a``).
+    For PDFs this stays ``None`` and the indexer derives the id from
+    ``f"{source_id}-p{page}-{idx:03d}"`` (see ``rag/index.py``).
+    """
 
     section: str
     page_number: int
     content: str
+    chunk_id_override: str | None = field(default=None)
 
 
 # ── Tunables ────────────────────────────────────────────────────────────────
@@ -247,4 +256,92 @@ def chunk_guideline_pdf(pdf_bytes: bytes) -> list[Chunk]:
     return chunks
 
 
-__all__ = ["Chunk", "chunk_guideline_pdf"]
+def chunk_guideline_json(path: Path) -> list[Chunk]:
+    """Chunk a structured-JSON guideline bucket file into one chunk per entry.
+
+    The guideline JSON corpus (``agent-api/data/guidelines/*.json``) carries
+    short, hand-curated entries — one recommendation each, 1–3 sentences. We
+    emit exactly one ``Chunk`` per entry without further windowing, since
+    every entry already fits comfortably under the 512-token target.
+
+    Schema expected (per bucket file)::
+
+        {
+          "bucket": "diabetes_t2dm",
+          "source_date": "...",
+          "entries": [
+            {
+              "id": "ada-2025-6.5a",
+              "title": "...",
+              "snippet": "...",
+              "applies_when": "...",
+              "source_section": "...",
+              "source_doc": "...",
+              "condition_tags": ["t2dm", "hba1c"],
+              ...
+            },
+            ...
+          ]
+        }
+
+    Each emitted chunk:
+      * uses ``chunk_id_override`` = the entry's ``id`` (stable across re-runs;
+        diverges from the PDF chunk-id pattern on purpose — entry ids are the
+        canonical handle for these recommendations)
+      * folds title + snippet + applies_when + condition_tags into ``content``
+        so both sparse (ts_rank) and dense retrieval get strong signal
+      * stores ``source_section`` as ``section``
+      * sets ``page_number`` = 0 (no pages in JSON sources)
+    """
+    raw = path.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    entries = data.get("entries") or []
+    if not isinstance(entries, list):
+        return []
+
+    chunks: list[Chunk] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        entry_id = str(entry.get("id") or "").strip()
+        if not entry_id:
+            continue
+        title = str(entry.get("title") or "").strip()
+        snippet = str(entry.get("snippet") or "").strip()
+        applies_when = str(entry.get("applies_when") or "").strip()
+        section = str(entry.get("source_section") or "").strip() or "GUIDELINE"
+        tags = entry.get("condition_tags") or []
+        if not isinstance(tags, list):
+            tags = []
+        tags_text = ", ".join(str(t) for t in tags if t)
+
+        # Compose content so both sparse keyword search and dense embedding
+        # get the title, the recommendation body, the applicability clause,
+        # and the condition tags. Tags as plain text help ts_rank pick up
+        # things like "nafld" or "anticoagulation" that may not appear
+        # verbatim in the snippet.
+        parts: list[str] = []
+        if title:
+            parts.append(title)
+        if snippet:
+            parts.append(snippet)
+        if applies_when:
+            parts.append(f"Applies when: {applies_when}")
+        if tags_text:
+            parts.append(f"Conditions: {tags_text}")
+        content = "\n\n".join(parts).strip()
+        if not content:
+            continue
+
+        chunks.append(
+            Chunk(
+                section=section,
+                page_number=0,
+                content=content,
+                chunk_id_override=entry_id,
+            )
+        )
+    return chunks
+
+
+__all__ = ["Chunk", "chunk_guideline_pdf", "chunk_guideline_json"]

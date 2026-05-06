@@ -1,0 +1,102 @@
+{
+  "bucket": "diabetes_t2dm",
+  "source_date": "2024-12 (ADA Standards of Care in Diabetes — 2025)",
+  "entries": [
+    {
+      "id": "ada-2025-6.5a",
+      "condition_tags": ["t2dm", "hba1c", "glycemic-target"],
+      "title": "A1C goal <7% for most non-pregnant adults",
+      "snippet": "An A1C goal for many nonpregnant adults of <7% (53 mmol/mol) without significant hypoglycemia is appropriate. (Paraphrased from ADA Section 6 recommendation 6.5a.)",
+      "source_org": "American Diabetes Association",
+      "source_doc": "Standards of Care in Diabetes — 2025",
+      "source_section": "6.5a",
+      "source_url": "https://diabetesjournals.org/care/article/48/Supplement_1/S128/157561/6-Glycemic-Goals-and-Hypoglycemia-Standards-of",
+      "applies_when": "non-pregnant adult with diabetes, no significant hypoglycemia risk, life expectancy long enough to benefit",
+      "demo_relevance": "Reyes A1c 9.2% and Chen with T2DM are both above the <7% target — flags need for intensification."
+    },
+    {
+      "id": "ada-2025-6.5b",
+      "condition_tags": ["t2dm", "hba1c", "individualization", "older-adult"],
+      "title": "More- or less-stringent A1C goals based on individual factors",
+      "snippet": "On the basis of provider judgment and patient preference, achievement of lower A1C levels than the goal of 7% may be acceptable, and even beneficial, if it can be achieved safely without significant hypoglycemia or other adverse effects. Less stringent A1C goals (such as <8% [64 mmol/mol]) may be appropriate for patients with limited life expectancy or where the harms of treatment are greater than the benefits. (Paraphrased.)",
+      "source_org": "American Diabetes Association",
+      "source_doc": "Standards of Care in Diabetes — 2025",
+      "source_section": "6.5b–6.5c",
+      "source_url": "https://diabetesjournals.org/care/article/48/Supplement_1/S128/157561/6-Glycemic-Goals-and-Hypoglycemia-Standards-of",
+      "applies_when": "adult with limited life expectancy, advanced complications, or high hypoglycemia risk",
+      "demo_relevance": "Frames A1c targeting decisions for Reyes (otherwise healthy adult — pursue <7%) versus older or frail patients."
+    },
+    {
+      "id": "ada-2025-9.4",
+      "condition_tags": ["t2dm", "metformin", "first-line"],
+      "title": "Metformin remains a foundational agent for T2DM without ASCVD/CKD/HF",
+      "snippet": "Metformin is used as an add-on to any of the drugs used for comorbidities, and as a starting agent for persons without any of the comorbidities (ASCVD or high risk, heart failure, or CKD). (Paraphrased from Section 9.)",
+      "source_org": "American Diabetes Association",
+      "source_doc": "Standards of Care in Diabetes — 2025",
+      "source_section": "9.4",
+      "source_url": "https://diabetesjournals.org/care/article/48/Supplement_1/S181/157569/9-Pharmacologic-Approaches-to-Glycemic-Treatment",
+      "applies_when": "adult with T2DM, no contraindication, eGFR ≥30",
+      "demo_relevance": "Reyes (T2DM, no documented ASCVD/HF/CKD) is a clean fit for metformin-first; Chen with ASCVD risk needs additional agent."
+    },
+    {
+      "id": "ada-2025-9.6",
+      "condition_tags": ["t2dm", "glp1", "sglt2", "ascvd", "ckd", "hf"],
+      "title": "GLP-1 RA and/or SGLT2i with proven CV benefit for T2DM with ASCVD/CKD/HF",
+      "snippet": "In people with type 2 diabetes and established/high-risk ASCVD, heart failure, and/or CKD, an SGLT2 inhibitor and/or GLP-1 receptor agonist with demonstrated cardiovascular benefit is recommended as part of the glucose-lowering regimen and comprehensive cardiovascular risk reduction, independent of A1C and in consideration of person-specific factors. (Paraphrased.)",
+      "source_org": "American Diabetes Association",
+      "source_doc": "Standards of Care in Diabetes — 2025",
+      "source_section": "9.6 / 10.42",
+      "source_url": "https://diabetesjournals.org/care/article/48/Supplement_1/S181/157569/9-Pharmacologic-Approaches-to-Glycemic-Treatment",
+      "applies_when": "adult with T2DM and established ASCVD, high ASCVD risk, HF, or CKD",
+      "demo_relevance": "Chen has T2DM + exertional chest tightness + FHx premature MI (high ASCVD risk) — supports adding GLP-1 RA or SGLT2i regardless of A1c."
+    },
+    {
+      "id": "ada-2025-10.1",
+      "condition_tags": ["t2dm", "htn", "blood-pressure", "bp-target"],
+      "title": "BP target <130/80 mmHg in diabetes when safely attainable",
+      "snippet": "For individuals with diabetes and hypertension, a blood pressure target of <130/80 mmHg is recommended if it can be safely attained. Treatment should be individualized; mean achieved blood pressure <120/80 mmHg has been associated with adverse events. (Paraphrased from Section 10.)",
+      "source_org": "American Diabetes Association",
+      "source_doc": "Standards of Care in Diabetes — 2025",
+      "source_section": "10.13",
+      "source_url": "https://diabetesjournals.org/care/article/48/Supplement_1/S207/157549/10-Cardiovascular-Disease-and-Risk-Management",
+      "applies_when": "adult with diabetes and confirmed hypertension",
+      "demo_relevance": "Reyes (HTN + T2DM + obesity) and Chen (HTN + T2DM) — anchor BP goal for the plan."
+    },
+    {
+      "id": "ada-2025-11.1",
+      "condition_tags": ["t2dm", "ckd", "nephropathy-screen", "acr", "egfr"],
+      "title": "Annual urine ACR + eGFR in T2DM",
+      "snippet": "At least annually, urinary albumin (e.g., spot urinary albumin-to-creatinine ratio) and estimated glomerular filtration rate should be assessed in people with type 1 diabetes with duration of ≥5 years and in all people with type 2 diabetes regardless of treatment. (Paraphrased from Section 11.)",
+      "source_org": "American Diabetes Association",
+      "source_doc": "Standards of Care in Diabetes — 2025",
+      "source_section": "11.5b",
+      "source_url": "https://diabetesjournals.org/care/article/48/Supplement_1/S239/157568/11-Chronic-Kidney-Disease-and-Risk-Management",
+      "applies_when": "adult with T2DM at any duration",
+      "demo_relevance": "Reyes and Chen both T2DM — confirms annual ACR/eGFR is owed; Kowalski eGFR 62 is already in CKD-stage-2 range."
+    },
+    {
+      "id": "ada-2025-12.1",
+      "condition_tags": ["t2dm", "retinopathy-screen"],
+      "title": "Retinopathy screening at diagnosis for T2DM",
+      "snippet": "Adults with type 2 diabetes should have an initial dilated and comprehensive eye examination by an ophthalmologist or optometrist at the time of diabetes diagnosis. (Paraphrased from Section 12.)",
+      "source_org": "American Diabetes Association",
+      "source_doc": "Standards of Care in Diabetes — 2025",
+      "source_section": "12.18",
+      "source_url": "https://diabetesjournals.org/care/article/48/Supplement_1/S252/157564/12-Retinopathy-Neuropathy-and-Foot-Care-Standards",
+      "applies_when": "adult newly or previously diagnosed with T2DM",
+      "demo_relevance": "Reyes and Chen — both need retinopathy screen; Reyes A1c 9.2% increases risk."
+    },
+    {
+      "id": "ada-2025-9.intensify",
+      "condition_tags": ["t2dm", "hba1c", "intensification"],
+      "title": "Reassess and intensify therapy if not at goal",
+      "snippet": "Pharmacologic therapy in people with type 2 diabetes should be reassessed at regular intervals (every 3–6 months) and adjusted as needed to incorporate changes in patient circumstances, preferences, and goals. Therapy should be intensified when treatment goals are not met or sustained. (Paraphrased.)",
+      "source_org": "American Diabetes Association",
+      "source_doc": "Standards of Care in Diabetes — 2025",
+      "source_section": "9.5",
+      "source_url": "https://diabetesjournals.org/care/article/48/Supplement_1/S181/157569/9-Pharmacologic-Approaches-to-Glycemic-Treatment",
+      "applies_when": "adult with T2DM not meeting individualized A1c goal",
+      "demo_relevance": "Reyes A1c 9.2% (>1.5% above goal) — supports immediate combination therapy rather than stepwise."
+    }
+  ]
+}

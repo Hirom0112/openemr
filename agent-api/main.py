@@ -870,6 +870,7 @@ async def agent_query(request: AgentQueryRequest) -> dict:
         session_id=request.session_id,
         provider_id=request.provider_id,
         patient_id=patient_id,
+        patient_ids=list(request.patient_ids or []),
         message=request.message,
     )
     config: dict[str, Any] = {"configurable": {"thread_id": request.session_id}}
@@ -2095,6 +2096,80 @@ _DOC_CHAT_SYSTEM_PROMPT = (
 _CITATION_RE = re.compile(r"\[(G|D):([^\]\s]+)\]")
 
 
+_CONDITION_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "t2dm management hba1c target intensification": (
+        "metformin", "ozempic", "semaglutide", "liraglutide", "dulaglutide",
+        "tirzepatide", "empagliflozin", "dapagliflozin", "canagliflozin",
+        "sitagliptin", "linagliptin", "glipizide", "glimepiride",
+        "insulin glargine", "insulin lispro", "insulin aspart",
+        "hemoglobin a1c", "hba1c", "fasting glucose",
+    ),
+    "lipid management ldl statin ascvd primary prevention": (
+        "atorvastatin", "rosuvastatin", "simvastatin", "pravastatin",
+        "ezetimibe", "fenofibrate", "gemfibrozil",
+        "ldl", "cholesterol", "triglycerides",
+    ),
+    "chronic kidney disease ckd staging egfr nephrology": (
+        "egfr", "creatinine", "bun", "albumin creatinine ratio", "acr",
+    ),
+    "nafld masld transaminitis liver fibrosis": (
+        "alt", "ast", "alanine aminotransferase", "aspartate aminotransferase",
+    ),
+    "atrial fibrillation anticoagulation cha2ds2-vasc": (
+        "apixaban", "rivaroxaban", "dabigatran", "warfarin",
+        "atrial fibrillation", "afib",
+    ),
+    "anemia occult gi bleed iron deficiency on anticoagulant": (
+        "hemoglobin", "hgb", "hematocrit", "hct",
+    ),
+    "alcohol screening audit-c brief intervention": (
+        "alcohol",
+    ),
+    "hypertension blood pressure target": (
+        "lisinopril", "losartan", "amlodipine", "metoprolol", "atenolol",
+        "hydrochlorothiazide",
+    ),
+}
+
+
+def _extract_condition_tags(extraction: dict) -> list[str]:
+    """Derive clinical-condition retrieval tags from meds + abnormal labs.
+
+    Maps medication names and abnormal lab markers to the management-oriented
+    keyword phrases the guideline corpus indexes well against. Returns an
+    ordered, deduplicated list (most-evidenced first).
+    """
+    if not isinstance(extraction, dict):
+        return []
+
+    haystack: list[str] = []
+    for med in extraction.get("current_medications") or []:
+        if isinstance(med, dict):
+            mname = med.get("name")
+            if isinstance(mname, str):
+                haystack.append(mname.lower())
+    for value in extraction.get("values") or []:
+        if isinstance(value, dict) and value.get("abnormal_flag") in {
+            "high", "low", "critical_high", "critical_low",
+        }:
+            n = value.get("normalized_test_name") or value.get("test_name")
+            if isinstance(n, str):
+                haystack.append(n.lower())
+    chief = extraction.get("chief_concern")
+    if isinstance(chief, dict) and isinstance(chief.get("value"), str):
+        haystack.append(chief["value"].lower())
+
+    if not haystack:
+        return []
+    blob = " ".join(haystack)
+
+    tags: list[str] = []
+    for tag, needles in _CONDITION_KEYWORDS.items():
+        if any(n in blob for n in needles):
+            tags.append(tag)
+    return tags
+
+
 def _build_rag_query_from_extraction(extraction: dict) -> str:
     """Produce a short (<200 char) RAG query from an ExtractionResult dict.
 
@@ -2108,6 +2183,11 @@ def _build_rag_query_from_extraction(extraction: dict) -> str:
     kind = extraction.get("kind")
     tokens: list[str] = []
 
+    # Lead with condition tags so retrieval pulls management/target content
+    # rather than only symptom-similarity content.
+    tags = _extract_condition_tags(extraction)
+    tokens.extend(tags[:2])
+
     if kind == "lab_report":
         abnormal_codes = {"high", "low", "critical_high", "critical_low"}
         for value in extraction.get("values") or []:
@@ -2118,26 +2198,22 @@ def _build_rag_query_from_extraction(extraction: dict) -> str:
                 name = value.get("normalized_test_name") or value.get("test_name")
                 if isinstance(name, str) and name.strip():
                     tokens.append(name.strip().lower())
-            if len(tokens) >= 3:
+            if len(tokens) >= 5:
                 break
-        if tokens:
-            # Bias retrieval toward the dominant clinical question.
+        if not tags and tokens:
             tokens.append("sepsis" if "lactate" in tokens else "abnormal lab")
 
     elif kind == "intake_form":
-        chief = extraction.get("chief_concern")
-        if isinstance(chief, dict):
-            cc_val = chief.get("value")
-            if isinstance(cc_val, str) and cc_val.strip():
-                tokens.append(cc_val.strip())
-        # Append up to 2 active conditions surfaced via current_medications —
-        # intake forms don't carry a structured ``conditions`` block today, so
-        # the medication list is the closest proxy for the working problem set.
-        for med in (extraction.get("current_medications") or [])[:2]:
-            if isinstance(med, dict):
-                mname = med.get("name")
-                if isinstance(mname, str) and mname.strip():
-                    tokens.append(mname.strip())
+        # Skip chief_concern when condition tags fire — narrative complaint
+        # text ("complications", "worry about") biases dense retrieval toward
+        # symptom-similarity chunks (BP target, kidney referral) and drowns
+        # out the management/target chunks the tags would surface.
+        if not tags:
+            chief = extraction.get("chief_concern")
+            if isinstance(chief, dict):
+                cc_val = chief.get("value")
+                if isinstance(cc_val, str) and cc_val.strip():
+                    tokens.append(cc_val.strip())
 
     elif kind == "unknown":
         for fact in (extraction.get("key_facts") or [])[:2]:
@@ -2363,9 +2439,38 @@ async def document_chat(
     import json as _json
 
     extraction_json = _json.dumps(body.extraction or {}, separators=(",", ":"))[:8000]
+
+    # Question-aware second retrieval: the post-ingest pass biases toward the
+    # document; here we re-retrieve scoped to what the clinician actually
+    # asked, then merge with the doc-time guidelines (dedup by chunk_id).
+    merged: dict[str, dict[str, Any]] = {}
+    for g in (body.guidelines or []):
+        if isinstance(g, dict) and g.get("chunk_id"):
+            merged[g["chunk_id"]] = g
+    try:
+        from rag import retrieve as _rag_retrieve
+
+        tags = _extract_condition_tags(body.extraction or {})
+        question_query = " ".join([*tags[:1], question]).strip()[:199]
+        if question_query:
+            extra_snippets = await _rag_retrieve.search(question_query, k=5)
+            for s in extra_snippets:
+                d = s._asdict()
+                ivd = d.get("indexed_version_date")
+                if ivd is not None and not isinstance(ivd, str):
+                    d["indexed_version_date"] = ivd.isoformat()
+                cid = d.get("chunk_id")
+                if cid and cid not in merged:
+                    merged[cid] = d
+    except Exception as exc:  # noqa: BLE001 — retriever boundary
+        logger.warning(
+            "document_chat_question_retrieval_failed",
+            extra={"request_id": rid, "error_type": type(exc).__name__},
+        )
+
     guidelines_compact = [
         {"chunk_id": g.get("chunk_id"), "content": g.get("content")}
-        for g in (body.guidelines or [])
+        for g in merged.values()
         if isinstance(g, dict)
     ]
     guidelines_json = _json.dumps(guidelines_compact, separators=(",", ":"))[:8000]

@@ -1,0 +1,64 @@
+{
+  "version": "1.0.0",
+  "generated": "2026-05-05",
+  "buckets": [
+    "diabetes_t2dm",
+    "lipids_ascvd",
+    "nafld_masld",
+    "ckd_kdigo",
+    "afib_anticoag",
+    "alcohol_screening",
+    "chest_pain"
+  ],
+  "entries": [
+    {"id": "ada-2025-6.5a", "bucket": "diabetes_t2dm", "condition_tags": ["t2dm", "hba1c", "glycemic-target"], "title": "A1C goal <7% for most non-pregnant adults", "source_org": "American Diabetes Association"},
+    {"id": "ada-2025-6.5b", "bucket": "diabetes_t2dm", "condition_tags": ["t2dm", "hba1c", "individualization", "older-adult"], "title": "More- or less-stringent A1C goals based on individual factors", "source_org": "American Diabetes Association"},
+    {"id": "ada-2025-9.4", "bucket": "diabetes_t2dm", "condition_tags": ["t2dm", "metformin", "first-line"], "title": "Metformin remains a foundational agent for T2DM without ASCVD/CKD/HF", "source_org": "American Diabetes Association"},
+    {"id": "ada-2025-9.6", "bucket": "diabetes_t2dm", "condition_tags": ["t2dm", "glp1", "sglt2", "ascvd", "ckd", "hf"], "title": "GLP-1 RA and/or SGLT2i with proven CV benefit for T2DM with ASCVD/CKD/HF", "source_org": "American Diabetes Association"},
+    {"id": "ada-2025-10.1", "bucket": "diabetes_t2dm", "condition_tags": ["t2dm", "htn", "blood-pressure", "bp-target"], "title": "BP target <130/80 mmHg in diabetes when safely attainable", "source_org": "American Diabetes Association"},
+    {"id": "ada-2025-11.1", "bucket": "diabetes_t2dm", "condition_tags": ["t2dm", "ckd", "nephropathy-screen", "acr", "egfr"], "title": "Annual urine ACR + eGFR in T2DM", "source_org": "American Diabetes Association"},
+    {"id": "ada-2025-12.1", "bucket": "diabetes_t2dm", "condition_tags": ["t2dm", "retinopathy-screen"], "title": "Retinopathy screening at diagnosis for T2DM", "source_org": "American Diabetes Association"},
+    {"id": "ada-2025-9.intensify", "bucket": "diabetes_t2dm", "condition_tags": ["t2dm", "hba1c", "intensification"], "title": "Reassess and intensify therapy if not at goal", "source_org": "American Diabetes Association"},
+
+    {"id": "aha-acc-2018-4.4.1", "bucket": "lipids_ascvd", "condition_tags": ["t2dm", "ldl", "statin", "primary-prevention"], "title": "Moderate-intensity statin in adults 40–75 with diabetes regardless of ASCVD risk", "source_org": "AHA/ACC Multisociety"},
+    {"id": "aha-acc-2018-4.4.1-high", "bucket": "lipids_ascvd", "condition_tags": ["t2dm", "ldl", "statin", "high-intensity", "ascvd-risk-enhancers"], "title": "High-intensity statin in higher-risk diabetes", "source_org": "AHA/ACC Multisociety"},
+    {"id": "aha-acc-2018-4.1", "bucket": "lipids_ascvd", "condition_tags": ["ldl", "ascvd-secondary-prevention", "statin", "high-intensity"], "title": "High-intensity statin (or maximally tolerated) for clinical ASCVD", "source_org": "AHA/ACC Multisociety"},
+    {"id": "aha-acc-2018-4.3", "bucket": "lipids_ascvd", "condition_tags": ["ldl", "primary-prevention", "severe-hypercholesterolemia"], "title": "LDL-C ≥190 mg/dL: high-intensity statin without risk assessment", "source_org": "AHA/ACC Multisociety"},
+    {"id": "aha-acc-2018-4.4.2", "bucket": "lipids_ascvd", "condition_tags": ["ldl", "primary-prevention", "ascvd-risk", "intermediate-risk"], "title": "Intermediate 10-yr ASCVD risk (7.5–<20%) — moderate-intensity statin", "source_org": "AHA/ACC Multisociety"},
+    {"id": "aha-acc-2018-risk-enhancers", "bucket": "lipids_ascvd", "condition_tags": ["ldl", "ascvd-risk-enhancers", "fhx-premature-mi"], "title": "ASCVD risk-enhancing factors (incl. family history of premature ASCVD)", "source_org": "AHA/ACC Multisociety"},
+
+    {"id": "aasld-2023-suspect", "bucket": "nafld_masld", "condition_tags": ["nafld", "masld", "transaminitis", "metabolic-syndrome"], "title": "When to suspect MASLD/NAFLD", "source_org": "AASLD"},
+    {"id": "aasld-2023-fib4", "bucket": "nafld_masld", "condition_tags": ["nafld", "masld", "fib-4", "fibrosis-staging"], "title": "FIB-4 as primary noninvasive risk stratifier", "source_org": "AASLD"},
+    {"id": "aasld-2023-alcohol", "bucket": "nafld_masld", "condition_tags": ["nafld", "masld", "alcohol-use", "metALD"], "title": "Quantify alcohol use; differentiate MASLD vs MetALD vs ALD", "source_org": "AASLD"},
+    {"id": "aasld-2023-lifestyle", "bucket": "nafld_masld", "condition_tags": ["nafld", "masld", "weight-loss", "lifestyle"], "title": "Weight loss is the cornerstone intervention", "source_org": "AASLD"},
+    {"id": "aasld-2023-comorbid", "bucket": "nafld_masld", "condition_tags": ["nafld", "masld", "t2dm-screening", "ascvd-risk"], "title": "Screen MASLD patients for T2DM and treat cardiovascular risk", "source_org": "AASLD"},
+    {"id": "aasld-2023-imaging", "bucket": "nafld_masld", "condition_tags": ["nafld", "masld", "imaging", "ruq-pain"], "title": "Abdominal ultrasound is the first-line imaging modality", "source_org": "AASLD"},
+
+    {"id": "kdigo-2024-1.1", "bucket": "ckd_kdigo", "condition_tags": ["ckd", "egfr", "acr", "ckd-staging"], "title": "CKD defined by eGFR <60 or markers of damage for ≥3 months", "source_org": "KDIGO"},
+    {"id": "kdigo-2024-1.2-cga", "bucket": "ckd_kdigo", "condition_tags": ["ckd", "ckd-staging", "cga-classification"], "title": "CGA staging: cause, GFR category, albuminuria category", "source_org": "KDIGO"},
+    {"id": "kdigo-2024-confirm", "bucket": "ckd_kdigo", "condition_tags": ["ckd", "egfr", "acr", "chronicity"], "title": "Confirm CKD with repeat testing over ≥3 months", "source_org": "KDIGO"},
+    {"id": "kdigo-2024-bp", "bucket": "ckd_kdigo", "condition_tags": ["ckd", "htn", "blood-pressure", "raas"], "title": "Target SBP <120 mmHg in CKD when tolerated; RAAS blockade for albuminuria", "source_org": "KDIGO"},
+    {"id": "kdigo-2024-referral", "bucket": "ckd_kdigo", "condition_tags": ["ckd", "nephrology-referral"], "title": "When to refer to nephrology", "source_org": "KDIGO"},
+    {"id": "kdigo-2024-monitor", "bucket": "ckd_kdigo", "condition_tags": ["ckd", "monitoring", "egfr", "acr"], "title": "Monitoring frequency by risk category", "source_org": "KDIGO"},
+
+    {"id": "acc-aha-afib-2023-cha2ds2", "bucket": "afib_anticoag", "condition_tags": ["afib", "stroke-risk", "cha2ds2-vasc", "anticoagulation"], "title": "Anticoagulate AFib with annual stroke risk ≥2%/yr", "source_org": "ACC/AHA/ACCP/HRS"},
+    {"id": "acc-aha-afib-2023-doac", "bucket": "afib_anticoag", "condition_tags": ["afib", "doac", "apixaban", "anticoagulation"], "title": "DOACs preferred over warfarin in eligible AFib patients", "source_org": "ACC/AHA/ACCP/HRS"},
+    {"id": "acc-aha-afib-2023-bleed", "bucket": "afib_anticoag", "condition_tags": ["afib", "bleeding-risk", "has-bled", "anticoagulation"], "title": "Bleeding risk scores inform — do not exclude — anticoagulation", "source_org": "ACC/AHA/ACCP/HRS"},
+    {"id": "aga-2020-ida-anticoag", "bucket": "afib_anticoag", "condition_tags": ["anemia-on-anticoag", "occult-gi-bleed", "ida", "endoscopy"], "title": "Anemia in anticoagulated patient: investigate occult GI source", "source_org": "AGA"},
+    {"id": "aga-2020-ferritin", "bucket": "afib_anticoag", "condition_tags": ["anemia-on-anticoag", "ida", "ferritin"], "title": "Ferritin <45 ng/mL diagnoses iron deficiency", "source_org": "AGA"},
+    {"id": "acc-aha-afib-2023-modifiers", "bucket": "afib_anticoag", "condition_tags": ["afib", "stroke-risk-modifiers", "ckd", "obesity"], "title": "Risk modifiers for borderline cases", "source_org": "ACC/AHA/ACCP/HRS"},
+
+    {"id": "uspstf-2018-alcohol-B", "bucket": "alcohol_screening", "condition_tags": ["alcohol-use", "screening", "uspstf-b"], "title": "USPSTF Grade B: screen all adults for unhealthy alcohol use", "source_org": "USPSTF"},
+    {"id": "uspstf-2018-audit-c", "bucket": "alcohol_screening", "condition_tags": ["alcohol-use", "audit-c", "screening-tool"], "title": "AUDIT-C is a recommended screening instrument", "source_org": "USPSTF"},
+    {"id": "audit-c-cutoffs", "bucket": "alcohol_screening", "condition_tags": ["alcohol-use", "audit-c", "interpretation"], "title": "AUDIT-C interpretation thresholds", "source_org": "NIAAA / USPSTF"},
+    {"id": "uspstf-2018-brief-intervention", "bucket": "alcohol_screening", "condition_tags": ["alcohol-use", "brief-intervention", "behavioral-counseling"], "title": "Brief behavioral counseling for screen-positive adults", "source_org": "USPSTF"},
+    {"id": "uspstf-2018-aud-referral", "bucket": "alcohol_screening", "condition_tags": ["alcohol-use", "aud", "referral"], "title": "Refer suspected alcohol use disorder for definitive treatment", "source_org": "USPSTF"},
+
+    {"id": "aha-acc-cp-2021-stable-def", "bucket": "chest_pain", "condition_tags": ["stable-angina", "chest-pain", "evaluation"], "title": "Definition of stable chest pain", "source_org": "AHA/ACC"},
+    {"id": "aha-acc-cp-2021-pretest", "bucket": "chest_pain", "condition_tags": ["stable-angina", "pretest-probability", "diabetes"], "title": "Use pretest probability (age, sex, symptoms) to guide testing", "source_org": "AHA/ACC"},
+    {"id": "aha-acc-cp-2021-ccta", "bucket": "chest_pain", "condition_tags": ["stable-angina", "ccta", "diagnostic-testing"], "title": "CCTA for intermediate-high risk stable chest pain without known CAD", "source_org": "AHA/ACC"},
+    {"id": "aha-acc-cp-2021-stress", "bucket": "chest_pain", "condition_tags": ["stable-angina", "stress-imaging", "ischemia"], "title": "Stress imaging is an alternative for ischemia and risk stratification", "source_org": "AHA/ACC"},
+    {"id": "aha-acc-cp-2021-low-risk", "bucket": "chest_pain", "condition_tags": ["chest-pain", "low-risk", "deferral"], "title": "Defer testing in low-probability patients", "source_org": "AHA/ACC"},
+    {"id": "aha-acc-cp-2021-shared", "bucket": "chest_pain", "condition_tags": ["chest-pain", "shared-decision-making"], "title": "Shared decision-making and patient-centered evaluation", "source_org": "AHA/ACC"}
+  ]
+}

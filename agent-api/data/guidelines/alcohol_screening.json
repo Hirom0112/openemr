@@ -1,0 +1,66 @@
+{
+  "bucket": "alcohol_screening",
+  "source_date": "2018-11 (USPSTF Final Recommendation Statement, reaffirmed)",
+  "entries": [
+    {
+      "id": "uspstf-2018-alcohol-B",
+      "condition_tags": ["alcohol-use", "screening", "uspstf-b"],
+      "title": "USPSTF Grade B: screen all adults for unhealthy alcohol use",
+      "snippet": "The USPSTF recommends screening for unhealthy alcohol use in primary care settings in adults 18 years or older, including pregnant women, and providing persons engaged in risky or hazardous drinking with brief behavioral counseling interventions to reduce unhealthy alcohol use. (Grade B.)",
+      "source_org": "U.S. Preventive Services Task Force",
+      "source_doc": "Unhealthy Alcohol Use in Adolescents and Adults: Screening and Behavioral Counseling Interventions (Final Recommendation 2018)",
+      "source_section": "Recommendation Summary",
+      "source_url": "https://www.uspreventiveservicestaskforce.org/uspstf/recommendation/unhealthy-alcohol-use-in-adolescents-and-adults-screening-and-behavioral-counseling-interventions",
+      "applies_when": "any adult ≥18 in a primary care setting",
+      "demo_relevance": "All four demo patients qualify; Kowalski with documented alcohol use is a direct positive-screen candidate."
+    },
+    {
+      "id": "uspstf-2018-audit-c",
+      "condition_tags": ["alcohol-use", "audit-c", "screening-tool"],
+      "title": "AUDIT-C is a recommended screening instrument",
+      "snippet": "The USPSTF identified 1- to 3-item screening instruments that have the best accuracy for assessing unhealthy alcohol use in adults 18 years or older, including the abbreviated Alcohol Use Disorders Identification Test–Consumption (AUDIT-C) and the NIAAA-recommended Single Alcohol Screening Question (SASQ).",
+      "source_org": "U.S. Preventive Services Task Force",
+      "source_doc": "Unhealthy Alcohol Use in Adolescents and Adults: Screening and Behavioral Counseling Interventions (Final Recommendation 2018)",
+      "source_section": "Screening Tests",
+      "source_url": "https://www.uspreventiveservicestaskforce.org/uspstf/recommendation/unhealthy-alcohol-use-in-adolescents-and-adults-screening-and-behavioral-counseling-interventions",
+      "applies_when": "screening any adult for unhealthy alcohol use",
+      "demo_relevance": "Kowalski's intake should include AUDIT-C; supports MASLD vs MetALD/ALD classification."
+    },
+    {
+      "id": "audit-c-cutoffs",
+      "condition_tags": ["alcohol-use", "audit-c", "interpretation"],
+      "title": "AUDIT-C interpretation thresholds",
+      "snippet": "An AUDIT-C score of ≥4 in men or ≥3 in women is considered positive for unhealthy alcohol use; higher scores correspond to greater likelihood of alcohol use disorder. (NIAAA / USPSTF supporting evidence.)",
+      "source_org": "National Institute on Alcohol Abuse and Alcoholism / USPSTF evidence base",
+      "source_doc": "Helping Patients Who Drink Too Much: A Clinician's Guide (NIAAA); USPSTF evidence review",
+      "source_section": "AUDIT-C scoring",
+      "source_url": "https://www.uspreventiveservicestaskforce.org/uspstf/document/RecommendationStatementFinal/unhealthy-alcohol-use-in-adolescents-and-adults-screening-and-behavioral-counseling-interventions",
+      "applies_when": "any adult who completes AUDIT-C",
+      "demo_relevance": "Operationalizes screen-positive logic for the copilot's intake parsing."
+    },
+    {
+      "id": "uspstf-2018-brief-intervention",
+      "condition_tags": ["alcohol-use", "brief-intervention", "behavioral-counseling"],
+      "title": "Brief behavioral counseling for screen-positive adults",
+      "snippet": "Brief behavioral counseling interventions reduce unhealthy alcohol use in adults 18 years or older, including pregnant women. Effective interventions vary in components, length, and number of contacts but typically include feedback, motivational interviewing, and goal-setting.",
+      "source_org": "U.S. Preventive Services Task Force",
+      "source_doc": "Unhealthy Alcohol Use in Adolescents and Adults: Screening and Behavioral Counseling Interventions (Final Recommendation 2018)",
+      "source_section": "Behavioral Counseling Interventions",
+      "source_url": "https://www.uspreventiveservicestaskforce.org/uspstf/recommendation/unhealthy-alcohol-use-in-adolescents-and-adults-screening-and-behavioral-counseling-interventions",
+      "applies_when": "adult with positive screen for risky/hazardous drinking",
+      "demo_relevance": "Kowalski: positive AUDIT-C → brief intervention is the recommended next step alongside hepatic workup."
+    },
+    {
+      "id": "uspstf-2018-aud-referral",
+      "condition_tags": ["alcohol-use", "aud", "referral"],
+      "title": "Refer suspected alcohol use disorder for definitive treatment",
+      "snippet": "Persons whose screening suggests alcohol use disorder (AUD) should be referred for further evaluation and definitive treatment, which may include pharmacotherapy (e.g., naltrexone, acamprosate) and/or psychosocial interventions. Brief counseling alone has limited evidence in established AUD. (Paraphrased.)",
+      "source_org": "U.S. Preventive Services Task Force",
+      "source_doc": "Unhealthy Alcohol Use in Adolescents and Adults (USPSTF) — Practice Considerations",
+      "source_section": "Implementation / Treatment",
+      "source_url": "https://www.uspreventiveservicestaskforce.org/uspstf/recommendation/unhealthy-alcohol-use-in-adolescents-and-adults-screening-and-behavioral-counseling-interventions",
+      "applies_when": "screen-positive adult with features of AUD (high AUDIT-C, dependence symptoms)",
+      "demo_relevance": "Kowalski — if AUDIT-C is high or dependence is suspected, escalate beyond brief intervention."
+    }
+  ]
+}

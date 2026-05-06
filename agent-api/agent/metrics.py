@@ -287,3 +287,16 @@ agent_verifier_capped_total = Counter(
     "Citation verifier skips driven by the per-request cap",
     ["reason"],
 )
+
+# ── Supervisor → worker handoff counter (Stream F) ───────────────────────────
+# Increments at every supervisor routing decision. Paired 1:1 with the
+# ``graph_supervisor_routed`` structured log event in
+# ``graph/nodes/supervisor.py`` so latency / handoff claims are falsifiable
+# from both a log line and a metric (see CLAUDE.md "Observability — verifiable
+# latency claims"). The ``from`` label is always ``supervisor`` today; it
+# exists so future multi-supervisor topologies can reuse the metric.
+agent_supervisor_handoff_total = Counter(
+    "agent_supervisor_handoff_total",
+    "Total supervisor → worker handoffs by source and target node",
+    ["from", "to"],
+)
