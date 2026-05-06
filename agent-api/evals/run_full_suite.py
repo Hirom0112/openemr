@@ -433,7 +433,11 @@ async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], l
     cases = list(CASES)
 
     # --smoke overrides --max-cases: select the deterministic 10-case subset.
+    # --failing-only is mutually exclusive with --smoke (enforced at parse time).
     smoke = getattr(args, "smoke", False)
+    failing_only_path = getattr(args, "failing_only", None)
+    if smoke and failing_only_path is not None:
+        raise SystemExit("--smoke and --failing-only are mutually exclusive")
     if smoke:
         from evals._smoke_subset import SMOKE_CASE_IDS  # type: ignore
         case_by_id = {c.case_id: c for c in cases}
@@ -447,6 +451,23 @@ async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], l
             },
         )
         print(f"eval running in SMOKE mode, n={len(cases)} cases")
+    elif failing_only_path is not None:
+        failing_ids = _load_failing_case_ids(failing_only_path)
+        case_by_id = {c.case_id: c for c in cases}
+        cases = [case_by_id[cid] for cid in sorted(failing_ids) if cid in case_by_id]
+        logger.info(
+            "eval.failing_only_mode",
+            extra={
+                "mode": "FAILING_ONLY",
+                "n_cases": len(cases),
+                "prior_results": str(failing_only_path),
+                "case_ids": [c.case_id for c in cases],
+            },
+        )
+        print(
+            f"eval running in FAILING_ONLY mode, n={len(cases)} cases "
+            f"(from {failing_only_path})"
+        )
     else:
         max_cases = getattr(args, "max_cases", None)
         if max_cases is not None and max_cases > 0:
@@ -537,6 +558,55 @@ async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], l
         "cache_hits": _cache_hits,
         "cache_misses": _cache_misses,
     }
+
+
+def _load_failing_case_ids(prior_results_path: Path) -> set[str]:
+    """Parse a prior eval_results.json artifact and return the set of case_ids
+    that failed any rubric (or errored).
+
+    The prior artifact is the per-case detail JSON written alongside results.
+    We accept either:
+      - a direct list of {case_id, rubric_results: {...bool...}, status?} rows
+      - a dict with key "cases" pointing at such a list
+      - the top-level results JSON where case-level data lives under
+        "_case_rows" (forward-compat).
+
+    A case is "failing" if any rubric_results value is False, or status is
+    "ERROR", or any explicit "passed" key is False. Empty/malformed files
+    return the empty set so callers can short-circuit cleanly.
+    """
+    try:
+        raw = json.loads(prior_results_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return set()
+    rows: list[Any] = []
+    if isinstance(raw, list):
+        rows = raw
+    elif isinstance(raw, dict):
+        for key in ("_case_rows", "cases", "case_rows"):
+            v = raw.get(key)
+            if isinstance(v, list):
+                rows = v
+                break
+    failing: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cid = row.get("case_id") or row.get("id")
+        if not isinstance(cid, str):
+            continue
+        if row.get("status") == "ERROR" or row.get("error"):
+            failing.add(cid)
+            continue
+        rubric_results = row.get("rubric_results") or row.get("rubrics") or {}
+        if isinstance(rubric_results, dict):
+            for v in rubric_results.values():
+                if v is False:
+                    failing.add(cid)
+                    break
+        if row.get("passed") is False:
+            failing.add(cid)
+    return failing
 
 
 def _load_gt_sidecar(fixture_path: Path) -> Optional[dict]:
@@ -838,6 +908,21 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--failing-only",
+        type=Path,
+        default=None,
+        metavar="PRIOR_RESULTS_JSON",
+        help=(
+            "Cost-saving mode: only re-run cases that failed any rubric in the "
+            "prior eval_results.json artifact. Mutually exclusive with --smoke. "
+            "When the prior run had zero failures, the script short-circuits and "
+            "writes a results JSON with _mode='failing_only_skipped' (gate passes). "
+            "diff_baseline.py recognizes _mode='failing_only' and drops the "
+            "global pass-rate gate (the subset is structurally biased), retaining "
+            "only ABSOLUTE_RUBRICS (no_phi_in_logs) as a hard gate."
+        ),
+    )
+    parser.add_argument(
         "--cache",
         type=str,
         default=None,
@@ -862,8 +947,41 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if getattr(args, "smoke", False) and getattr(args, "failing_only", None) is not None:
+        parser.error("--smoke and --failing-only are mutually exclusive")
+
     md_path = args.md or args.output.with_suffix(".md")
     trace_path = args.repoint_trace or (args.output.parent / "repoint_trace.jsonl")
+
+    # Short-circuit failing-only mode when the prior artifact has no failures.
+    # We avoid even spinning up the case loop / event loop in that case so PR
+    # CI runs cost ~$0 when the previous run was clean.
+    failing_only_path = getattr(args, "failing_only", None)
+    if failing_only_path is not None:
+        prior_failing = _load_failing_case_ids(failing_only_path)
+        if not prior_failing:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            stub = {
+                "_mode": "failing_only_skipped",
+                "_note": (
+                    "prior eval_results.json had no failing cases — rerun-failing "
+                    "skipped to save Anthropic API spend"
+                ),
+                "_prior_results": str(failing_only_path),
+                "no_phi_in_logs": 1.0,
+            }
+            args.output.write_text(json.dumps(stub, indent=2) + "\n")
+            md_path.parent.mkdir(parents=True, exist_ok=True)
+            md_path.write_text(
+                "# W2 Eval Suite — failing-only mode (skipped)\n\n"
+                f"Prior results `{failing_only_path}` had no failing cases. "
+                "No re-run executed.\n"
+            )
+            print(
+                f"FAILING_ONLY: prior artifact {failing_only_path} had no "
+                f"failures — skipping run, wrote stub to {args.output}"
+            )
+            return 0
 
     with _repoint_trace_capture(trace_path):
         case_rows, scores, scored_cases, outcomes_by_case_id, cache_stats = asyncio.run(_run_async(args))
@@ -968,6 +1086,42 @@ def main(argv: list[str] | None = None) -> int:
 
     # Cache statistics — written to results JSON for CI dashboards.
     results["_cache"] = cache_stats
+
+    # Tag the run mode so diff_baseline.py can adjust gating. failing_only
+    # mode runs a structurally biased subset (only previously-failing cases),
+    # so the global pass-rate gate is dropped — only ABSOLUTE_RUBRICS gate.
+    if getattr(args, "smoke", False):
+        results["_mode"] = "smoke"
+    elif getattr(args, "failing_only", None) is not None:
+        results["_mode"] = "failing_only"
+        results["_prior_results"] = str(getattr(args, "failing_only"))
+        results["_scored_case_ids"] = sorted(
+            getattr(c, "case_id", "") for c in scored_cases if getattr(c, "case_id", None)
+        )
+    else:
+        results["_mode"] = "full"
+
+    # Persist per-case rows so a future failing-only re-run can read this
+    # artifact directly. Keep the row shape minimal — case_id + status +
+    # rubric pass/fail booleans — to keep the JSON small.
+    _case_row_summaries: list[dict] = []
+    for row in case_rows:
+        if not isinstance(row, dict):
+            continue
+        cid = row.get("case_id")
+        if not isinstance(cid, str):
+            continue
+        rubric_results: dict[str, bool] = {}
+        for k, v in row.items():
+            if isinstance(v, bool):
+                rubric_results[k] = v
+        _case_row_summaries.append({
+            "case_id": cid,
+            "status": row.get("status", "OK"),
+            "error": row.get("error"),
+            "rubric_results": rubric_results,
+        })
+    results["_case_rows"] = _case_row_summaries
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(results, indent=2) + "\n")

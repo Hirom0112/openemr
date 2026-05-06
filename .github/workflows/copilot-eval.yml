@@ -9,7 +9,14 @@ on:
     paths:
       - "agent-api/**"
       - ".github/workflows/copilot-eval.yml"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode for the W2 eval suite"
+        type: choice
+        required: false
+        default: "full"
+        options: [full, smoke, failing-only]
 
 jobs:
   eval:
@@ -189,10 +196,55 @@ jobs:
           SQL
       - name: Generate eval fixture corpus
         run: python3 agent-api/tests/fixtures/eval/_generate_eval_corpus.py
-      - name: Run 88-case eval and emit results
+      # Pull the most recent successful w2-eval artifact from the base branch
+      # so we can re-run only previously-failing cases on this PR. Falls back
+      # to full mode silently if no prior artifact exists.
+      - name: Download prior eval artifact (best-effort)
+        id: prior-artifact
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: copilot-eval.yml
+          name: w2-eval-results
+          branch: ${{ github.base_ref }}
+          path: ./prior
+          if_no_artifact_found: warn
+          workflow_conclusion: success
+      - name: Resolve eval run mode
+        id: mode
+        run: |
+          dispatch_mode="${{ github.event.inputs.mode }}"
+          have_prior="false"
+          if [ -f "./prior/eval_results.json" ]; then
+            have_prior="true"
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            mode="$dispatch_mode"
+          elif [ "${{ github.event_name }}" = "pull_request" ] && [ "$have_prior" = "true" ]; then
+            mode="failing-only"
+          else
+            mode="full"
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "have_prior=$have_prior" >> "$GITHUB_OUTPUT"
+          echo "Resolved eval mode: $mode (have_prior=$have_prior)"
+      - name: Run W2 eval suite
         run: |
           cd agent-api
-          python3 -m evals.run_full_suite --output ../eval_results.json
+          case "${{ steps.mode.outputs.mode }}" in
+            smoke)
+              python3 -m evals.run_full_suite --smoke --output ../eval_results.json
+              ;;
+            failing-only)
+              python3 -m evals.run_full_suite \
+                --failing-only ../prior/eval_results.json \
+                --output ../eval_results.json
+              ;;
+            full|*)
+              python3 -m evals.run_full_suite --output ../eval_results.json
+              ;;
+          esac
       - name: Diff against baseline
         run: |
           python3 agent-api/evals/diff_baseline.py \

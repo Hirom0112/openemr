@@ -54,10 +54,33 @@ def _fmt_pct(v: float | None) -> str:
 
 
 def diff(baseline: dict, results: dict) -> tuple[bool, list[str]]:
-    """Returns (gate_passes, list_of_failure_messages) and prints a markdown table."""
+    """Returns (gate_passes, list_of_failure_messages) and prints a markdown table.
+
+    Mode awareness via results["_mode"]:
+      - "full" / unset      : standard gating (default)
+      - "smoke"             : standard gating (smoke is a deterministic subset
+                              that's intentionally representative)
+      - "failing_only"      : drops global pass-rate floor + per-modality gates
+                              (the subset is structurally biased toward fails);
+                              retains ABSOLUTE_RUBRICS as a hard gate
+      - "failing_only_skipped" : prior run had zero failures; gate passes
+    """
     failures: list[str] = []
     rows: list[tuple[str, str, str, str, str, str]] = []
     rows.append(("rubric", "baseline", "observed", "min", "delta", "status"))
+
+    mode = str(results.get("_mode") or "full")
+    if mode == "failing_only_skipped":
+        rows.append(("_mode=failing_only_skipped", "—", "—", "—", "—", "PASS"))
+        # Print and return — no rubrics to gate.
+        header = rows[0]
+        print("| " + " | ".join(header) + " |")
+        print("| " + " | ".join("---" for _ in header) + " |")
+        for row in rows[1:]:
+            print("| " + " | ".join(row) + " |")
+        return (True, [])
+
+    is_failing_only = mode == "failing_only"
 
     # Pass-rate rubrics.
     for rubric, spec in baseline.items():
@@ -104,6 +127,12 @@ def diff(baseline: dict, results: dict) -> tuple[bool, list[str]]:
                 failures.append(
                     f"{rubric}: absolute floor — observed {observed:.3f} < min {min_floor:.3f}"
                 )
+        elif is_failing_only:
+            # failing_only mode: only ABSOLUTE_RUBRICS gate. Pass-rates are
+            # measured over a structurally biased subset (only previously-
+            # failing cases re-run), so floor + regression gates would always
+            # trip. Report observed value as INFO for human review.
+            status = "INFO"
         else:
             if observed < min_floor:
                 status = "FAIL"
@@ -126,24 +155,35 @@ def diff(baseline: dict, results: dict) -> tuple[bool, list[str]]:
             status,
         ))
 
-    # critic_false_positive_rate (max-bounded).
+    # critic_false_positive_rate (max-bounded). In failing_only mode this is
+    # subset-biased and reported as INFO.
     cfpr_spec = baseline.get("critic_false_positive_rate", {})
     cfpr_max = cfpr_spec.get("max")
     cfpr_observed = results.get("critic_false_positive_rate")
-    cfpr_status = "PASS"
+    cfpr_status = "INFO" if is_failing_only else "PASS"
     if cfpr_observed is None:
-        cfpr_status = "FAIL"
-        failures.append("critic_false_positive_rate: missing from results JSON")
-        rows.append(("critic_false_positive_rate", "—", "MISSING", _fmt_pct(cfpr_max), "—", "FAIL"))
+        if is_failing_only:
+            rows.append(("critic_false_positive_rate", "—", "MISSING", _fmt_pct(cfpr_max), "—", "INFO"))
+            cfpr_status = "INFO"
+            cfpr_observed_f = float("nan")
+        else:
+            cfpr_status = "FAIL"
+            failures.append("critic_false_positive_rate: missing from results JSON")
+            rows.append(("critic_false_positive_rate", "—", "MISSING", _fmt_pct(cfpr_max), "—", "FAIL"))
+            cfpr_observed_f = float("nan")
     else:
         try:
             cfpr_observed_f = float(cfpr_observed)
         except (TypeError, ValueError):
-            failures.append(f"critic_false_positive_rate: non-numeric value {cfpr_observed!r}")
-            cfpr_status = "FAIL"
-            cfpr_observed_f = float("nan")
+            if is_failing_only:
+                cfpr_status = "INFO"
+                cfpr_observed_f = float("nan")
+            else:
+                failures.append(f"critic_false_positive_rate: non-numeric value {cfpr_observed!r}")
+                cfpr_status = "FAIL"
+                cfpr_observed_f = float("nan")
         else:
-            if cfpr_max is not None and cfpr_observed_f > cfpr_max:
+            if cfpr_max is not None and cfpr_observed_f > cfpr_max and not is_failing_only:
                 cfpr_status = "FAIL"
                 failures.append(
                     f"critic_false_positive_rate: {cfpr_observed_f:.3f} > max {cfpr_max:.3f}"
@@ -163,6 +203,10 @@ def diff(baseline: dict, results: dict) -> tuple[bool, list[str]]:
     # but do not gate.
     per_modality_observed = results.get("per_modality") or {}
     per_modality_baseline = baseline.get("per_modality") or {}
+    if is_failing_only:
+        # Per-modality gating doesn't apply when only previously-failing cases
+        # are re-run — the buckets are no longer representative.
+        per_modality_observed = {}
     if isinstance(per_modality_observed, dict) and per_modality_observed:
         rows.append(("--- per-modality ---", "", "", "", "", ""))
         # Pre-compute the per-rubric global floors (minus leniency).

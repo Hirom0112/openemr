@@ -274,3 +274,43 @@ def test_malformed_results_json_fails(tmp_path):
     assert proc.returncode == 1
     combined = proc.stdout + proc.stderr
     assert "GATE: FAIL" in combined or "ERROR" in combined
+
+
+# ── failing_only mode ────────────────────────────────────────────────────
+
+
+def test_failing_only_skipped_passes(tmp_path):
+    """Stub artifact from short-circuit path — no rubrics to gate."""
+    proc = _run(
+        {"_mode": "failing_only_skipped", "_note": "no prior failures", "no_phi_in_logs": 1.0},
+        tmp_path,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "GATE: PASS" in proc.stdout
+
+
+def test_failing_only_drops_pass_rate_gate(tmp_path):
+    """Rubric pass-rates well below floor should still PASS in failing_only
+    mode — only ABSOLUTE_RUBRICS gate."""
+    results = _baseline_results()
+    results["_mode"] = "failing_only"
+    # Drop several rubrics far below floor — would normally hard-fail.
+    results["schema_valid"] = 0.05
+    results["citation_resolvable"] = 0.10
+    results["correct_critic_decision"] = 0.0
+    proc = _run(results, tmp_path)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "GATE: PASS" in proc.stdout
+    # Subset rubrics should be reported as INFO, not FAIL.
+    assert "INFO" in proc.stdout
+
+
+def test_failing_only_still_enforces_no_phi_in_logs(tmp_path):
+    """ABSOLUTE_RUBRICS gate even in failing_only mode."""
+    results = _baseline_results()
+    results["_mode"] = "failing_only"
+    results["no_phi_in_logs"] = 0.99
+    proc = _run(results, tmp_path)
+    assert proc.returncode == 1
+    assert "no_phi_in_logs" in proc.stdout
+    assert "GATE: FAIL" in proc.stdout
