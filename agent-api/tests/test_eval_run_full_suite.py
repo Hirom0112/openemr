@@ -44,17 +44,45 @@ def _fake_aggregate(_scores):
     }
 
 
-def test_run_full_suite_emits_json_and_markdown(tmp_path):
+@pytest.fixture
+def _isolated_sys_modules():
+    """Snapshot sys.modules entries we plan to fake, restore on teardown.
+
+    Without this, the fake stubs below leak across tests in the same pytest
+    session and break test_eval_smoke_subset / test_eval_parallelization /
+    test_nearest_label_grounded_wiring (they import the same names and get
+    our fakes instead of the real modules).
+    """
+    keys = (
+        "tests.fixtures",
+        "tests.fixtures.w2_eval_cases",
+        "evals.runner",
+        "evals.scoring",
+        "evals.rubrics_mechanical",
+        "evals.rubrics_llm",
+        "evals.run_full_suite",
+    )
+    saved: dict[str, object] = {k: sys.modules.get(k) for k in keys}
+    yield
+    for k, v in saved.items():
+        if v is None:
+            sys.modules.pop(k, None)
+        else:
+            sys.modules[k] = v
+
+
+def test_run_full_suite_emits_json_and_markdown(tmp_path, _isolated_sys_modules):
     fake_cases = [
         _FakeCase(case_id="c1", bucket="schema"),
         _FakeCase(case_id="c2", bucket="critic"),
     ]
 
     # Provide stub modules so run_full_suite's imports succeed even if the
-    # parallel agents haven't landed their files yet.
+    # parallel agents haven't landed their files yet. The
+    # _isolated_sys_modules fixture restores the real ones on teardown.
     import types
 
-    fixtures_pkg = sys.modules.setdefault("tests.fixtures", types.ModuleType("tests.fixtures"))
+    sys.modules.setdefault("tests.fixtures", types.ModuleType("tests.fixtures"))
     w2_mod = types.ModuleType("tests.fixtures.w2_eval_cases")
     w2_mod.CASES = fake_cases
     sys.modules["tests.fixtures.w2_eval_cases"] = w2_mod
@@ -77,6 +105,9 @@ def test_run_full_suite_emits_json_and_markdown(tmp_path):
     rubrics_llm_mod = types.ModuleType("evals.rubrics_llm")
     rubrics_llm_mod.nearest_label_grounded = lambda *a, **kw: None
     sys.modules["evals.rubrics_llm"] = rubrics_llm_mod
+
+    # Force re-import of run_full_suite under the fakes.
+    sys.modules.pop("evals.run_full_suite", None)
 
     out_json = tmp_path / "results.json"
     out_md = tmp_path / "results.md"

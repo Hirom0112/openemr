@@ -150,9 +150,32 @@ def _fake_aggregate(_scores):
     }
 
 
+@pytest.fixture
+def _isolated_sys_modules():
+    """Snapshot + restore sys.modules entries this test file fakes, so its
+    fakes don't leak into test_nearest_label_grounded_wiring (which imports
+    evals.rubrics_llm → from .runner import RunOutcome and falls over when
+    runner is still our fake)."""
+    keys = (
+        "tests.fixtures",
+        "tests.fixtures.w2_eval_cases",
+        "evals.runner",
+        "evals.scoring",
+        "evals.run_full_suite",
+    )
+    saved: dict = {k: sys.modules.get(k) for k in keys}
+    yield
+    for k, v in saved.items():
+        if v is None:
+            sys.modules.pop(k, None)
+        else:
+            sys.modules[k] = v
+
+
 def _install_fake_modules_for_smoke():
     """Stub the full CASES list + runner + scoring so run_full_suite
-    can execute with --smoke in isolation."""
+    can execute with --smoke in isolation. Fakes accept ``**kwargs`` because
+    the cache wrapper passes ``cache=`` and ``cache_mode=`` through."""
     from tests.fixtures.w2_eval_cases import CASES as real_cases
 
     # Use the real CASES so --smoke can look up SMOKE_CASE_IDS in them.
@@ -164,7 +187,7 @@ def _install_fake_modules_for_smoke():
     sys.modules["tests.fixtures.w2_eval_cases"] = w2_mod
 
     runner_mod = types.ModuleType("evals.runner")
-    runner_mod.run_case = lambda case, fixtures_root=None: _FakeOutcome()
+    runner_mod.run_case = lambda case, fixtures_root=None, **_kw: _FakeOutcome()
 
     def _resolve_fixture_path(_key, root):
         return Path(root) / "missing.jpg"
@@ -173,9 +196,10 @@ def _install_fake_modules_for_smoke():
     sys.modules["evals.runner"] = runner_mod
 
     scoring_mod = types.ModuleType("evals.scoring")
-    scoring_mod.score_case = lambda case, outcome: _FakeScore(case_id=case.case_id)
+    scoring_mod.score_case = lambda case, outcome, **_kw: _FakeScore(case_id=case.case_id)
     scoring_mod.aggregate = _fake_aggregate
     sys.modules["evals.scoring"] = scoring_mod
+    sys.modules.pop("evals.run_full_suite", None)
 
 
 def _stub_bbox_rubrics():
@@ -197,7 +221,7 @@ def _stub_bbox_rubrics():
     _rfs._score_bbox_rubrics = _empty  # type: ignore[attr-defined]
 
 
-def test_smoke_flag_runs_only_smoke_cases_and_emits_log(tmp_path, capsys):
+def test_smoke_flag_runs_only_smoke_cases_and_emits_log(tmp_path, capsys, _isolated_sys_modules):
     _install_fake_modules_for_smoke()
 
     from evals import run_full_suite
@@ -226,7 +250,7 @@ def test_smoke_flag_runs_only_smoke_cases_and_emits_log(tmp_path, capsys):
     assert "schema_valid" in data
 
 
-def test_smoke_flag_overrides_max_cases(tmp_path, capsys):
+def test_smoke_flag_overrides_max_cases(tmp_path, capsys, _isolated_sys_modules):
     """When both --smoke and --max-cases are passed, --smoke wins."""
     _install_fake_modules_for_smoke()
 

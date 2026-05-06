@@ -87,10 +87,42 @@ def _deterministic_aggregate(scores: List[_MockScore]) -> dict:
     }
 
 
+@pytest.fixture(autouse=True)
+def _isolated_sys_modules():
+    """Snapshot sys.modules entries we plan to fake, restore on teardown.
+
+    The cache-mode wrapper in run_full_suite passes ``cache=`` and
+    ``cache_mode=`` kwargs to the underlying ``run_case``; without
+    teardown, the fakes installed here leak across tests and break
+    test_eval_smoke_subset / test_nearest_label_grounded_wiring which
+    expect the real modules.
+    """
+    keys = (
+        "tests.fixtures",
+        "tests.fixtures.w2_eval_cases",
+        "evals.runner",
+        "evals.scoring",
+        "evals.run_full_suite",
+    )
+    saved: dict = {k: sys.modules.get(k) for k in keys}
+    yield
+    for k, v in saved.items():
+        if v is None:
+            sys.modules.pop(k, None)
+        else:
+            sys.modules[k] = v
+
+
 def _install_fake_modules(cases: List[_MockCase], run_case_impl=None) -> None:
     """Stub out ``tests.fixtures.w2_eval_cases`` / ``evals.runner`` /
     ``evals.scoring`` so run_full_suite imports cleanly without needing the
-    full agent stack."""
+    full agent stack.
+
+    Fakes accept ``**kwargs`` because the real ``_run_async`` wrapper now
+    passes ``cache=`` and ``cache_mode=`` through to ``run_case``; without
+    that, every fake call would raise TypeError and surface as ERROR rows
+    with all rubrics at 0.0.
+    """
 
     fixtures_pkg = sys.modules.setdefault(
         "tests.fixtures", types.ModuleType("tests.fixtures")
@@ -101,13 +133,21 @@ def _install_fake_modules(cases: List[_MockCase], run_case_impl=None) -> None:
 
     runner_mod = types.ModuleType("evals.runner")
 
-    async def _default_run(case, fixtures_root):  # noqa: ARG001
+    async def _default_run(case, fixtures_root, **_kwargs):  # noqa: ARG001
         # Tiny await to force a real context switch in parallel mode — this
         # is what proves the gather is actually running concurrently.
         await asyncio.sleep(0)
         return _MockOutcome(case_id=case.case_id)
 
-    runner_mod.run_case = run_case_impl or _default_run
+    if run_case_impl is not None:
+        # Wrap user-provided impls so they tolerate the production wrapper's
+        # extra kwargs (cache, cache_mode) without forcing every test to
+        # restate them.
+        async def _wrapped(case, fixtures_root, **_kwargs):
+            return await run_case_impl(case, fixtures_root)
+        runner_mod.run_case = _wrapped
+    else:
+        runner_mod.run_case = _default_run
 
     def _resolve_fixture_path(_key, root):
         return Path(root) / "missing.jpg"
@@ -117,13 +157,15 @@ def _install_fake_modules(cases: List[_MockCase], run_case_impl=None) -> None:
 
     scoring_mod = types.ModuleType("evals.scoring")
 
-    async def _score(case, outcome):
+    async def _score(case, outcome, **_kwargs):
         await asyncio.sleep(0)
         return _MockScore(case_id=case.case_id)
 
     scoring_mod.score_case = _score
     scoring_mod.aggregate = _deterministic_aggregate
     sys.modules["evals.scoring"] = scoring_mod
+    # Force run_full_suite to re-import under the fakes.
+    sys.modules.pop("evals.run_full_suite", None)
 
 
 def _stub_bbox_rubrics(monkeypatch=None) -> None:
