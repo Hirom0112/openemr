@@ -122,6 +122,16 @@ def dispatch_extract_image(
     metric, never one without the other.
     """
     engine = get_engine()
+
+    # Phase 3 Wave 2A — pre-OCR photo preprocessing. No-op when
+    # ``settings.photo_preprocess`` is "off" (default); never raises into
+    # the OCR call site (errors fall through to the original bytes).
+    try:
+        from documents.photo_preprocess import preprocess_photo
+        image_bytes = preprocess_photo(image_bytes)
+    except Exception:  # noqa: BLE001 — defensive: never break ingest
+        logger.exception("photo_preprocess.unexpected_error_falling_through")
+
     started = time.perf_counter()
     outcome = "success"
     blocks: List[LayoutBlock] = []

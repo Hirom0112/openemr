@@ -95,6 +95,16 @@ class Settings(BaseSettings):
     tesseract_psm: int = 3
     tesseract_dpi: int = 300
 
+    # ── Photo preprocessing (Phase 3 Wave 2A) ────────────────────────────────
+    # Pre-OCR cleanup for cell-phone-photo intake images: deskew, perspective
+    # unwarp, CLAHE on luminance, bilateral denoise. Runs only on raster
+    # image inputs (PNG/JPEG); PDF text-layer extraction is unaffected.
+    #   off    — disabled, pipeline is a no-op (default)
+    #   auto   — heuristic: run only when is_likely_photo() votes yes
+    #   force  — always run on every image
+    # Rollback: ``PHOTO_PREPROCESS=off``.
+    photo_preprocess: str = "off"
+
     # ── Auth / CORS ──────────────────────────────────────────────────────────
     # HS256 secret used to verify JWTs minted by the OpenEMR PHP layer.
     # Empty string disables JWT verification (middleware logs a startup

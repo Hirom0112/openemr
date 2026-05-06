@@ -61,6 +61,7 @@ services:
       OCR_ENGINE: "${OCR_ENGINE:-tesseract}"
       TESSERACT_PSM: "${TESSERACT_PSM:-3}"
       TESSERACT_DPI: "${TESSERACT_DPI:-300}"
+      PHOTO_PREPROCESS: "${PHOTO_PREPROCESS:-off}"
     depends_on:
       redis:
         condition: service_healthy

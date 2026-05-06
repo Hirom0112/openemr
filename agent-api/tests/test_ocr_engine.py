@@ -106,8 +106,13 @@ def test_dispatcher_emits_metric_and_log_on_success(caplog: pytest.LogCaptureFix
             blocks = dispatch_extract_image(b"x", filetype="png")
     assert blocks == [stub_block]
     assert stub.calls == 1
-    # log_tool_outcome emits one INFO line on the "agent.tool" logger.
-    tool_records = [r for r in caplog.records if r.name == "agent.tool"]
+    # log_tool_outcome emits one INFO line per tool. We expect exactly one
+    # ``ocr_extract_image`` record; the photo_preprocess pre-step emits a
+    # separate record (skipped by default) which is allowed but not asserted.
+    tool_records = [
+        r for r in caplog.records
+        if r.name == "agent.tool" and getattr(r, "tool_name", None) == "ocr_extract_image"
+    ]
     assert len(tool_records) == 1
     rec = tool_records[0]
     assert getattr(rec, "engine", None) == "stub"
@@ -122,7 +127,10 @@ def test_dispatcher_emits_metric_and_log_on_error(caplog: pytest.LogCaptureFixtu
         with caplog.at_level("INFO", logger="agent.tool"):
             with pytest.raises(RuntimeError, match="boom"):
                 dispatch_extract_image(b"x", filetype="png")
-    tool_records = [r for r in caplog.records if r.name == "agent.tool"]
+    tool_records = [
+        r for r in caplog.records
+        if r.name == "agent.tool" and getattr(r, "tool_name", None) == "ocr_extract_image"
+    ]
     assert len(tool_records) == 1
     assert getattr(tool_records[0], "outcome", None) == "error"
     assert getattr(tool_records[0], "n_blocks", None) == 0

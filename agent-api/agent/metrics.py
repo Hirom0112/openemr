@@ -236,6 +236,23 @@ agent_ocr_extraction_duration_seconds = Histogram(
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0),
 )
 
+# ── Photo preprocessing (Phase 3 Wave 2A) ────────────────────────────────────
+# Recorded once per ``documents.photo_preprocess.preprocess_photo`` call.
+# ``outcome`` ∈ {"ran", "skipped", "errored"}: ran = pipeline executed,
+# skipped = flag off OR auto-mode heuristic voted no, errored = a step
+# raised and we returned the previous-stage image (never raise into OCR).
+agent_photo_preprocess_runs_total = Counter(
+    "agent_photo_preprocess_runs_total",
+    "Photo preprocessing invocations, labelled by outcome",
+    ["outcome"],
+)
+
+agent_photo_preprocess_duration_seconds = Histogram(
+    "agent_photo_preprocess_duration_seconds",
+    "Photo preprocessing wall-clock seconds per call (ran outcome only)",
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
+)
+
 # ── Eval suite parallelization (Wave 2C+) ────────────────────────────────────
 # Emitted by ``evals/run_full_suite.py`` once per asyncio.gather batch and
 # once per case completion. ``outcome`` ∈ {"success", "error"}.
