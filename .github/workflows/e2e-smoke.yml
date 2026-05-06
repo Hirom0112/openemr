@@ -1,0 +1,36 @@
+name: Clinical Co-Pilot — E2E Smoke
+
+# Manual-only. The smoke hits a running agent-api over HTTP and calls
+# Anthropic indirectly through the live /agent/query path; running it on
+# every push would burn API credits for marginal regression signal that
+# the W2 Eval Suite already covers more rigorously.
+#
+# Trigger from the Actions tab → "Run workflow". Provide the agent-api URL
+# you want to smoke (defaults to a localhost placeholder you must override).
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "agent-api base URL to smoke (e.g. https://staging.example.com)"
+        required: true
+        type: string
+
+jobs:
+  smoke:
+    name: E2E Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: agent-api/requirements.txt
+      - run: pip install httpx
+      - name: Run E2E smoke
+        env:
+          AGENT_API_URL: ${{ github.event.inputs.url }}
+        run: |
+          cd agent-api
+          python -m scripts.e2e_smoke --url "$AGENT_API_URL" --verbose
