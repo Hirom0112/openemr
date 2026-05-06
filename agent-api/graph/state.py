@@ -16,6 +16,7 @@ class W2State(TypedDict):
     # --- Inputs ---------------------------------------------------------
     request_id: str
     patient_id: Optional[str]
+    patient_ids: NotRequired[List[str]]
     session_id: str
     provider_id: str
     message: Optional[str]                # textual user query
@@ -46,6 +47,7 @@ def make_initial_state(
     session_id: str,
     provider_id: str,
     patient_id: Optional[str] = None,
+    patient_ids: Optional[List[str]] = None,
     message: Optional[str] = None,
     file_bytes_ref: Optional[str] = None,
     doc_type_hint: Optional[str] = None,
@@ -54,6 +56,7 @@ def make_initial_state(
     state: W2State = {
         "request_id": request_id,
         "patient_id": patient_id,
+        "patient_ids": list(patient_ids or []),
         "session_id": session_id,
         "provider_id": provider_id,
         "message": message,

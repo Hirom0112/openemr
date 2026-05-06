@@ -33,10 +33,13 @@ def _build_session_context(state: W2State) -> dict[str, Any]:
     that ``dispatch()`` can tolerate (all downstream lookups are
     ``.get(...)`` so ``None`` values are safe).
     """
+    panel_ids = list(state.get("patient_ids") or [])
+    if not panel_ids and state.get("patient_id"):
+        panel_ids = [state["patient_id"]]
     return {
         "session_id": state.get("session_id"),
         "provider_id": state.get("provider_id"),
-        "patient_ids": [state["patient_id"]] if state.get("patient_id") else [],
+        "patient_ids": panel_ids,
         "redis_client": None,
         "redis_saver": None,
         "sqlite_saver": None,

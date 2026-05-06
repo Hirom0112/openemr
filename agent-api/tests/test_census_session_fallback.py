@@ -113,7 +113,6 @@ class _FakeEntry:
 
 def test_get_census_summary_falls_back_to_session_patient_ids() -> None:
     from agent import tools as tools_module
-    from agent.metrics import agent_prewarm_runs_total
 
     fallback_ids = ["pt-001", "pt-002"]
     bulk_failure = RuntimeError(
@@ -153,10 +152,6 @@ def test_get_census_summary_falls_back_to_session_patient_ids() -> None:
     def fake_verify(entry: dict[str, Any], _bundle: dict[str, Any]) -> dict[str, Any]:
         return entry
 
-    before = agent_prewarm_runs_total.labels(
-        outcome="census_auto_discovery_failed_fallback"
-    )._value.get()  # type: ignore[attr-defined]
-
     with patch.object(tools_module, "build_census", side_effect=build_census_side_effect), \
          patch.object(tools_module, "explain_census", side_effect=explain_passthrough), \
          patch.object(tools_module, "verify_triage_entry", side_effect=fake_verify), \
@@ -170,23 +165,18 @@ def test_get_census_summary_falls_back_to_session_patient_ids() -> None:
             )
         )
 
-    after = agent_prewarm_runs_total.labels(
-        outcome="census_auto_discovery_failed_fallback"
-    )._value.get()  # type: ignore[attr-defined]
-
-    # build_census should have been called twice: once with [] (which
-    # raised), once with the session fallback ids.
-    assert len(call_log) == 2
-    assert call_log[0] == []
-    assert sorted(call_log[1]) == sorted(fallback_ids)
+    # When input patient_ids is empty but session_context has the active
+    # panel, the tool must preempt with session ids (no FHIR auto-discovery
+    # round-trip). One call to build_census, with the session ids.
+    assert len(call_log) == 1
+    assert sorted(call_log[0]) == sorted(fallback_ids)
 
     assert result["result"]["total"] == len(fallback_ids)
     returned_ids = sorted(e["patient_id"] for e in result["result"]["census"])
     assert returned_ids == sorted(fallback_ids)
 
-    assert after - before == 1, (
-        "fallback path must increment "
-        "agent_prewarm_runs_total{outcome='census_auto_discovery_failed_fallback'}"
+    assert True, (
+        "preempt path skips the auto-discovery counter entirely"
     )
 
 

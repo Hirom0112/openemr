@@ -483,7 +483,17 @@ async def get_census_summary(
 ) -> dict[str, Any]:
     t0 = time.monotonic()
     provider_id: str = input["provider_id"]
-    patient_ids: list[str] = input["patient_ids"]
+    patient_ids: list[str] = list(input["patient_ids"] or [])
+    # The system prompt instructs the LLM to call census with an empty list
+    # to "auto-discover all patients." Auto-discovery via FHIR participant
+    # search is broken (OpenEMR does not populate Encounter.participant), so
+    # an empty list silently falls through to "every patient in the system"
+    # and the panel scoping is lost. When the iframe has supplied the active
+    # panel via session_context, prefer it over auto-discovery.
+    if not patient_ids:
+        session_panel: list[str] = list(session_context.get("patient_ids") or [])
+        if session_panel:
+            patient_ids = session_panel
     # Surfaced from the UI Refresh button via /triage/census. The dispatcher
     # path leaves this absent (default False) so LLM-driven census calls keep
     # using the warm cache.

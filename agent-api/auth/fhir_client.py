@@ -268,11 +268,17 @@ class FHIRClient:
                     patient_ids.append(pid)
             if patient_ids:
                 return sorted(patient_ids)
-            logger.info(
-                "Participant-based encounter search returned 0 results; "
-                "falling back to all patients provider_id=%s",
-                provider_id,
+            # OpenEMR's FHIR layer does not populate Encounter.participant,
+            # so the participant search returns 0 even for clinicians with
+            # an active panel. Falling back to "all patients in the system"
+            # silently breaks panel scoping (a permissive disclosure bug).
+            # Return an empty list instead so the caller fails closed; the
+            # panel is supposed to flow in via the iframe / session context.
+            logger.warning(
+                "fhir_participant_search_empty_returning_empty",
+                extra={"provider_id": provider_id},
             )
+            return []
         # ``_sort=_id`` removed: OpenEMR's SearchFieldOrder constructor
         # requires a string field name but ResourceServiceSearchTrait passes
         # a ServiceField, returning HTTP 500. The census builder sorts

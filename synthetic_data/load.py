@@ -1145,10 +1145,67 @@ def main() -> None:
             print(f"  FAIL: {exc}", file=sys.stderr)
         time.sleep(0.3)  # avoid rate-limiting
 
+    # Sara's persistent panel guarantees: pids that must always appear on her
+    # morning census, regardless of whether they came from PATIENTS or were
+    # created later via the document-ingest workflow. For each pid we ensure
+    # (a) the patient's pubpid equals the numeric pid so the agent-api FHIR
+    # resolver (Patient?identifier=<pid>) can find them, and (b) at least one
+    # active form_encounter row attributes the visit to Sara. Missing pids
+    # are skipped silently — they may not exist in this DB yet.
+    _ensure_persistent_sara_panel(conn, chen_user_id, [5, 13, 26, 27])
+
     conn.close()
     print(f"\nDone: {ok}/{total} patients loaded.")
     if ok < total:
         print("Re-run load.py to retry failed patients.", file=sys.stderr)
+
+
+def _ensure_persistent_sara_panel(conn: Any, sara_user_id: int, pids: list[int]) -> None:
+    """Pin specific pids to Sara's panel so they survive a re-seed.
+
+    Idempotent: runs UPDATE/INSERT against current DB state, never DELETEs.
+    For each pid:
+      - Aligns ``pubpid`` with the numeric pid so the FHIR identifier resolver
+        (Patient?identifier=<pid>) finds the row.
+      - Ensures at least one active ``form_encounter`` row exists with
+        ``provider_id`` set to Sara's user id, so the panel-discovery query
+        attributes the visit to her.
+    """
+    if sara_user_id <= 0 or not pids:
+        return
+    print(f"\nPinning persistent panel pids to Sara (user_id={sara_user_id}): {pids}")
+    with conn.cursor() as cur:
+        for pid in pids:
+            cur.execute("SELECT pid FROM patient_data WHERE pid = %s", (pid,))
+            if cur.fetchone() is None:
+                print(f"  pid={pid}: not in patient_data, skipping")
+                continue
+            # Align pubpid with pid so FHIR identifier search resolves.
+            cur.execute(
+                "UPDATE patient_data SET pubpid = %s WHERE pid = %s AND pubpid <> %s",
+                (str(pid), pid, str(pid)),
+            )
+            # Ensure at least one form_encounter row attributes a visit to Sara.
+            cur.execute(
+                """
+                SELECT encounter
+                  FROM form_encounter
+                 WHERE pid = %s AND provider_id = %s
+                 LIMIT 1
+                """,
+                (pid, sara_user_id),
+            )
+            if cur.fetchone() is None:
+                cur.execute(
+                    """
+                    INSERT INTO form_encounter
+                        (pid, provider_id, date, reason, facility_id, sensitivity)
+                    VALUES (%s, %s, NOW(), %s, 3, '')
+                    """,
+                    (pid, sara_user_id, "Sara persistent panel"),
+                )
+            print(f"  pid={pid}: pinned")
+    conn.commit()
 
 
 if __name__ == "__main__":
