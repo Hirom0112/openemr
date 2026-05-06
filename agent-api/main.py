@@ -2072,3 +2072,371 @@ async def agent_w2_dispatch(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ── Post-ingest context + document chat (clinical-copilot) ───────────────────
+#
+# After /document/ingest returns an ExtractionResult + flat citations, the UI
+# wants two things the existing pipeline doesn't surface:
+#   1. A short clinical summary + relevant guideline snippets keyed off the
+#      extracted findings (POST /document/post-ingest-context).
+#   2. A doc-grounded Q&A loop over that extraction + retrieved guidelines
+#      (POST /document/{document_reference_id}/chat).
+# Both routes import ``rag.retrieve`` and ``anthropic`` lazily/inline so the
+# /health and /agent/query critical paths stay free of the optional deps.
+
+_DOC_CHAT_MODEL = "claude-haiku-4-5-20251001"
+_DOC_CHAT_SYSTEM_PROMPT = (
+    "You are a clinical assistant answering questions about a specific "
+    "document. Ground every claim in the provided extraction or guidelines. "
+    "If unknown, say so. Cite using [G:chunk_id] for guidelines and "
+    "[D:field_name] for extraction fields."
+)
+_CITATION_RE = re.compile(r"\[(G|D):([^\]\s]+)\]")
+
+
+def _build_rag_query_from_extraction(extraction: dict) -> str:
+    """Produce a short (<200 char) RAG query from an ExtractionResult dict.
+
+    Returns ``""`` when nothing extractable is present so the caller can
+    short-circuit. Never echoes raw clinical values into logs — callers must
+    only log a prefix.
+    """
+    if not isinstance(extraction, dict):
+        return ""
+
+    kind = extraction.get("kind")
+    tokens: list[str] = []
+
+    if kind == "lab_report":
+        abnormal_codes = {"high", "low", "critical_high", "critical_low"}
+        for value in extraction.get("values") or []:
+            if not isinstance(value, dict):
+                continue
+            flag = value.get("abnormal_flag")
+            if flag in abnormal_codes:
+                name = value.get("normalized_test_name") or value.get("test_name")
+                if isinstance(name, str) and name.strip():
+                    tokens.append(name.strip().lower())
+            if len(tokens) >= 3:
+                break
+        if tokens:
+            # Bias retrieval toward the dominant clinical question.
+            tokens.append("sepsis" if "lactate" in tokens else "abnormal lab")
+
+    elif kind == "intake_form":
+        chief = extraction.get("chief_concern")
+        if isinstance(chief, dict):
+            cc_val = chief.get("value")
+            if isinstance(cc_val, str) and cc_val.strip():
+                tokens.append(cc_val.strip())
+        # Append up to 2 active conditions surfaced via current_medications —
+        # intake forms don't carry a structured ``conditions`` block today, so
+        # the medication list is the closest proxy for the working problem set.
+        for med in (extraction.get("current_medications") or [])[:2]:
+            if isinstance(med, dict):
+                mname = med.get("name")
+                if isinstance(mname, str) and mname.strip():
+                    tokens.append(mname.strip())
+
+    elif kind == "unknown":
+        for fact in (extraction.get("key_facts") or [])[:2]:
+            if isinstance(fact, dict):
+                ftext = fact.get("text")
+                if isinstance(ftext, str) and ftext.strip():
+                    tokens.append(ftext.strip())
+
+    query = " ".join(tokens).strip()
+    if not query:
+        return ""
+    return query[:199]
+
+
+def _synthesize_doc_summary(extraction: dict) -> str:
+    """Build a deterministic 2-3 sentence clinical summary from the extraction.
+
+    No LLM call. The summary contains clinical text by construction — never
+    log its content; log only its length.
+    """
+    if not isinstance(extraction, dict):
+        return ""
+
+    kind = extraction.get("kind")
+
+    if kind == "lab_report":
+        values = extraction.get("values") or []
+        n_total = len(values)
+        abnormal_codes = {"high", "low", "critical_high", "critical_low"}
+        abnormal_names: list[str] = []
+        for v in values:
+            if isinstance(v, dict) and v.get("abnormal_flag") in abnormal_codes:
+                nm = v.get("normalized_test_name") or v.get("test_name")
+                if isinstance(nm, str) and nm.strip():
+                    abnormal_names.append(nm.strip())
+        if abnormal_names:
+            head = ", ".join(abnormal_names[:5])
+            return (
+                f"Lab report with {n_total} result(s); {len(abnormal_names)} "
+                f"flagged abnormal: {head}. Review the flagged values against "
+                "the patient's clinical context before acting."
+            )
+        return (
+            f"Lab report with {n_total} result(s); none flagged abnormal. "
+            "Confirm completeness against the order before signing off."
+        )
+
+    if kind == "intake_form":
+        chief = extraction.get("chief_concern")
+        chief_txt = ""
+        if isinstance(chief, dict):
+            cv = chief.get("value")
+            if isinstance(cv, str):
+                chief_txt = cv.strip()
+        n_meds = len(extraction.get("current_medications") or [])
+        n_allergies = len(extraction.get("allergies") or [])
+        cs_obj = extraction.get("code_status")
+        cs_val = ""
+        if isinstance(cs_obj, dict):
+            csv = cs_obj.get("value")
+            if isinstance(csv, str):
+                cs_val = csv
+        first = (
+            f"Intake form: chief concern {chief_txt!r}."
+            if chief_txt
+            else "Intake form: chief concern not recorded."
+        )
+        second = (
+            f"{n_meds} active medication(s), {n_allergies} allergy/-ies on file."
+        )
+        third = (
+            f"Code status: {cs_val}." if cs_val else "Code status not documented."
+        )
+        return f"{first} {second} {third}"
+
+    if kind == "unknown":
+        guess = extraction.get("document_kind_guess") or "document"
+        n_facts = len(extraction.get("key_facts") or [])
+        summary = extraction.get("summary")
+        tail = (
+            str(summary).strip()[:160]
+            if isinstance(summary, str) and summary.strip()
+            else "Review the original document for clinical context."
+        )
+        return (
+            f"Unclassified document (guess: {guess}) with {n_facts} key "
+            f"fact(s). {tail}"
+        )
+
+    return ""
+
+
+class PostIngestContextRequest(BaseModel):
+    extraction: dict[str, Any]
+    patient_id: str
+    document_reference_id: str
+
+
+@app.post("/document/post-ingest-context")
+async def document_post_ingest_context(
+    body: PostIngestContextRequest,
+) -> dict[str, Any]:
+    """Return a deterministic doc summary + RAG-retrieved guideline snippets.
+
+    Empty guidelines is a valid response (200, ``guidelines: []``). The route
+    never raises 500 for an unrecognised extraction shape — that path is
+    short-circuited with an empty query string.
+    """
+    rid = request_id_var.get() or uuid.uuid4().hex
+    started = time.perf_counter()
+
+    extraction = body.extraction or {}
+    summary = _synthesize_doc_summary(extraction)
+    query = _build_rag_query_from_extraction(extraction)
+
+    guideline_dicts: list[dict[str, Any]] = []
+    if query:
+        # Local import — same pattern as /evidence/search.
+        from rag import retrieve as _rag_retrieve
+
+        try:
+            snippets = await _rag_retrieve.search(query, k=5)
+        except Exception as exc:  # noqa: BLE001 — retriever boundary
+            logger.warning(
+                "post_ingest_context_retriever_failed",
+                extra={
+                    "request_id": rid,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            snippets = []
+
+        for s in snippets:
+            d = s._asdict()
+            ivd = d.get("indexed_version_date")
+            if ivd is not None and not isinstance(ivd, str):
+                try:
+                    d["indexed_version_date"] = ivd.isoformat()
+                except Exception:
+                    d["indexed_version_date"] = str(ivd)
+            content = d.get("content")
+            if isinstance(content, str) and len(content) > 400:
+                d["content"] = content[:400]
+            guideline_dicts.append(
+                {
+                    "chunk_id": d.get("chunk_id"),
+                    "source_id": d.get("source_id"),
+                    "document_title": d.get("document_title"),
+                    "section": d.get("section"),
+                    "page_number": d.get("page_number"),
+                    "content": d.get("content"),
+                    "relevance_score": d.get("relevance_score"),
+                }
+            )
+
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    logger.info(
+        "post_ingest_context_completed",
+        extra={
+            "request_id": rid,
+            "query_prefix": query[:30],
+            "n_guidelines": len(guideline_dicts),
+            "duration_ms": duration_ms,
+        },
+    )
+
+    return {
+        "summary": summary,
+        "query_used": query,
+        "guidelines": guideline_dicts,
+        "metadata": {
+            "request_id": rid,
+            "patient_id": body.patient_id,
+            "document_reference_id": body.document_reference_id,
+        },
+    }
+
+
+class _ChatHistoryTurn(BaseModel):
+    role: str
+    content: str
+
+
+class DocumentChatRequest(BaseModel):
+    patient_id: str
+    question: str
+    extraction: dict[str, Any]
+    guidelines: list[dict[str, Any]] = []
+    history: list[_ChatHistoryTurn] = []
+
+
+def _parse_citations_from_answer(text: str) -> list[str]:
+    """Return de-duplicated ``G:.../D:...`` citation tokens, in first-seen order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for match in _CITATION_RE.finditer(text or ""):
+        token = f"{match.group(1)}:{match.group(2)}"
+        if token not in seen:
+            seen.add(token)
+            out.append(token)
+    return out
+
+
+@app.post("/document/{document_reference_id}/chat")
+async def document_chat(
+    document_reference_id: str,
+    body: DocumentChatRequest,
+) -> dict[str, Any]:
+    """Document-grounded chat. Returns answer + parsed citations.
+
+    The route serializes extraction + guidelines into the user message so the
+    model sees a single, self-contained prompt. We do not call
+    ``query.conversation`` — that path runs FHIR retrieval, which is the wrong
+    semantics here (we already have the document in hand).
+    """
+    rid = request_id_var.get() or uuid.uuid4().hex
+
+    question = (body.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question must not be empty")
+
+    # Compact JSON (no whitespace) keeps the prompt short.
+    import json as _json
+
+    extraction_json = _json.dumps(body.extraction or {}, separators=(",", ":"))[:8000]
+    guidelines_compact = [
+        {"chunk_id": g.get("chunk_id"), "content": g.get("content")}
+        for g in (body.guidelines or [])
+        if isinstance(g, dict)
+    ]
+    guidelines_json = _json.dumps(guidelines_compact, separators=(",", ":"))[:8000]
+
+    messages: list[dict[str, Any]] = []
+    for turn in body.history or []:
+        if turn.role in ("user", "assistant") and turn.content:
+            messages.append({"role": turn.role, "content": turn.content})
+
+    user_payload = (
+        f"DOCUMENT_EXTRACTION:\n{extraction_json}\n\n"
+        f"GUIDELINES:\n{guidelines_json}\n\n"
+        f"DOCUMENT_REFERENCE_ID: {document_reference_id}\n"
+        f"QUESTION: {question}"
+    )
+    messages.append({"role": "user", "content": user_payload})
+
+    # Inline anthropic client — replicates the conversation.py setup pattern
+    # without importing conversation.py (per task constraint).
+    import anthropic as _anthropic
+
+    client = _anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+    try:
+        completion = await client.messages.create(
+            model=_DOC_CHAT_MODEL,
+            max_tokens=1024,
+            system=_DOC_CHAT_SYSTEM_PROMPT,
+            messages=messages,
+        )
+    except Exception as exc:  # noqa: BLE001 — provider boundary
+        logger.error(
+            "document_chat_anthropic_failed",
+            extra={
+                "request_id": rid,
+                "error_type": type(exc).__name__,
+                "n_guidelines_provided": len(guidelines_compact),
+            },
+        )
+        raise HTTPException(status_code=502, detail="Chat unavailable")
+
+    # Extract plain-text answer from the response. The Anthropic SDK returns
+    # a list of content blocks; we want the concatenated ``text`` blocks.
+    raw_content = getattr(completion, "content", None) or []
+    parts: list[str] = []
+    for block in raw_content:
+        text_attr = getattr(block, "text", None)
+        if isinstance(text_attr, str):
+            parts.append(text_attr)
+        elif isinstance(block, dict) and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+    answer_text = "".join(parts)
+
+    citations_used = _parse_citations_from_answer(answer_text)
+
+    logger.info(
+        "document_chat_completed",
+        extra={
+            "request_id": rid,
+            "n_guidelines_provided": len(guidelines_compact),
+            "n_citations_used": len(citations_used),
+            "answer_len": len(answer_text),
+        },
+    )
+
+    return {
+        "answer": answer_text,
+        "citations_used": citations_used,
+        "metadata": {
+            "request_id": rid,
+            "model": _DOC_CHAT_MODEL,
+            "n_guidelines_provided": len(guidelines_compact),
+        },
+    }

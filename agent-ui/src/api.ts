@@ -664,3 +664,80 @@ export async function sendQuery(sessionId: string, patientId: string, query: str
     { patient_id: patientId, query }
   );
 }
+
+/**
+ * Single guideline snippet returned by the post-ingest RAG endpoint. The
+ * `chunk_id` is what citations in downstream chat answers reference as
+ * `G:<chunk_id>` so the UI can scroll the correct snippet into view.
+ */
+export interface GuidelineSnippet {
+  chunk_id: string;
+  source_id: string;
+  document_title: string;
+  section: string | null;
+  page_number: number | null;
+  content: string;
+  relevance_score: number;
+}
+
+export interface PostIngestContextResponse {
+  summary: string;
+  query_used: string;
+  guidelines: GuidelineSnippet[];
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * Fire the RAG-style post-ingest context lookup. Empty `guidelines` is a
+ * valid 200 response (no matching corpus entries) — callers should still
+ * render the summary + query_used fields.
+ */
+export async function fetchPostIngestContext(
+  baseUrl: string,
+  payload: { extraction: unknown; patient_id: string; document_reference_id: string },
+): Promise<PostIngestContextResponse> {
+  const res = await fetch(`${baseUrl}/document/post-ingest-context`, withAuth({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }));
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`post-ingest-context failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  return (await res.json()) as PostIngestContextResponse;
+}
+
+export interface DocumentChatResponse {
+  answer: string;
+  citations_used: string[];
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * Send a follow-up question scoped to a specific ingested document. Citations
+ * in the answer reference either guideline chunks (`G:<chunk_id>`) or the
+ * document's own extracted fields (`D:<field>`).
+ */
+export async function sendDocumentChatMessage(
+  baseUrl: string,
+  documentReferenceId: string,
+  payload: {
+    patient_id: string;
+    question: string;
+    extraction: unknown;
+    guidelines: GuidelineSnippet[];
+    history?: { role: 'user' | 'assistant'; content: string }[];
+  },
+): Promise<DocumentChatResponse> {
+  const res = await fetch(`${baseUrl}/document/${encodeURIComponent(documentReferenceId)}/chat`, withAuth({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }));
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`document chat failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  return (await res.json()) as DocumentChatResponse;
+}

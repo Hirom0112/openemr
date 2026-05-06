@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, type ReactElement } from 'react';
-import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff, refreshCensus } from '../api';
-import type { HandoffSummaryPayload } from '../api';
+import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff, refreshCensus, fetchPostIngestContext, sendDocumentChatMessage } from '../api';
+import type { HandoffSummaryPayload, GuidelineSnippet } from '../api';
+import PostIngestContextCard from './PostIngestContextCard';
 import type { AgentResponse, CensusPatient, ErrorClass, HandoffData, HandoffPatient } from '../types';
 import ResponseRenderer from './ResponseRenderer';
 import { RED, AMB, NEU, BRAND, SURFACE, cardStyle, secondaryButtonStyle } from '../styles/tokens';
@@ -550,6 +551,26 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   // existing isAtBottom gate.
   const forceScrollOnNextMessage = useRef(false);
 
+  // Latest ingested-document context. When non-null, follow-up chat messages
+  // are routed to the document-scoped chat endpoint (`/document/{id}/chat`)
+  // so the assistant can ground answers against the extraction + retrieved
+  // guideline snippets. Cleared only on a new ingest (never on a non-doc
+  // chat turn — once you've ingested, that doc remains the focus).
+  const docChatContextRef = useRef<{
+    document_reference_id: string;
+    extraction: unknown;
+    guidelines: GuidelineSnippet[];
+    patient_id: string;
+  } | null>(null);
+
+  // ── Document ingest target resolution ─────────────────────────────────────
+  // Hoisted above dispatchMessage so the doc-chat fast-path can read the
+  // base URL synchronously. patientId rule (mirrored in the dropzone wiring
+  // further down): 1 patient = that patient; >1 = census view, fall back to
+  // first id; 0 = dropzone disabled.
+  const ingestPatientId: string | null = patientIds.length > 0 ? patientIds[0] : null;
+  const ingestBaseUrl: string = (window.__COPILOT_CONFIG__?.agentApiUrl as string | undefined) ?? '';
+
   // When a NEW finalized assistant message arrives, collapse all prior assistant messages.
   // Census responses are exempt — they stay open as the persistent reference frame.
   useEffect(() => {
@@ -693,6 +714,63 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       ]);
     }
 
+    // If a document has been ingested in this session, route follow-up
+    // questions through the doc-scoped chat endpoint so the answer is
+    // grounded in the extraction + retrieved guidelines. Census /
+    // briefing / handoff phrasings auto-dispatched by the surface itself
+    // bypass this path (they target the agent's tool dispatcher, not a
+    // single document).
+    const docCtx = docChatContextRef.current;
+    if (!isAutoDispatch && docCtx && ingestBaseUrl) {
+      setLoading(true);
+      try {
+        const docResp = await sendDocumentChatMessage(ingestBaseUrl, docCtx.document_reference_id, {
+          patient_id: docCtx.patient_id,
+          question: text,
+          extraction: docCtx.extraction,
+          guidelines: docCtx.guidelines,
+        });
+        forceScrollOnNextMessage.current = true;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `assistant-${Date.now()}`,
+            role: 'assistant',
+            response: {
+              type: 'text',
+              data: null,
+              narrative: docResp.answer,
+              citations: [],
+              metadata: {
+                doc_chat_citations: docResp.citations_used,
+              },
+            },
+          },
+        ]);
+      } catch (err) {
+        console.error('[ChatSurface] document chat failed', err);
+        forceScrollOnNextMessage.current = true;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `error-${Date.now()}`,
+            role: 'assistant',
+            retryText: text,
+            response: {
+              type: 'error',
+              data: null,
+              narrative: "Couldn't reach chat for this document. Try again.",
+              citations: [],
+              metadata: { error_class: 'transient', retry_suggested: true, failure_class: 'network' },
+            },
+          },
+        ]);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     setLoading(true);
     const submitT0 = !isAutoDispatch ? performance.now() : null;
     try {
@@ -767,7 +845,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, ingestBaseUrl]);
 
   const dispatchBriefDirect = useCallback(async (
     name: string,
@@ -1209,14 +1287,9 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   };
 
   // ── Document ingest (W2 Pillar 1 Path B drag-drop) ────────────────────────
-  // patientId resolution for the ingest endpoint:
-  //   - 1 patient in context: that's our target.
-  //   - >1 (census view): fall back to the first id. The architecture allows
-  //     a future "select patient" disambiguator; for v1, the first id is the
-  //     stable behaviour the spec calls for.
-  //   - 0 patients: render the dropzone disabled (it tooltips "select first").
-  const ingestPatientId: string | null = patientIds.length > 0 ? patientIds[0] : null;
-  const ingestBaseUrl: string = (window.__COPILOT_CONFIG__?.agentApiUrl as string | undefined) ?? '';
+  // ingestPatientId / ingestBaseUrl are declared up near the doc-chat ref so
+  // dispatchMessage can read them. Same rule as before: 1 patient → target,
+  // >1 → first id, 0 → dropzone disabled.
 
   const handleIngestExtraction = useCallback(async (resp: IngestResponse, file: File): Promise<void> => {
     // Compose an AgentResponse of type 'text' whose narrative summarises the
@@ -1314,7 +1387,72 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
         response,
       },
     ]);
-  }, []);
+
+    // Fire the post-ingest RAG context lookup async — never blocks the
+    // ingest narrative render above. On success we append a second
+    // assistant message carrying the PostIngestContextCard payload (via a
+    // metadata flag, since AgentResponse.type is a closed union owned by
+    // types.ts which this task is not allowed to modify). We also stash
+    // the ref that re-routes follow-up chat to /document/{id}/chat.
+    const docRefId = resp.document_reference_id;
+    const ptId = ingestPatientId;
+    const apiBase = ingestBaseUrl;
+    if (docRefId && ptId && apiBase) {
+      void (async () => {
+        try {
+          const ctx = await fetchPostIngestContext(apiBase, {
+            extraction: resp.extraction,
+            patient_id: ptId,
+            document_reference_id: docRefId,
+          });
+          docChatContextRef.current = {
+            document_reference_id: docRefId,
+            extraction: resp.extraction,
+            guidelines: ctx.guidelines,
+            patient_id: ptId,
+          };
+          forceScrollOnNextMessage.current = true;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `assistant-${Date.now()}-ctx`,
+              role: 'assistant',
+              response: {
+                type: 'text',
+                data: null,
+                narrative: '',
+                citations: [],
+                metadata: {
+                  post_ingest_context: {
+                    summary: ctx.summary,
+                    query_used: ctx.query_used,
+                    guidelines: ctx.guidelines,
+                  },
+                },
+              },
+            },
+          ]);
+        } catch (err) {
+          console.error('[ChatSurface] post-ingest-context failed', err);
+          forceScrollOnNextMessage.current = true;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `assistant-${Date.now()}-ctx-err`,
+              role: 'assistant',
+              response: {
+                type: 'text',
+                data: null,
+                narrative: "Couldn't load guidelines for this document.",
+                citations: [],
+                metadata: {},
+              },
+            },
+          ]);
+        }
+      })();
+    }
+  }, [ingestPatientId, ingestBaseUrl]);
 
   return (
     <>
@@ -1449,6 +1587,26 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                       if (!ext) return null;
                       return <SoftWarnBanner warns={ext.soft_warns ?? []} />;
                     })()}
+                    {(() => {
+                      // Post-ingest RAG context card. Carried via metadata
+                      // because AgentResponse.type is a closed union we
+                      // cannot extend from this file. Renders in place of
+                      // ResponseRenderer when the flag is present.
+                      const meta = msg.response?.metadata as { post_ingest_context?: unknown } | undefined;
+                      const ctx = meta?.post_ingest_context;
+                      if (!ctx || typeof ctx !== 'object') return null;
+                      const c = ctx as { summary?: unknown; query_used?: unknown; guidelines?: unknown };
+                      if (typeof c.summary !== 'string' || typeof c.query_used !== 'string' || !Array.isArray(c.guidelines)) {
+                        return null;
+                      }
+                      return (
+                        <PostIngestContextCard
+                          summary={c.summary}
+                          guidelines={c.guidelines as GuidelineSnippet[]}
+                          queryUsed={c.query_used}
+                        />
+                      );
+                    })()}
                     {msg.response && msg.response.type === 'error' ? (
                       <ErrorCard
                         response={msg.response}
@@ -1456,6 +1614,9 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                         loading={loading}
                         onRetry={(text) => { void dispatchMessage(text); }}
                       />
+                    ) : msg.response && (msg.response.metadata as { post_ingest_context?: unknown } | undefined)?.post_ingest_context ? (
+                      // Card already rendered above; no further body needed.
+                      null
                     ) : msg.response ? (
                       <ResponseRenderer
                         response={msg.response}
@@ -1509,6 +1670,39 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                                 pdfBytes: ext.pdf_bytes,
                               })}
                             />
+                          ))}
+                        </div>
+                      );
+                    })()}
+                    {(() => {
+                      // Citations emitted by the document-scoped chat
+                      // endpoint, e.g. ["G:chunk_xyz", "D:lactate"]. Render
+                      // a compact row under the answer so the user can see
+                      // which guideline / extracted field grounded the
+                      // assistant's reply.
+                      const meta = msg.response?.metadata as { doc_chat_citations?: unknown } | undefined;
+                      const cites = meta?.doc_chat_citations;
+                      if (!Array.isArray(cites) || cites.length === 0) return null;
+                      const stringCites = cites.filter((c): c is string => typeof c === 'string');
+                      if (stringCites.length === 0) return null;
+                      return (
+                        <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, fontSize: 11, color: SURFACE.muted }}>
+                          <span style={{ fontWeight: 600 }}>Cited:</span>
+                          {stringCites.map((c, i) => (
+                            <span
+                              key={`${c}-${i}`}
+                              style={{
+                                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                                fontSize: 10,
+                                padding: '1px 5px',
+                                borderRadius: 4,
+                                border: `1px solid ${SURFACE.border}`,
+                                background: SURFACE.panel,
+                                color: SURFACE.fg,
+                              }}
+                            >
+                              {c}
+                            </span>
                           ))}
                         </div>
                       );
