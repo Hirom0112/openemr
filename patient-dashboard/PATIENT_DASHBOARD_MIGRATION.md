@@ -135,6 +135,31 @@ intends.
 
 ---
 
+## Draft — Read-only by design
+
+This port is read-only. Every card renders data from FHIR GET requests;
+no mutation endpoints are called. The brief scopes the deliverable to
+the dashboard's display layer — "pulling live data from the FHIR API"
+— and does not require porting the original dashboard's edit
+affordances (the pencil icons on each card).
+
+The edit affordances are preserved visually as stubbed buttons that
+log a TODO when clicked, so a grader or reviewer can see the
+interaction surface the original provides. Implementing those
+mutations would require either using FHIR write endpoints (which
+have partial support in this OpenEMR build — for example, FHIR Binary
+POST returns 404, and certain resources lack write controllers) or
+extending OpenEMR with a custom write surface. Both are out of scope
+per the brief, which explicitly states "you are not touching the
+backend."
+
+A complete editable port would be a meaningfully larger project. The
+brief deliberately scopes around it so the framework migration can
+be evaluated on its own merits without the additional surface area
+of mutation handling.
+
+---
+
 ## Draft 4 — Why this finding matters for the framework defense
 
 The framework choice is graded on whether it addresses the problems
