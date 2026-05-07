@@ -1,6 +1,40 @@
 # Patient Dashboard Port — Migration Defense
 
-## Framework choice: Next.js 15 + TypeScript + Auth.js + shadcn/ui + Tailwind
+## Why we're porting
+
+The existing OpenEMR patient dashboard is a server-rendered PHP page with
+a hybrid loading model. Its entry point — `interface/patient_file/summary/demographics.php` —
+ships nine AJAX-loaded `*_fragment.php` files alongside four cards
+(allergies, medical problems, medications, prescriptions) rendered
+inline as Twig in the same file (`demographics.php:1112–1208`,
+`demographics.php:526–533`). Both paths execute `sqlQuery()` and
+service-class calls directly from the files that emit HTML. There is
+no abstraction over the data layer (see `dashboard-inventory.md` →
+"Architecture finding (verified twice against codebase)" → "Rendering
+model"). Adding or modifying a card requires touching presentation,
+data access, and authorization in the same file.
+
+A FHIR R4 layer exists in parallel under `src/RestControllers/FHIR/`
+with controllers for Patient, AllergyIntolerance, CareTeam, Condition,
+MedicationRequest, and Observation, but the dashboard does not consume
+any of it. Verified by grep across `interface/patient_file/summary/`:
+zero references to `/apis/default/fhir/` or any FHIR controller class
+(`dashboard-inventory.md` → "FHIR layer relationship"). The two
+FHIR-adjacent imports in `demographics.php` are a SMART-launch app
+import (line 51) and a portal feature flag boolean (line 1578) —
+neither calls the FHIR API.
+
+The auth model — PHP session cookies plus CSRF tokens embedded in
+rendered HTML — is correct for an in-process server-rendered app and
+incompatible with a decoupled frontend. The port is the work of
+introducing a typed data-access layer between presentation and the
+database, replacing session+CSRF with OAuth2/OIDC against OpenEMR's
+existing OAuth server (using SMART scopes), and collapsing the hybrid
+fragment / inline-Twig loading model into a single uniform card pattern.
+None of this is cosmetic; each item is a specific finding from the
+audit (`dashboard-inventory.md` → "Implications for the port").
+
+## Framework choice: Next.js 16 + TypeScript + Auth.js + shadcn/ui + Tailwind
 
 The choice was not made in the abstract. It was made by mapping each
 problem the audit identified to a specific framework capability. Every
@@ -31,7 +65,7 @@ selection below traces back to an audit finding documented in
    filter logic — synthesis logic that has to be exactly right or the
    cards display wrong clinical data.
 
-### Why Next.js 15 with TypeScript solves these
+### Why Next.js 16 with TypeScript solves these
 
 **Server Components solve problems #1 and #4.** A Server Component runs
 only on the server. Its code is never bundled to the browser. The FHIR
@@ -150,6 +184,84 @@ framework choice closes a backend gap; the framework choice only
 determines how cleanly the synthesis is expressed in code. TypeScript
 makes the synthesis verifiable at compile time, which is the most a
 frontend stack can do for a missing backend resource.
+
+---
+
+## What we kept
+
+The port reuses everything on the OpenEMR side that is already working
+and within scope. No backend changes ship with this project.
+
+- **OpenEMR's FHIR R4 server.** All six in-scope cards consume existing
+  controllers under `src/RestControllers/FHIR/`. Verification 1.5
+  confirmed live responses for Patient, AllergyIntolerance, Condition,
+  MedicationRequest, CareTeam, and Observation against the running
+  OpenEMR build — the resources the port needs are present and
+  responsive. The single confirmed gap (MedicationStatement) is
+  documented separately and handled by synthesis, not by patching the
+  backend.
+- **OpenEMR's existing OAuth2/OIDC server** at `/oauth2/default/*`
+  with SMART-on-FHIR scopes. The port registers a new client against
+  that server; it does not modify the auth surface.
+- **The card set and clinical hierarchy from the original dashboard.**
+  Patient header plus six cards (Allergies, Medical Problems,
+  Medications, Prescriptions, Care Team, Vitals) — same logical
+  groupings, same left-column / right-column placement intent, same
+  field set per card as documented in `dashboard-inventory.md`.
+- **Visual density.** The original is dense, professional, and clinical
+  by design. The port preserves that density rather than adopting a
+  consumer-app aesthetic. Card titles, row layouts, and per-row content
+  match the field tables in `dashboard-inventory.md` for each card
+  (e.g. Allergies fields at `dashboard-inventory.md` "Allergies →
+  Fields"; Vitals fields at "Vitals → Fields").
+
+The 17 out-of-scope dashboard sections (`dashboard-inventory.md` →
+"Scope") are also kept — by being left alone in OpenEMR. They remain
+available through the original interface; the port simply does not
+re-implement them.
+
+## What we changed
+
+Each change maps to a specific audit finding, not a stylistic preference.
+
+- **Rendering model: PHP + Twig hybrid → React Server Components.**
+  Audit finding: `demographics.php:526–533` (AJAX fragments) and
+  `demographics.php:1112–1208` (inline Twig) constitute two parallel
+  rendering paths in one file. The port collapses both into one Server
+  Component pattern. The FHIR access token stays server-side by
+  construction — Server Components never bundle to the browser — which
+  is enforced by the framework rather than by developer discipline.
+- **Data access: `sqlQuery()` from presentation files → typed FHIR
+  client at `lib/fhir/client.ts`.** Audit finding:
+  "Both paths hit the database directly via `sqlQuery()` and service
+  classes. No abstraction over the data layer"
+  (`dashboard-inventory.md` → "Rendering model"). The port routes every
+  card through a single FHIR client module with TypeScript types
+  generated against FHIR R4. Cards consume parsed resources, never raw
+  wire format or SQL rows.
+- **Auth: session cookies + CSRF → OAuth2/OIDC via Auth.js.** Audit
+  finding: session+CSRF assumes shared process state and embedded
+  rendered HTML, neither of which exists across a decoupled frontend
+  and backend (`dashboard-inventory.md` → "Implications for the port",
+  item 2). The port uses Auth.js's Generic OAuth Provider against
+  OpenEMR's `/oauth2/default/*` endpoints with SMART scopes. Tokens
+  live in encrypted server-side sessions; the browser never holds a
+  raw FHIR access token.
+- **Medications / Prescriptions: synthesized from MedicationRequest by
+  `intent` and `status`.** Audit finding: MedicationStatement is not
+  implemented in this OpenEMR build — no controller in
+  `src/RestControllers/FHIR/`, no route in
+  `apis/routes/_rest_routes_fhir_r4_us_core_3_1_0.inc.php`
+  (`dashboard-inventory.md` → "Confirmed gap: MedicationStatement").
+  The port synthesizes the two cards from one resource: Medications
+  filters `status ∈ {active, on-hold, completed}`; Prescriptions
+  filters `intent=order` with a recorded `requester`. Verification 1.5
+  (2026-05-07) showed `intent=order` returns zero rows across pids 4,
+  5, 13, 24, 26, 27 — every entry emits `intent=plan` with `requester`
+  absent. The Prescriptions card therefore renders empty for every
+  synthetic patient, matching the original dashboard's "None" state
+  for Gloria Tran. This is a property of the synthetic dataset, not a
+  defect in the synthesis logic.
 
 ---
 
@@ -367,3 +479,67 @@ that needed improving, and the chosen framework makes each improvement
 natural rather than forced."
 
 ---
+
+## Known limitations and future work
+
+Placeholder lists for Phase 5. Items below are scoped from the audit
+and the 1.5 verification pass; both lists are expected to be revised
+as the port progresses.
+
+### Known limitations
+
+- **Prescriptions card is empty for every synthetic patient.**
+  `intent=order` returns zero rows across pids 4, 5, 13, 24, 26, 27 in
+  the local OpenEMR build (Verification 1.5, 2026-05-07). Every
+  MedicationRequest emits `intent=plan` with `requester` absent. The
+  card renders "None", matching the original dashboard's behavior.
+- **AllergyIntolerance falls back to `text.div` when the coded value
+  is a data-absent-reason.** The 1.5 pass confirmed entries where the
+  structured code is absent and the human-readable allergen lives only
+  in the resource's `text.div`. The port renders `text.div` as the
+  fallback display string.
+- **CareTeam loaded shape is inferred, not observed.** The
+  `care_teams` and `care_team_member` tables are empty across all 27
+  synthetic patients (`dashboard-inventory.md` → "Synthetic dataset
+  gaps"). The loaded row shape is taken from
+  `CareTeamViewCard::getTemplateVariables()`, not from a live FHIR
+  response.
+- **`intent=order` assumption is unverified against real prescribing
+  data.** The synthesis filter is correct against the FHIR R4 spec but
+  has not been exercised against an OpenEMR install with real
+  prescribing-workflow data. A real install may surface edge cases the
+  synthetic dataset cannot.
+- **`Patient.photo` is not yet verified.** The original header backs
+  the avatar with `pic_array($pid, ...)` (`demographics.php:1634`).
+  Whether OpenEMR's FHIR Patient resource exposes the same image data
+  in a consumable form has not been confirmed.
+- **`Observation` query parameters `_sort` and `_count` are not
+  verified.** The Vitals card relies on most-recent-first ordering; the
+  OpenEMR FHIR Observation controller's support for `_sort=-date` and
+  `_count=N` has not been confirmed against a live response.
+
+### Future work
+
+- **OpenEMR-side MedicationStatement controller.** Closes the synthesis
+  compromise at the source. Out of scope for this port per the brief
+  ("you are not touching the backend").
+- **Per-record edit affordances.** The original dashboard's pencil
+  icons navigate to category-specific edit pages (e.g.
+  `stats_full.php?active=all&category=allergy`,
+  `demographics.php:1128`). The port preserves the icons as stubs that
+  log a TODO; wiring them up requires either FHIR write endpoints
+  (partial support in this build) or an OpenEMR custom write surface.
+- **The remaining 17 out-of-scope dashboard sections.** Listed in
+  `dashboard-inventory.md` → "Scope" → "Out of scope". A complete
+  port would re-implement Demographics, Insurance, Billing, Labs,
+  Appointments, Immunizations, etc., on the same uniform card pattern.
+- **Production OAuth client registration via OpenEMR's Admin UI.** The
+  development setup currently flips the `client_role` column directly
+  via SQL. Production deployment should register clients through the
+  Admin → System → API Clients interface so the audit trail and
+  scope-grant UI are exercised.
+- **Password grant disabled in production globals.** OpenEMR's
+  `enable_password_grant` global is intentionally off in production.
+  The port already uses authorization-code flow exclusively;
+  documenting this here so a future maintainer does not enable
+  password grant to "simplify" testing.

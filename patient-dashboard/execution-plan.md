@@ -109,15 +109,15 @@ before Phase 2).
 
 **Goal:** Pick the framework. Write the defense. Don't write code yet.
 
-### 2.1 — Confirm additional section choice (~15 min)
-- [ ] Confirm Vitals as the additional section
-- [ ] Verify with curl that Observation?category=vital-signs returns
-      Gloria's data
-- [ ] Update inventory if any field shifts
+### 2.1 — Confirm additional section choice (~15 min) ✅
+- [x] Confirm Vitals as the additional section
+- [x] Verified in 1.5: `Observation?category=vital-signs` returns 15
+      entries for Gloria (LOINCs 85353-1, 9279-1, 8867-4 confirmed)
+- [x] No field shifts; inventory entry stands
 
 ### 2.2 — Confirm framework lock-in (~5 min) ✅ DECIDED
 
-**Stack:** Next.js 15 + TypeScript + Auth.js + shadcn/ui + Tailwind
+**Stack:** Next.js 16 + TypeScript + Auth.js + shadcn/ui + Tailwind
 **Deploy target:** Railway (same project as OpenEMR; private internal
 networking between services)
 
@@ -128,14 +128,16 @@ Phase 4 starts.
 - [ ] Confirm: nothing in Phase 1 verification changed the calculus
 - [ ] Lock and proceed to 2.3
 
-### 2.3 — Write the framework defense (~60-90 min)
-- [ ] Open `PATIENT_DASHBOARD_MIGRATION.md`
-- [ ] Polish the four Day 1 defense paragraph drafts into formal
-      sections (Why we're porting, Framework choice, What we kept,
-      What we changed, Tradeoffs)
-- [ ] Fill in [FRAMEWORK] and [AUTH_LIBRARY] placeholders
-- [ ] Leave Known limitations and Future work as placeholders
-- [ ] Commit
+### 2.3 — Write the framework defense (~60-90 min) ✅
+- [x] PATIENT_DASHBOARD_MIGRATION.md now has structured top-level
+      sections: Why we're porting → Framework choice → What we kept →
+      What we changed → Day 1 drafts (kept for reference) → Known
+      limitations and future work
+- [x] [FRAMEWORK] and [AUTH_LIBRARY] placeholders resolved
+      (Next.js 16, Auth.js)
+- [x] Known limitations and Future work populated as placeholders
+      (will be revised after Phase 4)
+- [x] Commit
 
 ### 2.4 — Have Claude Code critique the defense (~30 min)
 - [ ] Send the critique prompt
@@ -152,14 +154,18 @@ no marketing copy survives, every claim backed by reasoning.
 
 **Goal:** Working OAuth in the actual app. Typed FHIR client. Nothing UI yet.
 
-### 3.1 — Scaffold the project (~30 min)
-- [ ] Have Claude Code scaffold `patient-dashboard/web/` with chosen
-      framework + TypeScript + auth library + component library
-- [ ] Create directory structure: `lib/fhir/`, `lib/auth/`,
-      `components/cards/`, `app/patient/[id]/` (or framework equivalent)
-- [ ] Confirm `npm run dev` shows hello world at patient route
-- [ ] Confirm `npm run build` clean
-- [ ] Commit
+### 3.1 — Scaffold the project (~30 min) ✅
+- [x] Scaffolded `patient-dashboard/web/` — Next.js 16.2.5 + TypeScript
+      strict + Auth.js v5 (next-auth@5.0.0-beta.31) + shadcn/ui (neutral)
+      + Tailwind v4 + React 19. (Deviation: create-next-app@latest
+      resolved to v16, not v15 — same App Router, async params; doc
+      bumped 15→16.)
+- [x] Created `src/lib/fhir/`, `src/lib/auth/`, `src/components/cards/`
+      with .gitkeep files; placeholder `src/app/patient/[id]/page.tsx`
+- [x] `npm run dev` smoke test — `curl /patient/4` returns HTTP 200,
+      renders `<h1>Patient 4</h1>` (independently verified by orchestrator)
+- [x] `npm run build` exits 0 (verified)
+- [x] Commit
 
 ### 3.2 — Wire OAuth (~60-90 min)
 - [ ] Have Claude Code configure auth library against OpenEMR
