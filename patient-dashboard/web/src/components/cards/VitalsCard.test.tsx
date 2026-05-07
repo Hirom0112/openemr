@@ -155,7 +155,9 @@ describe("VitalsCardView (render)", () => {
     const values = screen.getAllByTestId("vital-value").map((n) => n.textContent);
 
     // Two rows survive — the panel LOINC 85353-1 must NOT appear.
-    expect(labels).toEqual(expect.arrayContaining(["Heart rate", "Respiratory rate"]));
+    // Friendly labels (R1.1) map "Heart rate" → "Pulse" and
+    // "Respiratory rate" → "Respiration".
+    expect(labels).toEqual(expect.arrayContaining(["Pulse", "Respiration"]));
     expect(labels).not.toContain("Vital signs panel");
     expect(values).toEqual(expect.arrayContaining(["96 /min", "18 /min"]));
 
@@ -178,7 +180,8 @@ describe("VitalsCardView (render)", () => {
 
     const rows = screen.getAllByTestId("vital-label");
     expect(rows).toHaveLength(1);
-    expect(rows[0].textContent).toBe("Heart rate");
+    // Friendly label (R1.1): "Heart rate" → "Pulse".
+    expect(rows[0].textContent).toBe("Pulse");
 
     const value = screen.getByTestId("vital-value");
     // 96/min wins (effectiveDateTime 2026-04-29 > 2025-12-01).
@@ -281,8 +284,22 @@ describe("formatObservationValue", () => {
 });
 
 describe("displayLabel", () => {
-  it("prefers code.coding[0].display", () => {
-    expect(displayLabel(heartRate96)).toBe("Heart rate");
+  it("prefers the friendly LOINC label over code.coding[0].display", () => {
+    // R1.1: 8867-4 has FHIR display "Heart rate" but the friendly
+    // map returns "Pulse" to match the original PHP card.
+    expect(displayLabel(heartRate96)).toBe("Pulse");
+  });
+
+  it("falls back to code.coding[0].display when LOINC has no friendly label", () => {
+    const obs: FhirObservation = {
+      resourceType: "Observation",
+      id: "x",
+      status: "final",
+      code: {
+        coding: [{ code: "99999-9", display: "Some Other Vital" }],
+      },
+    };
+    expect(displayLabel(obs)).toBe("Some Other Vital");
   });
 
   it("falls back to code.text", () => {

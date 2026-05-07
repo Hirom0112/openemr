@@ -556,13 +556,13 @@ Trailing link below the body: **"Click here to view and graph all
 vitals."** → `/interface/encounter/trend_form.php?formname=vitals`
 (`vitals_fragment.php:45`).
 
-**Port deviation — Temp Method dropped.** `form_vitals.temp_method`
-has no LOINC code in `FhirObservationVitalsService` (line 248 of
-`dashboard-api-map.md` confirms). The FHIR vital-signs endpoint
-does not surface this column in any documented field. Until/unless
-OpenEMR projects it through `Observation.method.text`, the port
-must drop this row. Documented in `PATIENT_DASHBOARD_MIGRATION.md`
-as an explicit cut.
+**Temp Method (correction 2026-05-08).** Earlier revisions of this
+inventory and the api-map said Temp Method had no LOINC mapping and
+the port had to drop it. That was wrong: the FHIR vital-signs
+endpoint surfaces it as LOINC `8327-9` ("Temperature Location")
+with the value carried in `Observation.valueString` (e.g. "Oral").
+Verified against Gloria's bundle. The port renders this row in its
+fixed-order position (#3, after Temperature) like any other.
 
 ### States
 

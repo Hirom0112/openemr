@@ -290,8 +290,11 @@ render those rows on the same card.
 5. Append the trailing link: **"Click here to view and graph all vitals."**
 6. Append a "Last Updated" footer row sourced from the most recent `meta.lastUpdated` across the rendered observations.
 
-**Explicit cuts vs the original PHP card:**
-- **Temp Method** (`form_vitals.temp_method`, e.g. "Oral") — has no LOINC mapping in `FhirObservationVitalsService` and is not exposed via the FHIR vital-signs endpoint. The port omits this row. Documented in `PATIENT_DASHBOARD_MIGRATION.md`.
+**Temp Method (correction 2026-05-08).** Earlier revisions of this
+file said Temp Method had no LOINC mapping. That was wrong: it is
+surfaced as LOINC `8327-9` ("Temperature Location") with the value
+carried in `Observation.valueString` (e.g. "Oral"). Verified against
+Gloria's bundle. Render in fixed-order position #3 (after Temperature).
 
 The earlier "filter to seven LOINCs client-side" recommendation was an
 invention by the api-map; it has no basis in the original PHP source.

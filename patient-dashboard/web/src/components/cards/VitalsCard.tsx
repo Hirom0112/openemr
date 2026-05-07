@@ -65,21 +65,21 @@ const LOINC_BP_DIASTOLIC = "8462-4";
 // Our FHIR projection emits a single valueQuantity, so we synthesize the
 // counterpart unit at render time.
 const LOINC_TEMPERATURE = "8310-5";
+// Temp Method LOINC. Surfaced via `Observation.valueString` (e.g. "Oral")
+// — verified against Gloria's bundle 2026-05-08. The earlier S1 spec
+// note "no LOINC mapping, port omits row" was incorrect.
+const LOINC_TEMP_METHOD = "8327-9";
 
 /**
- * Fixed display order from `dashboard-inventory.md` § Vitals → Fields.
- * Mirrors the case-branch sequence in `interface/forms/vitals/report.php`
- * (the original PHP card). LOINCs not in this list render at the bottom
- * in stable insertion order so an unknown vital-sign is still surfaced.
- *
- * Temp Method (`form_vitals.temp_method`) is intentionally absent: it
- * has no LOINC mapping in `FhirObservationVitalsService` and the FHIR
- * vital-signs endpoint does not expose it. Documented as an explicit
- * port-side cut in `PATIENT_DASHBOARD_MIGRATION.md`.
+ * Fixed display order. Mirrors the case-branch sequence in the original
+ * PHP card (`interface/forms/vitals/report.php`). LOINCs not in this
+ * list render at the bottom in stable insertion order so an unknown
+ * vital-sign is still surfaced.
  */
 const VITALS_DISPLAY_ORDER: readonly string[] = [
     LOINC_BP_PANEL,        // Blood Pressure
     LOINC_TEMPERATURE,     // Temperature
+    LOINC_TEMP_METHOD,     // Temp Method (Temperature Location)
     "8867-4",              // Pulse / Heart rate
     "9279-1",              // Respiration
     "2708-6",              // Oxygen Saturation
@@ -90,6 +90,29 @@ const VITALS_DISPLAY_ORDER: readonly string[] = [
     "9843-4",              // Head Circumference
     "8280-0",              // Waist Circumference (if surfaced)
 ];
+
+/**
+ * Friendly-label map. The FHIR `code.coding[0].display` is verbose
+ * ("Body Temperature", "Heart rate", "Oxygen saturation in Arterial
+ * blood") and the original OpenEMR card uses the trimmed dashboard
+ * labels ("Temperature", "Pulse", "Oxygen Saturation"). Map keyed on
+ * LOINC; falls back to the FHIR display name and finally the LOINC
+ * code so a row is never label-less.
+ */
+const VITALS_FRIENDLY_LABELS: Readonly<Record<string, string>> = {
+    [LOINC_BP_PANEL]: "Blood Pressure",
+    [LOINC_TEMPERATURE]: "Temperature",
+    [LOINC_TEMP_METHOD]: "Temp Method",
+    "8867-4": "Pulse",
+    "9279-1": "Respiration",
+    "2708-6": "Oxygen Saturation",
+    "59408-5": "Oxygen Saturation",
+    "8302-2": "Height",
+    "29463-7": "Weight",
+    "39156-5": "BMI",
+    "9843-4": "Head Circumference",
+    "8280-0": "Waist Circumference",
+};
 
 const TRENDS_HREF = "/interface/encounter/trend_form.php?formname=vitals";
 
@@ -245,6 +268,10 @@ function findComponentValue(
  * LOINC code as a last resort so the row is never label-less.
  */
 export function displayLabel(obs: FhirObservation): string {
+  const code = loincOf(obs);
+  if (code && VITALS_FRIENDLY_LABELS[code]) {
+    return VITALS_FRIENDLY_LABELS[code];
+  }
   const display = obs.code?.coding?.[0]?.display?.trim();
   if (display) {
     return display;
@@ -253,7 +280,7 @@ export function displayLabel(obs: FhirObservation): string {
   if (text) {
     return text;
   }
-  return loincOf(obs) ?? "Observation";
+  return code ?? "Observation";
 }
 
 /**
