@@ -115,15 +115,18 @@ before Phase 2).
       Gloria's data
 - [ ] Update inventory if any field shifts
 
-### 2.2 — Pick the framework (~60 min)
-- [ ] Compare 3-4 candidates honestly:
-      - Next.js 15 + TypeScript + Auth.js
-      - Remix / React Router 7 + TypeScript
-      - SvelteKit + TypeScript
-      - HTMX + Go (only if comfortable)
-- [ ] Write a paragraph for each, not just bullet points
-- [ ] Pick the one defensible in 2-3 sentences without "modern"
-- [ ] Lock the choice in writing — no second-guessing after this
+### 2.2 — Confirm framework lock-in (~5 min) ✅ DECIDED
+
+**Stack:** Next.js 15 + TypeScript + Auth.js + shadcn/ui + Tailwind
+**Deploy target:** Railway (same project as OpenEMR; private internal
+networking between services)
+
+**Defense:** drafted in PATIENT_DASHBOARD_MIGRATION.md (commit dbba723cc
+plus follow-ups). Will polish with Phase 1 empirical findings before
+Phase 4 starts.
+
+- [ ] Confirm: nothing in Phase 1 verification changed the calculus
+- [ ] Lock and proceed to 2.3
 
 ### 2.3 — Write the framework defense (~60-90 min)
 - [ ] Open `PATIENT_DASHBOARD_MIGRATION.md`
