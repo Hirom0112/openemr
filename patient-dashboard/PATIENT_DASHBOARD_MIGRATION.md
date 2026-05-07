@@ -272,6 +272,42 @@ Each change maps to a specific audit finding, not a stylistic preference.
   for Gloria Tran. This is a property of the synthetic dataset, not a
   defect in the synthesis logic.
 
+## How the port lives inside OpenEMR
+
+The migrated dashboard ships as a parallel tab in OpenEMR's existing
+patient context, alongside the original PHP-rendered Dashboard tab.
+Both tabs are accessible from the same patient view; users can
+switch between them freely without re-authenticating.
+
+This two-tab approach is deliberate, not a transitional artifact.
+The brief's clarification frames this work as "a partial
+modernization of the application, not a replacement app." Two
+tabs make that honest: the original Dashboard tab continues to
+surface the cards this port deliberately leaves out of scope
+(Demographics, Billing, Insurance, Clinical Reminders, Appointments,
+Immunizations, Health Concerns, and others); the new "Dashboard
+(Modern)" tab implements the brief's required subset on a modern
+React stack.
+
+A future production rollout would deprecate the original tab once
+the modern dashboard achieves parity for the broader card set.
+For this submission, the two-tab presentation:
+
+- Honors the brief's "partial modernization" framing
+- Allows reviewers to compare implementations side-by-side on the
+  same patient
+- Preserves access to out-of-scope cards that physicians may still
+  need
+
+The integration uses an iframe-embedded React application loaded
+inside an OpenEMR PHP module wrapper (mirroring the pattern
+established by the existing oe-module-clinical-copilot). The
+React dashboard is a self-contained Next.js application; no PHP
+frontend components are mixed into the dashboard page itself, per
+the brief's "not mix frontend stacks" requirement. The OpenEMR
+shell (top navigation, patient context, session) remains PHP and
+is unchanged.
+
 ---
 
 # Defense material — drafted on Day 1 (kept for reference)
