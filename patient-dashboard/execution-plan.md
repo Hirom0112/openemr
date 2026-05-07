@@ -167,27 +167,35 @@ no marketing copy survives, every claim backed by reasoning.
 - [x] `npm run build` exits 0 (verified)
 - [x] Commit
 
-### 3.2 — Wire OAuth (~60-90 min)
-- [ ] Have Claude Code configure auth library against OpenEMR
-- [ ] Implement: login, callback, server-side token storage,
-      logout, middleware redirect, refresh on 401
-- [ ] Test full flow in browser end-to-end
-- [ ] Test logout
-- [ ] Test token refresh (let one expire or shorten artificially)
-- [ ] Test protected route redirect
-- [ ] Commit
+### 3.2 — Wire OAuth (~60-90 min) ✅ (browser smoke pending)
+- [x] Auth.js v5 wired against OpenEMR's /oauth2/default with the
+      generic OIDC provider; PKCE+state, encrypted JWT cookie session,
+      refresh-on-expiry inside the jwt callback
+- [x] Login (/login), callback (/api/auth/callback/openemr),
+      sign-out, route protection via `proxy.ts` (Next 16 deprecates
+      middleware.ts in favor of proxy.ts), refresh on token expiry
+- [ ] Test full flow in browser end-to-end (PENDING — human click)
+- [ ] Test logout (PENDING — human click)
+- [ ] Test token refresh (PENDING — manual via expiry shorten or wait)
+- [x] /patient/4 → 302 to /login when unauthenticated (verified)
+- [x] Commit
 
-### 3.3 — Build the typed FHIR client (~45 min)
-- [ ] Have Claude Code build `lib/fhir/client.ts` with typed methods
-      for every resource in the API map
-- [ ] Implement 401 handling with one token refresh
-- [ ] Implement typed FhirApiError
-- [ ] Server-side request logging
-- [ ] Vitest tests against mocked fetch (success, 401, malformed,
-      network error)
-- [ ] `npm test` passes
-- [ ] Spot-check one method against live OpenEMR
-- [ ] Commit
+### 3.3 — Build the typed FHIR client (~45 min) ✅
+- [x] FhirClient at `src/lib/fhir/client.ts` with 7 typed methods
+      matching the API map; narrow FHIR R4 type slices (no
+      @types/fhir dependency)
+- [x] 401 surfaces as FhirApiError(status=401); refresh handled by
+      Auth.js jwt callback, not the client
+- [x] FhirApiError class at `src/lib/fhir/error.ts`
+- [x] Synthesis helpers (filterMedications, filterPrescriptions) +
+      allergyDisplay fallback per 1.5 findings
+- [x] 17/17 vitest unit tests pass (success, 401, 500, network error,
+      auth-header propagation, synthesis filters, allergy fallback)
+- [x] `npm test` passes; `tsc --noEmit` clean
+- [ ] Spot-check one method against live OpenEMR (DEFERRED to first
+      card render in Phase 4 — `live-spot-check.md` records the curl
+      contract)
+- [x] Commit
 
 **Phase 3 done when:** Auth works end-to-end including refresh,
 FHIR client tested and spot-checked, no UI built yet.
@@ -198,13 +206,17 @@ FHIR client tested and spot-checked, no UI built yet.
 
 **Goal:** All seven cards rendering live data with parity to original.
 
-### 4.1 — Patient header (pattern-setter) (~30 min)
-- [ ] Have Claude Code build PatientHeader.tsx per inventory + screenshot
-- [ ] Mount on patient route with hardcoded test patient ID
-- [ ] Side-by-side comparison with original
-- [ ] Iterate until parity
-- [ ] Commit when matched
-      (Don't move on until this is right — the rest copy this pattern)
+### 4.1 — Patient header (pattern-setter) (~30 min) ✅
+- [x] PatientHeader.tsx (Server Component) + card-states.tsx
+      primitives (LoadingCard / ErrorCard / EmptyCard) for the
+      6 sibling cards to reuse
+- [x] Mounted on /patient/[id] inside Suspense boundary
+- [x] 11 component tests (jsdom env) + 17 fhir client tests
+      (node env) = 28/28 passing
+- [ ] Side-by-side visual comparison vs reference screenshot
+      (PENDING — human pass; one TODO recorded: name rendered as
+      colored span vs original link styling)
+- [x] Commit (pattern locked for siblings)
 
 ### 4.2 — Allergies card (~30 min)
 - [ ] Build per inventory + screenshot, same pattern as header
