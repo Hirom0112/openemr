@@ -44,6 +44,8 @@ from langgraph.graph import END, StateGraph
 from config import settings
 
 from .nodes.critic import critic_node
+# ─── Phase 9 Slice 9.7 — cross-source conflict ───
+from .nodes.cross_source_conflict import cross_source_conflict_node
 from .nodes.demographics import demographics_node
 from .nodes.extractor import extractor_node
 from .nodes.finalize import finalize_node
@@ -103,6 +105,12 @@ def build_graph(
     graph.add_node("structured", structured_node)
     graph.add_node("evidence_retriever", retriever_node)
     graph.add_node("demographics", bound_demographics)
+    # ─── Phase 9 Slice 9.7 — cross-source conflict ───
+    # Inserted between the structured worker and the critic so the pass
+    # runs post-stage, pre-write. The node is a no-op when no staged or
+    # persisted rows are present in state, so other graph paths that do
+    # not feed it (document path, evidence-retriever path) cost nothing.
+    graph.add_node("cross_source_conflict", cross_source_conflict_node)
     graph.add_node("critic", critic_node)
     graph.add_node("finalize", finalize_node)
 
@@ -143,7 +151,10 @@ def build_graph(
     else:
         graph.add_edge("intake_extractor", "demographics")
         graph.add_edge("demographics", "critic")
-    graph.add_edge("structured", "critic")
+    # ─── Phase 9 Slice 9.7 — cross-source conflict ───
+    # structured → cross_source_conflict → critic.
+    graph.add_edge("structured", "cross_source_conflict")
+    graph.add_edge("cross_source_conflict", "critic")
     graph.add_edge("evidence_retriever", "critic")
     graph.add_edge("critic", "finalize")
     graph.add_edge("finalize", END)

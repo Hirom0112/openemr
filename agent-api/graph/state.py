@@ -30,6 +30,12 @@ class W2State(TypedDict):
     demographic_check: NotRequired[Dict[str, Any]]
     retrieval: NotRequired[Dict[str, Any]]
     conflict_pass: NotRequired[Dict[str, Any]]
+    # Phase 9 Slice 9.7 — cross-source conflict pass output (additive).
+    # Populated by ``graph.nodes.cross_source_conflict``. See W2_ARCH §5.11.
+    cross_source_conflicts: NotRequired[List[Dict[str, Any]]]
+    # Inputs read by the cross-source conflict node — also additive.
+    staged_lab_values: NotRequired[List[Dict[str, Any]]]
+    persisted_observations: NotRequired[List[Dict[str, Any]]]
     critic_decision: NotRequired[Literal["pass", "soft_warn", "hard_block"]]
     critic_violations: NotRequired[List[str]]
     soft_warns: NotRequired[List[Dict[str, Any]]]

@@ -363,6 +363,25 @@ agent_resolver_duration_seconds = Histogram(
 # ``grep agent_hl7_parse`` surfaces the catalog entry. Slice 9.10's §5.5
 # metric-table update in ARCHITECTURE.md cross-references the same names.
 
+# ── Phase 9 Slice 9.5 — XLSX parser ─────────────────────────────────────────
+# Metrics ``agent_xlsx_parse_total{outcome}``,
+# ``agent_xlsx_parse_duration_seconds{outcome}``, and
+# ``agent_xlsx_rows_extracted_total{sheet}`` are registered in
+# ``parsers/xlsx/_metrics.py`` rather than here. The importlinter contract
+# ``parsers-xlsx-isolated`` forbids ``parsers.xlsx -> agent``; centralising
+# in this module would invert that boundary. The marker stays so a single
+# ``grep agent_xlsx_parse`` surfaces the catalog entry. Mirrors the HL7
+# carve-out above. Slice 9.10's §5.5 metric-table update in
+# ARCHITECTURE.md cross-references the same names.
+
+# ── Phase 9 Slice 9.7 — cross-source conflict pass ──────────────────────────
+# Metric ``agent_cross_source_conflict_total{outcome, source_pair, tier}``
+# is registered in ``conflict/_metrics.py`` rather than here. The
+# importlinter contract ``conflict-is-mostly-leaf`` forbids
+# ``conflict -> agent``; centralising in this module would invert the
+# boundary. Mirrors the HL7 + staging carve-outs above so a single
+# ``grep agent_cross_source_conflict`` surfaces the catalog entry.
+
 # ── Phase 9 Slice 9.3 — staging (pending-write) ─────────────────────────────
 # Metrics ``agent_staging_transitions_total``, ``agent_staging_endpoint_total``,
 # ``agent_staging_endpoint_duration_seconds``, ``agent_staging_writer_total``,
@@ -372,3 +391,38 @@ agent_resolver_duration_seconds = Histogram(
 # ``staging-isolated`` forbids ``staging -> agent``; centralising in this
 # module would invert the boundary. Mirrors the HL7 carve-out above so a
 # single ``grep agent_staging_`` surfaces the catalog entry.
+
+# ── Phase 9 Slice 9.6 — DOC-lane multimodal expansion (DOCX + TIFF) ─────────
+# Doc-lane sits inside ``documents/``; the ``documents-isolated`` contract
+# permits ``documents -> agent`` (photo_preprocess and ocr_engine already
+# pull metrics from this module), so registering the per-format counters
+# here keeps the catalog in one place — symmetric with photo_preprocess and
+# unlike the HL7/staging/conflict carve-outs which are blocked by their own
+# contracts.
+#
+# Pair-of-pairs covering the two new doc-lane parsers:
+#   tiff_loader.extract_tiff_layout      — multi-page bitonal-fax OCR
+#   docx_loader.extract_docx_paragraphs  — python-docx paragraph + run walk
+#
+# Both call sites also emit a structured ``log_tool_outcome`` so latency
+# claims are falsifiable from both a log line and a metric (CLAUDE.md
+# "Observability — verifiable latency claims").
+agent_doc_parser_calls_total = Counter(
+    "agent_doc_parser_calls_total",
+    "Doc-lane parser invocations by format and outcome",
+    ["format", "outcome"],
+)
+
+agent_tiff_parse_duration_seconds = Histogram(
+    "agent_tiff_parse_duration_seconds",
+    "TIFF multi-page parse wall-clock seconds, labelled by outcome",
+    ["outcome"],
+    buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0),
+)
+
+agent_docx_parse_duration_seconds = Histogram(
+    "agent_docx_parse_duration_seconds",
+    "DOCX paragraph-walk parse wall-clock seconds, labelled by outcome",
+    ["outcome"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
+)
