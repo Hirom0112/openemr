@@ -321,3 +321,44 @@ agent_post_ingest_duration_seconds = Histogram(
     ["endpoint"],
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0),
 )
+
+# ── Phase 9 Slice 9.2 — quarantine + resolver ─────────────────────────────────
+# Pre-extraction patient resolver and quarantine state machine. Each tool /
+# transition emits one structured log + one Prometheus instrument per
+# CLAUDE.md "Observability — verifiable latency claims" (5.5). Marker comment
+# above is intentional — Slice 9.4/9.5/9.6 append below this block; do not
+# rewrite the section header without a parallel slice review.
+
+agent_quarantine_total = Counter(
+    "agent_quarantine_total",
+    "Quarantine rows created at /document/ingest by reason_code",
+    ["reason_code"],
+)
+
+agent_quarantine_transitions_total = Counter(
+    "agent_quarantine_transitions_total",
+    "Quarantine state-machine transitions, labelled by from/to/role",
+    ["from", "to", "role"],
+)
+
+agent_quarantine_resolver_decisions_total = Counter(
+    "agent_quarantine_resolver_decisions_total",
+    "Pre-extraction resolver outcomes by source format",
+    ["outcome", "format"],
+)
+
+agent_resolver_duration_seconds = Histogram(
+    "agent_resolver_duration_seconds",
+    "Pre-extraction resolver wall-clock seconds, labelled by format",
+    ["format"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
+)
+
+# ── Phase 9 Slice 9.4 — HL7 parser ──────────────────────────────────────────
+# Metrics ``agent_hl7_parse_total{message_type, outcome}`` and
+# ``agent_hl7_parse_duration_seconds{message_type}`` are registered in
+# ``parsers/hl7/_metrics.py`` rather than here. The importlinter contract
+# ``parsers-hl7-isolated`` forbids ``parsers.hl7 -> agent``; centralising
+# in this module would invert that boundary. The marker stays so a single
+# ``grep agent_hl7_parse`` surfaces the catalog entry. Slice 9.10's §5.5
+# metric-table update in ARCHITECTURE.md cross-references the same names.
