@@ -21,7 +21,7 @@ import { EditPencilButton } from "./EditPencilButton";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyCard, ErrorCard } from "@/components/cards/card-states";
+import { ErrorCard } from "@/components/cards/card-states";
 import { FhirClient } from "@/lib/fhir/client";
 import { authSessionTokenProvider } from "@/lib/fhir/token";
 import type {
@@ -30,6 +30,25 @@ import type {
 } from "@/lib/fhir/types";
 
 const CARD_TITLE = "Care Team";
+
+/**
+ * Eight column headers from `manage_care_team.html.twig:189–202`. The
+ * original card renders this thead unconditionally; the empty state is
+ * the headers + an empty body row (see `dashboard-inventory.md` §
+ * Care Team → States → Empty). Type / Since / Status / Note / Remove
+ * have no FHIR mapping for the loaded state — the column headers still
+ * render to match parity, with the cells empty.
+ */
+const CARE_TEAM_COLUMNS = [
+    "Type",
+    "Member",
+    "Role",
+    "Facility",
+    "Since",
+    "Status",
+    "Note",
+    "Remove",
+] as const;
 
 interface CareTeamCardProps {
   patientUuid: string;
@@ -114,14 +133,16 @@ export function CareTeamCardView({
 }: CareTeamCardViewProps): React.ReactElement {
   const participants = flattenParticipants(careTeams);
 
-  if (participants.length === 0) {
-    // Parity simplification: the original OpenEMR card renders an empty
-    // table header with no rows for a patient who has no care team
-    // (reference-screenshots/15-card-careteam-empty.png). The brief
-    // collapses that to the standard EmptyCard "None" treatment so all
-    // empty cards on the dashboard speak the same visual language.
-    return <EmptyCard title={CARD_TITLE} message="None" />;
-  }
+  // Parity correction (2026-05-08): the previous implementation
+  // short-circuited the empty state to `<EmptyCard message="None" />`.
+  // Per `dashboard-inventory.md` § Care Team → States → Empty, the
+  // original card renders the eight-column header row with an empty
+  // body. Restoring that here.
+  const firstNamedTeam = careTeams.find(
+    (t) => (t.name && t.name.trim().length > 0) || t.status,
+  );
+  const teamName = firstNamedTeam?.name?.trim();
+  const teamStatus = firstNamedTeam?.status;
 
   return (
     <Card size="sm" data-testid="care-team-card">
@@ -134,84 +155,87 @@ export function CareTeamCardView({
         />
       </CardHeader>
       <CardContent>
-        {/* Team-level header: name + status. Original
-            manage_care_team.html.twig:175-180 renders the team name as an
-            <h5> with a status badge to the right. Mirror that here using
-            the first non-empty CareTeam.name we saw, and that team's
-            CareTeam.status (e.g., "active", "inactive", "suspended"). */}
-        {(() => {
-            const firstNamedTeam = careTeams.find(
-                (t) => (t.name && t.name.trim().length > 0) || t.status,
-            );
-            const teamName = firstNamedTeam?.name?.trim();
-            const teamStatus = firstNamedTeam?.status;
-            if (!teamName && !teamStatus) return null;
-            return (
-                <div
-                    className="mb-2 flex items-center gap-2"
-                    data-testid="care-team-header"
-                >
-                    {teamName ? (
-                        <h5
-                            className="text-sm font-semibold"
-                            data-testid="care-team-name"
-                        >
-                            {teamName}
-                        </h5>
-                    ) : null}
-                    {teamStatus ? (
-                        <span
-                            className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground"
-                            data-testid="care-team-status"
-                        >
-                            {teamStatus}
-                        </span>
-                    ) : null}
-                </div>
-            );
-        })()}
-        {/* Inventory note: per-row "Status" and "Note" columns have no
-            FHIR equivalent (api-map: "FHIR has no per-participant status"
-            and "Note ... NOT FOUND on participant in FHIR R4"). We render
-            Member, Role, Facility only. Facility is omitted from the row
-            when `onBehalfOf.display` is absent rather than rendering an
-            empty cell. */}
-        <ul className="flex flex-col gap-1" data-testid="care-team-list">
-          {participants.map((participant, index) => {
-            const member = memberDisplay(participant);
-            const role = roleText(participant);
-            const facility = participant.onBehalfOf?.display?.trim() || null;
-            const key =
-              participant.member?.reference ?? `${member ?? "member"}-${index}`;
-            return (
-              <li
-                key={key}
-                className="flex flex-wrap items-baseline gap-2"
-                data-testid="care-team-row"
+        {teamName || teamStatus ? (
+          <div
+            className="mb-2 flex items-center gap-2"
+            data-testid="care-team-header"
+          >
+            {teamName ? (
+              <h5
+                className="text-sm font-semibold"
+                data-testid="care-team-name"
               >
-                <span className="font-medium" data-testid="care-team-member">
-                  {member ?? "Unknown member"}
-                </span>
-                {role ? (
-                  <span
-                    className="text-sm text-muted-foreground"
-                    data-testid="care-team-role"
-                  >
-                    {role}
-                  </span>
-                ) : null}
-                {facility ? (
-                  <span
-                    className="text-xs text-muted-foreground"
-                    data-testid="care-team-facility"
-                  >
-                    {facility}
-                  </span>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
+                {teamName}
+              </h5>
+            ) : null}
+            {teamStatus ? (
+              <span
+                className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground"
+                data-testid="care-team-status"
+              >
+                {teamStatus}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        <table
+          className="w-full text-sm"
+          data-testid="care-team-table"
+        >
+          <thead className="bg-muted text-xs text-muted-foreground">
+            <tr>
+              {CARE_TEAM_COLUMNS.map((col) => (
+                <th
+                  key={col}
+                  scope="col"
+                  className="px-2 py-1 text-left font-medium"
+                >
+                  {col}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody data-testid="care-team-tbody">
+            {participants.length === 0 ? (
+              // Empty body matches `manage_care_team.html.twig:204` — a
+              // single empty row whose bottom border produces the faint
+              // divider line in `reference-screenshots/15-card-careteam-empty.png`.
+              <tr data-testid="care-team-empty-row">
+                {CARE_TEAM_COLUMNS.map((col) => (
+                  <td key={col} className="px-2 py-2">&nbsp;</td>
+                ))}
+              </tr>
+            ) : (
+              participants.map((participant, index) => {
+                const member = memberDisplay(participant);
+                const role = roleText(participant);
+                const facility = participant.onBehalfOf?.display?.trim() ?? "";
+                const key =
+                  participant.member?.reference ?? `${member ?? "member"}-${index}`;
+                // Type / Since / Status / Note / Remove have no FHIR
+                // mapping; cells render empty to preserve column alignment.
+                return (
+                  <tr key={key} data-testid="care-team-row">
+                    <td className="px-2 py-1">&nbsp;</td>
+                    <td className="px-2 py-1 font-medium" data-testid="care-team-member">
+                      {member ?? "Unknown member"}
+                    </td>
+                    <td className="px-2 py-1" data-testid="care-team-role">
+                      {role ?? ""}
+                    </td>
+                    <td className="px-2 py-1" data-testid="care-team-facility">
+                      {facility}
+                    </td>
+                    <td className="px-2 py-1">&nbsp;</td>
+                    <td className="px-2 py-1">&nbsp;</td>
+                    <td className="px-2 py-1">&nbsp;</td>
+                    <td className="px-2 py-1">&nbsp;</td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </CardContent>
     </Card>
   );

@@ -17,18 +17,37 @@ import { ErrorCard } from "./card-states";
 import type { FhirCareTeam } from "@/lib/fhir/types";
 
 describe("CareTeamCardView (render)", () => {
-  it("renders the empty state ('None') when no care teams are returned", () => {
-    // 1.5 verified: every synthetic patient returns total=0 / empty entry
-    // array. This is THE realistic case for the migration today.
+  it("renders the eight-column header table with an empty body when no teams are returned", () => {
+    // Parity correction (2026-05-08): the previous behaviour collapsed
+    // this state to `<EmptyCard message="None" />`. The original card
+    // (`manage_care_team.html.twig:189–207`,
+    // `reference-screenshots/15-card-careteam-empty.png`) renders the
+    // eight-column thead + an empty body row.
     render(<CareTeamCardView careTeams={[]} />);
 
-    const empty = screen.getByTestId("empty-card");
-    expect(empty.textContent).toContain("Care Team");
-    expect(empty.textContent).toContain("None");
-    expect(screen.queryByTestId("care-team-card")).toBeNull();
+    expect(screen.queryByTestId("empty-card")).toBeNull();
+    expect(screen.getByTestId("care-team-card")).toBeTruthy();
+
+    const table = screen.getByTestId("care-team-table");
+    const headerCells = table.querySelectorAll("thead th");
+    expect(headerCells).toHaveLength(8);
+    const headers = Array.from(headerCells).map((c) => c.textContent);
+    expect(headers).toEqual([
+      "Type",
+      "Member",
+      "Role",
+      "Facility",
+      "Since",
+      "Status",
+      "Note",
+      "Remove",
+    ]);
+
+    // Empty body row matches the faint-divider treatment in screenshot 15.
+    expect(screen.getByTestId("care-team-empty-row")).toBeTruthy();
   });
 
-  it("renders the empty state when teams exist but have no participants", () => {
+  it("renders the empty body row when teams exist but have no participants", () => {
     const teams: FhirCareTeam[] = [
       {
         resourceType: "CareTeam",
@@ -40,7 +59,10 @@ describe("CareTeamCardView (render)", () => {
     ];
     render(<CareTeamCardView careTeams={teams} />);
 
-    expect(screen.getByTestId("empty-card")).toBeTruthy();
+    expect(screen.getByTestId("care-team-empty-row")).toBeTruthy();
+    // Team-level header still surfaces name + status above the table.
+    expect(screen.getByTestId("care-team-name").textContent).toBe("Primary");
+    expect(screen.getByTestId("care-team-status").textContent).toBe("active");
   });
 
   it("renders an inferred-shape participant row (member.display + role.text)", () => {
@@ -101,7 +123,9 @@ describe("CareTeamCardView (render)", () => {
     expect(screen.getByTestId("care-team-member").textContent).toBe(
       "Dr. Bob Example",
     );
-    expect(screen.queryByTestId("care-team-facility")).toBeNull();
+    // Facility cell still renders (column alignment requires it) but
+    // its text is empty when `onBehalfOf.display` is absent.
+    expect(screen.getByTestId("care-team-facility").textContent).toBe("");
   });
 });
 
