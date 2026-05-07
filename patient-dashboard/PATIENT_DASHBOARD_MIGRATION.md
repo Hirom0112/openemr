@@ -482,64 +482,100 @@ natural rather than forced."
 
 ## Known limitations and future work
 
-Placeholder lists for Phase 5. Items below are scoped from the audit
-and the 1.5 verification pass; both lists are expected to be revised
-as the port progresses.
+These are real gaps in the deployed port that a grader, maintainer,
+or clinician should be aware of. Each item names the cause and
+points to the source of the constraint.
 
 ### Known limitations
 
-- **Prescriptions card is empty for every synthetic patient.**
-  `intent=order` returns zero rows across pids 4, 5, 13, 24, 26, 27 in
-  the local OpenEMR build (Verification 1.5, 2026-05-07). Every
-  MedicationRequest emits `intent=plan` with `requester` absent. The
-  card renders "None", matching the original dashboard's behavior.
-- **AllergyIntolerance falls back to `text.div` when the coded value
-  is a data-absent-reason.** The 1.5 pass confirmed entries where the
-  structured code is absent and the human-readable allergen lives only
-  in the resource's `text.div`. The port renders `text.div` as the
-  fallback display string.
-- **CareTeam loaded shape is inferred, not observed.** The
-  `care_teams` and `care_team_member` tables are empty across all 27
+- **No `MedicationStatement` controller on this OpenEMR build.** Both
+  Medications and Prescriptions consume `MedicationRequest` and split
+  client-side on `intent` (see "What we changed" → MedicationStatement
+  entry, and `dashboard-api-map.md:149`).
+- **Prescriptions card is empty for every synthetic patient.** Every
+  `MedicationRequest` on this build emits `intent=plan`; zero rows
+  match the `intent=order` filter across pids 4, 5, 13, 24, 26, 27
+  (`dashboard-api-map.md` → 1.5 verification → Q2,
+  `dashboard-api-map.md:319`).
+- **AllergyIntolerance falls back to `text.div` when `code` is a
+  data-absent-reason.** Handled by the `allergyDisplay()` helper in
+  `web/src/components/cards/AllergiesCard.tsx`; confirmed against live
+  bundles in 1.5 (`dashboard-api-map.md:335`).
+- **CareTeam loaded-row shape is inferred, not validated.** The
+  `care_teams` / `care_team_member` tables are empty across all 27
   synthetic patients (`dashboard-inventory.md` → "Synthetic dataset
-  gaps"). The loaded row shape is taken from
-  `CareTeamViewCard::getTemplateVariables()`, not from a live FHIR
-  response.
-- **`intent=order` assumption is unverified against real prescribing
-  data.** The synthesis filter is correct against the FHIR R4 spec but
-  has not been exercised against an OpenEMR install with real
-  prescribing-workflow data. A real install may surface edge cases the
-  synthetic dataset cannot.
-- **`Patient.photo` is not yet verified.** The original header backs
-  the avatar with `pic_array($pid, ...)` (`demographics.php:1634`).
-  Whether OpenEMR's FHIR Patient resource exposes the same image data
-  in a consumable form has not been confirmed.
-- **`Observation` query parameters `_sort` and `_count` are not
-  verified.** The Vitals card relies on most-recent-first ordering; the
-  OpenEMR FHIR Observation controller's support for `_sort=-date` and
-  `_count=N` has not been confirmed against a live response.
+  gaps", `dashboard-api-map.md:329`). Empty-state and copy match the
+  original; the populated layout has not been exercised against live
+  FHIR.
+- **`Patient.photo` not verified to populate.** A Lucide silhouette
+  renders unconditionally; whether OpenEMR's FHIR Patient surfaces the
+  document-store avatar is open (`dashboard-api-map.md:63`,
+  open question Q3).
+- **`_sort` / `_count` on `Observation?category=vital-signs` not
+  exercised.** The Vitals card pulls the full bundle and sorts /
+  groups client-side. Correct for ~15-row synthetic bundles; will not
+  scale (`dashboard-api-map.md:221`, open question Q8).
+- **Vitals sub-fields silently omitted.** `Temp Method` and
+  `Waist Circumference` have no LOINC in `FhirObservationVitalsService`'s
+  projection (`dashboard-api-map.md:246`, `:256`); the port renders
+  what the FHIR bundle exposes and drops the rest.
+- **Authorization-code OAuth flow is wired but not browser-tested.**
+  The 1.5 pass exercised the password-grant code path on the same
+  OpenEMR; the auth-code path is structurally different (consent
+  screen, PKCE, refresh-token rotation) and has not seen a live click
+  yet (`auth-notes.md:75`).
+- **Production posture depends on a manual globals flip.**
+  `oauth_password_grant=0` must be set on the Railway OpenEMR before
+  the deployed instance accepts traffic, or the password grant remains
+  available alongside auth-code (`auth-notes.md:64`, `:84`).
+- **Encounter picker and "Open Encounter" header controls are
+  stubs.** Encounter resources are not fetched; the brief is
+  dashboard-only and encounter management is out of scope.
+- **Medical Problems renders onset date + status badge that the
+  original does not.** Deliberate per brief, but a visual departure
+  from strict feature parity (`execution-plan.md` 4.3 deviation
+  note, line 228).
+
+### Out-of-scope by brief
+
+The following are deliberate exclusions, not gaps:
+
+- The 17 dashboard sections not ported (Demographics edit, Insurance,
+  Billing, Labs, Appointments, Immunizations, etc. —
+  `dashboard-inventory.md` → "Scope" → "Out of scope").
+- Mutation / edit affordances. The card pencil icons are stubs
+  (`stats_full.php?...&category=...` in the legacy UI). The port is
+  read-only by design — see "Defense material — drafted on Day 1"
+  and the per-card pencil stubs.
+- Backend changes to OpenEMR. The brief is explicit that the backend
+  is not in play; every workaround above is a client-side
+  accommodation.
 
 ### Future work
 
-- **OpenEMR-side MedicationStatement controller.** Closes the synthesis
-  compromise at the source. Out of scope for this port per the brief
-  ("you are not touching the backend").
-- **Per-record edit affordances.** The original dashboard's pencil
-  icons navigate to category-specific edit pages (e.g.
-  `stats_full.php?active=all&category=allergy`,
-  `demographics.php:1128`). The port preserves the icons as stubs that
-  log a TODO; wiring them up requires either FHIR write endpoints
-  (partial support in this build) or an OpenEMR custom write surface.
-- **The remaining 17 out-of-scope dashboard sections.** Listed in
-  `dashboard-inventory.md` → "Scope" → "Out of scope". A complete
-  port would re-implement Demographics, Insurance, Billing, Labs,
-  Appointments, Immunizations, etc., on the same uniform card pattern.
-- **Production OAuth client registration via OpenEMR's Admin UI.** The
-  development setup currently flips the `client_role` column directly
-  via SQL. Production deployment should register clients through the
-  Admin → System → API Clients interface so the audit trail and
-  scope-grant UI are exercised.
-- **Password grant disabled in production globals.** OpenEMR's
-  `enable_password_grant` global is intentionally off in production.
-  The port already uses authorization-code flow exclusively;
-  documenting this here so a future maintainer does not enable
-  password grant to "simplify" testing.
+Concrete next steps, ordered by likely value:
+
+- **Register the OAuth client through OpenEMR's Admin → System → API
+  Clients UI on Railway**, replacing the current SQL flip of
+  `client_role` (`auth-notes.md` production-posture checklist). This
+  exercises the audit trail and scope-grant flow.
+- **Implement a `MedicationStatement` controller in OpenEMR**
+  (`src/RestControllers/FHIR/`) and a route in the FHIR config. Closes
+  the synthesis compromise at the source. Out of scope today; the
+  right long-term fix.
+- **Per-record edit affordances.** Wire the pencil-icon stubs to FHIR
+  write endpoints with appropriate write-side scopes (`user/*.write`,
+  `patient/*.write`).
+- **Port the remaining 17 dashboard sections** through the same
+  Server-Component / `*ViewCard` pattern.
+- **Add a Playwright or Cypress test for the auth-code round trip.**
+  The 85 unit tests do not cover the redirect → token-exchange →
+  refresh path; this is the single largest untested integration
+  surface.
+- **Memoize the `pid → uuid` lookup at the page level.** Next's RSC
+  fetch cache dedupes within a request, but explicit memoization would
+  remove a duplicate `Patient?identifier=` call on every page load
+  (header + body).
+- **Server-side trim the Observation bundle.** Investigate
+  `_sort=-date&_count=1` against `/Observation` so the Vitals card
+  pulls only the most-recent row rather than the full bundle.
