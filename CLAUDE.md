@@ -498,6 +498,9 @@ Preserve existing authors/copyrights when editing files.
 - Custom PHPStan rules in `tests/PHPStan/Rules/` enforce project conventions
   (forbidden globals, forbidden direct instantiations, namespace rules, etc.)
 - Commit messages are validated against Conventional Commits format in CI
+- Co-Pilot work (anything under `agent-api/`, `agent-ui/`, or
+  `interface/modules/custom_modules/oe-module-clinical-copilot/`) has its own
+  grounding doc at `agent-api/CLAUDE.md`. Read it before architectural changes.
 
 ## Key Documentation
 
