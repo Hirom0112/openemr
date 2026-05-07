@@ -39,12 +39,12 @@ migration doc updated, lights out.
 **Goal:** Complete spec — every field mapped to a verified endpoint.
 
 ### 1.1 — Have Claude Code draft inventory entries from screenshots (~45 min)
-- [ ] Send the inventory-drafting prompt
-- [ ] Claude Code drafts entries for the 7 in-scope sections
+- [x] Send the inventory-drafting prompt
+- [x] Claude Code drafts entries for the 7 in-scope sections
 - [ ] You review each entry against the corresponding screenshot
 - [ ] You add anything missing, fix anything wrong
-- [ ] Resolve all `TODO: confirm` comments
-- [ ] Commit
+- [ ] Resolve all `TODO: confirm` comments (markers present; user pass pending)
+- [x] Commit
 
 ### 1.2 — Register OAuth client in OpenEMR (~30 min)
 - [ ] Navigate to Administration → System → API Clients
