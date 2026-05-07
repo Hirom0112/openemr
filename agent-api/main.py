@@ -53,6 +53,10 @@ from agent.metrics import (
     agent_prewarm_runs_total,
     agent_prompt_cache_hits_total,
     agent_prompt_cache_misses_total,
+    agent_quarantine_resolver_decisions_total,
+    agent_quarantine_total,
+    agent_quarantine_transitions_total,
+    agent_resolver_duration_seconds,
     agent_tool_calls_total,
     agent_tool_misroute_total,
     agent_w2_classifier_confidence,
@@ -1519,8 +1523,9 @@ def _flatten_citations_from_dict(payload: dict[str, Any]) -> list[dict[str, Any]
 async def document_ingest(
     request: Request,
     file: UploadFile = File(...),
-    patient_id: str = Form(...),
+    patient_id: str | None = Form(None),
     doc_type_hint: str | None = Form(None),
+    format_hint: str | None = Form(None),
 ) -> Any:
     """Path B: inline upload of a clinical PDF (W2 §4.2 / §4.5 / §4.7).
 
@@ -1564,6 +1569,144 @@ async def document_ingest(
             },
         )
         raise HTTPException(status_code=413, detail=_DOC_INGEST_TOO_LARGE_MSG)
+
+    # 1a) Phase 9 Slice 9.2 — pre-extraction resolver. When the caller did
+    #     not supply a patient_id, dispatch the per-format probe and either
+    #     resolve to a chart patient (Pass → fall through with
+    #     match_provenance) or write a quarantine row (return 202). The
+    #     resolver is a leaf and must not import auth.fhir_client directly
+    #     (per .importlinter ``demographics-isolated``); we inject the
+    #     fhir search callable here.
+    match_provenance: str = "supplied"
+    if patient_id is None:
+        from demographics import resolver as _resolver
+        from demographics import quarantine as _quar
+
+        resolver_format = (format_hint or doc_type_hint or "pdf").lower()
+        _t0_resolver = time.perf_counter()
+        try:
+            outcome = await _resolver.resolve(
+                raw=pdf_bytes,
+                format_hint=resolver_format,
+                fhir_search=fhir_client.search,
+            )
+        except Exception as exc:
+            logger.error(
+                "document_ingest_resolver_failed",
+                extra={"request_id": rid, "format": resolver_format, "error": str(exc)},
+            )
+            agent_quarantine_resolver_decisions_total.labels(
+                outcome="error", format=resolver_format
+            ).inc()
+            raise HTTPException(status_code=500, detail="Patient resolver failed") from exc
+        finally:
+            agent_resolver_duration_seconds.labels(format=resolver_format).observe(
+                max(0.0, time.perf_counter() - _t0_resolver)
+            )
+
+        if isinstance(outcome, _resolver.Quarantine):
+            agent_quarantine_resolver_decisions_total.labels(
+                outcome="quarantine", format=resolver_format
+            ).inc()
+            agent_quarantine_total.labels(reason_code=outcome.reason_code).inc()
+            try:
+                pool = await audit_writer.get_pool()
+            except Exception as exc:
+                logger.error(
+                    "document_ingest_quarantine_pool_failed",
+                    extra={"request_id": rid, "error": str(exc)},
+                )
+                raise HTTPException(status_code=500, detail="Quarantine store unavailable") from exc
+
+            # Determine panel_id from the principal (per f41827440 precedent —
+            # one provider == one panel; production payloads may carry an
+            # explicit panel_id alongside provider_id in a future slice).
+            panel_id = provider_id
+            parsed_hint = (
+                outcome.candidate_hints[0]
+                if outcome.candidate_hints
+                else {"format": resolver_format}
+            )
+            doc_ref_placeholder = f"unresolved:{rid or 'no-rid'}"
+            try:
+                row = await _quar.quarantine_document(
+                    pool=pool,
+                    document_reference_id=doc_ref_placeholder,
+                    file_batch_id=None,
+                    panel_id=panel_id,
+                    parsed_identity=parsed_hint,
+                    candidate_matches=outcome.candidate_hints[1:],
+                    reason_code=outcome.reason_code,
+                )
+            except Exception as exc:
+                logger.error(
+                    "document_ingest_quarantine_write_failed",
+                    extra={"request_id": rid, "error": str(exc)},
+                )
+                raise HTTPException(status_code=500, detail="Quarantine write failed") from exc
+
+            logger.info(
+                "document_ingest_quarantined",
+                extra={
+                    "request_id": rid,
+                    "outcome": "quarantined",
+                    "reason_code": outcome.reason_code,
+                    "format": resolver_format,
+                    "quarantine_id": row["quarantine_id"],
+                    "panel_id": panel_id,
+                },
+            )
+            try:
+                await audit_writer.emit(
+                    AuditEvent(
+                        event_type="document_quarantined",
+                        request_id=rid,
+                        provider_id=provider_id,
+                        patient_id=None,
+                        outcome="blocked",
+                        detail_json={
+                            "reason_code": outcome.reason_code,
+                            "format": resolver_format,
+                            "candidates_seen": len(outcome.candidate_hints),
+                            "quarantine_id": row["quarantine_id"],
+                        },
+                    )
+                )
+            except Exception:  # pragma: no cover — audit must never break the request
+                pass
+
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "status": "quarantined",
+                    "quarantine_id": row["quarantine_id"],
+                    "document_reference_id": doc_ref_placeholder,
+                    "reason_code": outcome.reason_code,
+                    "hint_summary": parsed_hint,
+                    "expires_at": row["expires_at"],
+                },
+            )
+
+        # Pass — accept the resolved patient_id and continue the existing
+        # pipeline. The match_provenance field is echoed back in the
+        # response so the iframe can paint a "matched via name+DOB" chip.
+        agent_quarantine_resolver_decisions_total.labels(
+            outcome="pass", format=resolver_format
+        ).inc()
+        patient_id = outcome.patient_id
+        match_provenance = outcome.source
+        logger.info(
+            "document_ingest_resolver_pass",
+            extra={
+                "request_id": rid,
+                "format": resolver_format,
+                "patient_id": patient_id,
+                "match_provenance": match_provenance,
+                "candidates_seen": outcome.candidates_seen,
+            },
+        )
+    elif patient_id == "":
+        raise HTTPException(status_code=400, detail="patient_id must not be empty")
 
     # 2) Page guard — open via PyMuPDF. A non-PDF body raises here; we
     #    convert to a 400 so the client sees a clear error rather than a 500.
@@ -1670,6 +1813,7 @@ async def document_ingest(
             "citations": _flatten_citations_from_dict(cached),
             "bbox_layout": bbox_layout_payload,
             "soft_warns": soft_warns,
+            "match_provenance": match_provenance,
             "metadata": {
                 "cached": True,
                 "fhir_write_path": write_result.path,
@@ -1901,6 +2045,7 @@ async def document_ingest(
         "citations": _flatten_citations(extraction),
         "bbox_layout": bbox_layout_payload,
         "soft_warns": soft_warns,
+        "match_provenance": match_provenance,
         "metadata": {
             "cached": False,
             "fhir_write_path": write_result.path,
@@ -2602,3 +2747,299 @@ async def document_chat(
             patient_id=body.patient_id,
             extra={"endpoint": _endpoint_label, "outcome": _outcome},
         )
+
+
+# ─────────────────── Phase 9 Slice 9.2 — Quarantine ───────────────────
+# Panel-scoped quarantine queue for documents whose patient identity
+# could not be resolved pre-extraction. Each route:
+#   * derives panel_id from request_principal_var (f41827440 precedent),
+#   * emits one Prometheus instrument + one structured log line per
+#     CLAUDE.md "Observability — verifiable latency claims" rule, and
+#   * fires an audit row through ``audit_writer.emit`` for every state
+#     transition (PHI-safe detail_json: codes only, no values).
+# State machine + DB queries live in ``demographics/quarantine.py``.
+
+class _QuarantineMatchBody(BaseModel):
+    target_patient_id: str
+
+
+class _QuarantineRejectBody(BaseModel):
+    reason: str
+
+
+def _quarantine_principal() -> tuple[str, str]:
+    """Return ``(provider_id, panel_id)`` for the inbound request.
+
+    panel_id == provider_id today (one-provider == one-panel per the
+    persistent Sara demo panel; see f41827440). Future slices may add an
+    explicit panel claim to the JWT.
+    """
+    try:
+        principal = request_principal_var.get()
+    except LookupError:
+        principal = None
+    if principal is None:
+        return "unauthenticated", "unauthenticated"
+    pid = str(principal.get("provider_id") or principal.get("sub") or "system")
+    return pid, pid
+
+
+@app.get("/document/quarantine")
+async def list_quarantine(state: str | None = None) -> dict:
+    """Panel-scoped quarantine queue.
+
+    Optional ``state`` filter: ``unclaimed | claimed | matched | rejected``.
+    """
+    from demographics import quarantine as _quar
+
+    rid = request_id_var.get()
+    provider_id, panel_id = _quarantine_principal()
+    valid_states = {"unclaimed", "claimed", "matched", "rejected", "expired"}
+    if state is not None and state not in valid_states:
+        raise HTTPException(status_code=400, detail=f"invalid state filter: {state}")
+
+    pool = await audit_writer.get_pool()
+    rows = await _quar.list_quarantined(
+        pool=pool, panel_id=panel_id, state=state  # type: ignore[arg-type]
+    )
+    agent_quarantine_transitions_total.labels(
+        **{"from": "n/a", "to": "list", "role": "clinician"}
+    ).inc()
+    logger.info(
+        "quarantine_list",
+        extra={
+            "request_id": rid,
+            "provider_id": provider_id,
+            "panel_id": panel_id,
+            "state_filter": state,
+            "n_rows": len(rows),
+        },
+    )
+    return {"rows": rows, "panel_id": panel_id}
+
+
+@app.post("/document/quarantine/{quarantine_id}/claim")
+async def claim_quarantine(quarantine_id: str) -> dict:
+    """Acquire the 10-minute exclusive claim lock on a quarantined upload."""
+    from demographics import quarantine as _quar
+
+    rid = request_id_var.get()
+    provider_id, panel_id = _quarantine_principal()
+    pool = await audit_writer.get_pool()
+    try:
+        result = await _quar.claim(
+            pool=pool,
+            quarantine_id=quarantine_id,
+            claimer_provider_id=provider_id,
+        )
+    except _quar.QuarantineError as exc:
+        status = {"not_found": 404, "conflict": 409}.get(exc.code, 400)
+        agent_quarantine_transitions_total.labels(
+            **{"from": "unclaimed", "to": "error", "role": "clinician"}
+        ).inc()
+        logger.info(
+            "quarantine_claim_rejected",
+            extra={
+                "request_id": rid,
+                "quarantine_id": quarantine_id,
+                "code": exc.code,
+            },
+        )
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    agent_quarantine_transitions_total.labels(
+        **{"from": "unclaimed", "to": "claimed", "role": "clinician"}
+    ).inc()
+    logger.info(
+        "quarantine_claimed",
+        extra={
+            "request_id": rid,
+            "provider_id": provider_id,
+            "panel_id": panel_id,
+            "quarantine_id": result.quarantine_id,
+        },
+    )
+    try:
+        await audit_writer.emit(
+            AuditEvent(
+                event_type="document_quarantine_claimed",
+                request_id=rid,
+                provider_id=provider_id,
+                outcome="success",
+                detail_json={
+                    "quarantine_id": result.quarantine_id,
+                    "claim_ttl_seconds": _quar.CLAIM_TTL_SECONDS,
+                },
+            )
+        )
+    except Exception:  # pragma: no cover — audit must never break the request
+        pass
+
+    expires_iso: str | None = None
+    if result.claim_expires_at is not None:
+        try:
+            expires_iso = result.claim_expires_at.isoformat()
+        except Exception:
+            expires_iso = str(result.claim_expires_at)
+    return {
+        "quarantine_id": result.quarantine_id,
+        "state": result.state,
+        "claim_expires_at": expires_iso,
+    }
+
+
+@app.post("/document/quarantine/{quarantine_id}/match")
+async def match_quarantine(
+    quarantine_id: str, body: _QuarantineMatchBody
+) -> dict:
+    """Resolve a quarantined upload to ``target_patient_id``."""
+    from demographics import quarantine as _quar
+
+    rid = request_id_var.get()
+    provider_id, panel_id = _quarantine_principal()
+    pool = await audit_writer.get_pool()
+
+    # Panel inclusion check is best-effort — if the principal doesn't carry
+    # a panel patient list, we fall back to provider-id == panel-id check
+    # (no extra constraint). The match SQL itself enforces the claim gate.
+    panel_patient_ids: list[str] | None = None
+
+    try:
+        result = await _quar.match(
+            pool=pool,
+            quarantine_id=quarantine_id,
+            target_patient_id=body.target_patient_id,
+            claimer_provider_id=provider_id,
+            panel_patient_ids=panel_patient_ids,
+        )
+    except _quar.QuarantineError as exc:
+        status_map = {
+            "not_found": 404,
+            "conflict": 409,
+            "claim_violation": 409,
+            "claim_expired": 410,
+            "panel_violation": 403,
+            "invalid_target": 400,
+        }
+        status = status_map.get(exc.code, 400)
+        agent_quarantine_transitions_total.labels(
+            **{"from": "claimed", "to": "error", "role": "clinician"}
+        ).inc()
+        logger.info(
+            "quarantine_match_rejected",
+            extra={
+                "request_id": rid,
+                "quarantine_id": quarantine_id,
+                "code": exc.code,
+            },
+        )
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    agent_quarantine_transitions_total.labels(
+        **{"from": "claimed", "to": "matched", "role": "clinician"}
+    ).inc()
+    logger.info(
+        "quarantine_matched",
+        extra={
+            "request_id": rid,
+            "provider_id": provider_id,
+            "panel_id": panel_id,
+            "quarantine_id": result.quarantine_id,
+            "resolved_patient_id": result.resolved_patient_id,
+        },
+    )
+    try:
+        await audit_writer.emit(
+            AuditEvent(
+                event_type="document_quarantine_matched",
+                request_id=rid,
+                provider_id=provider_id,
+                patient_id=result.resolved_patient_id,
+                outcome="success",
+                detail_json={
+                    "quarantine_id": result.quarantine_id,
+                },
+            )
+        )
+    except Exception:  # pragma: no cover — audit must never break the request
+        pass
+
+    return {
+        "quarantine_id": result.quarantine_id,
+        "state": result.state,
+        "resolved_patient_id": result.resolved_patient_id,
+    }
+
+
+@app.post("/document/quarantine/{quarantine_id}/reject")
+async def reject_quarantine(
+    quarantine_id: str, body: _QuarantineRejectBody
+) -> dict:
+    """Permanently reject a quarantined upload."""
+    from demographics import quarantine as _quar
+
+    rid = request_id_var.get()
+    provider_id, panel_id = _quarantine_principal()
+    pool = await audit_writer.get_pool()
+    try:
+        result = await _quar.reject(
+            pool=pool,
+            quarantine_id=quarantine_id,
+            reason=body.reason,
+            claimer_provider_id=provider_id,
+            role="clinician",
+        )
+    except _quar.QuarantineError as exc:
+        status_map = {
+            "not_found": 404,
+            "conflict": 409,
+            "claim_violation": 409,
+            "claim_expired": 410,
+            "invalid_reason": 400,
+        }
+        status = status_map.get(exc.code, 400)
+        agent_quarantine_transitions_total.labels(
+            **{"from": "claimed", "to": "error", "role": "clinician"}
+        ).inc()
+        logger.info(
+            "quarantine_reject_rejected",
+            extra={
+                "request_id": rid,
+                "quarantine_id": quarantine_id,
+                "code": exc.code,
+            },
+        )
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    agent_quarantine_transitions_total.labels(
+        **{"from": "claimed", "to": "rejected", "role": "clinician"}
+    ).inc()
+    logger.info(
+        "quarantine_rejected",
+        extra={
+            "request_id": rid,
+            "provider_id": provider_id,
+            "panel_id": panel_id,
+            "quarantine_id": result.quarantine_id,
+        },
+    )
+    try:
+        await audit_writer.emit(
+            AuditEvent(
+                event_type="document_quarantine_rejected",
+                request_id=rid,
+                provider_id=provider_id,
+                outcome="success",
+                detail_json={
+                    "quarantine_id": result.quarantine_id,
+                    "reason_chars": len(body.reason or ""),
+                },
+            )
+        )
+    except Exception:  # pragma: no cover — audit must never break the request
+        pass
+
+    return {
+        "quarantine_id": result.quarantine_id,
+        "state": result.state,
+    }
