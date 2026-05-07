@@ -17,7 +17,7 @@
  * shape inferred only" warning.
  */
 import * as React from "react";
-import { Pencil } from "lucide-react";
+import { EditPencilButton } from "./EditPencilButton";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -127,18 +127,11 @@ export function CareTeamCardView({
     <Card size="sm" data-testid="care-team-card">
       <CardHeader className="grid-cols-[1fr_auto] items-center">
         <CardTitle className="text-primary">{CARD_TITLE}</CardTitle>
-        <button
-          type="button"
-          aria-label="Edit care team"
-          data-testid="care-team-edit"
-          // Read-only stub per brief — full wiring lives in a later phase.
-          onClick={() => {
-            console.log("[CareTeamCard] TODO: wire edit affordance");
-          }}
-          className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted"
-        >
-          <Pencil className="h-4 w-4" aria-hidden="true" />
-        </button>
+        <EditPencilButton
+          ariaLabel="Edit care team"
+          testId="care-team-edit"
+          cardName="CareTeamCard"
+        />
       </CardHeader>
       <CardContent>
         {/* Team-level header: name + status. Original

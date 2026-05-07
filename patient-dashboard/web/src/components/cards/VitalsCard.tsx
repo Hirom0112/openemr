@@ -34,7 +34,7 @@
  * Gloria), so client-side grouping is correct, deterministic, and cheap.
  */
 import * as React from "react";
-import { Pencil } from "lucide-react";
+import { EditPencilButton } from "./EditPencilButton";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -304,21 +304,15 @@ export function VitalsCardView({
     <Card size="sm" data-testid="vitals-card">
       <CardHeader className="grid-cols-[1fr_auto] items-center">
         <CardTitle className="text-primary">{CARD_TITLE}</CardTitle>
-        <button
-          type="button"
-          aria-label="Edit vitals"
-          data-testid="vitals-edit"
-          // Read-only stub per brief — full wiring lives in a later
-          // phase. Original dashboard uses a "Trend" link rather than
-          // a pencil; surfaced as a pencil here for chrome consistency
-          // with the other cards.
-          onClick={() => {
-            console.log("[VitalsCard] TODO: wire edit affordance");
-          }}
-          className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted"
-        >
-          <Pencil className="h-4 w-4" aria-hidden="true" />
-        </button>
+        {/* Read-only stub per brief — full wiring lives in a later
+            phase. Original dashboard uses a "Trend" link rather than
+            a pencil; surfaced as a pencil here for chrome consistency
+            with the other cards. */}
+        <EditPencilButton
+          ariaLabel="Edit vitals"
+          testId="vitals-edit"
+          cardName="VitalsCard"
+        />
       </CardHeader>
       <CardContent>
         {lastUpdated ? (

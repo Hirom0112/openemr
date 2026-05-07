@@ -17,7 +17,7 @@
  * `status === "active"` AND `requester != null`.
  */
 import * as React from "react";
-import { Pencil } from "lucide-react";
+import { EditPencilButton } from "./EditPencilButton";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -109,19 +109,11 @@ export function PrescriptionsCardView({
     <Card size="sm" data-testid="prescriptions-card">
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle>{CARD_TITLE}</CardTitle>
-        <button
-          type="button"
-          aria-label="Edit prescriptions (not yet wired)"
-          className="inline-flex h-7 w-7 items-center justify-center rounded text-primary hover:bg-muted"
-          data-testid="prescriptions-edit"
-          onClick={() => {
-            // STUB: Inventory says pencil opens an iframe modal at
-            // controller.php?prescription&list&id={pid}. Wiring deferred.
-            console.log("[PrescriptionsCard] TODO: open prescriptions edit modal");
-          }}
-        >
-          <Pencil className="h-4 w-4" aria-hidden="true" />
-        </button>
+        <EditPencilButton
+          ariaLabel="Edit prescriptions (not yet wired)"
+          testId="prescriptions-edit"
+          cardName="PrescriptionsCard"
+        />
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
         <ul className="flex flex-col gap-2" data-testid="prescriptions-list">

@@ -108,7 +108,7 @@ describe("PrescriptionsCardView (render)", () => {
 
     screen.getByTestId("prescriptions-edit").click();
     expect(log).toHaveBeenCalledWith(
-      "[PrescriptionsCard] TODO: open prescriptions edit modal",
+      "[PrescriptionsCard] TODO: wire edit affordance — read-only this phase",
     );
     log.mockRestore();
   });

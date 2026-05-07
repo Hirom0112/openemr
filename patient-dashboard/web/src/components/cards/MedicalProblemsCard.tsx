@@ -19,7 +19,7 @@
  * `filterActiveIssues()` carry-forward.
  */
 import * as React from "react";
-import { Pencil } from "lucide-react";
+import { EditPencilButton } from "./EditPencilButton";
 
 import {
   Card,
@@ -185,16 +185,11 @@ export function MedicalProblemsCardView({
           {/* Edit pencil — STUB. Per dashboard-inventory.md "Edit affordance":
               targets stats_full.php?active=all&category=medical_problem.
               Wiring deferred; click logs a TODO marker. */}
-          <button
-            type="button"
-            aria-label="Edit medical problems (not yet wired)"
-            data-testid="medical-problems-edit"
-            className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted"
-            // eslint-disable-next-line no-console
-            onClick={() => console.log("TODO: wire edit Medical Problems")}
-          >
-            <Pencil className="h-4 w-4" aria-hidden="true" />
-          </button>
+          <EditPencilButton
+            ariaLabel="Edit medical problems (not yet wired)"
+            testId="medical-problems-edit"
+            cardName="MedicalProblemsCard"
+          />
         </CardAction>
       </CardHeader>
       <CardContent>

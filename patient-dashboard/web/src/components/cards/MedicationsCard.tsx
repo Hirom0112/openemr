@@ -16,7 +16,7 @@
  * status-only rule verbatim and is the single source of truth.
  */
 import * as React from "react";
-import { Pencil } from "lucide-react";
+import { EditPencilButton } from "./EditPencilButton";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -102,18 +102,11 @@ export function MedicationsCardView({
         {/* Edit pencil — STUB. Per inventory: pencil icon -> load_location
             to stats_full.php?active=all&category=medication. Wiring to a
             real edit route is out of scope for the read-only card. */}
-        <button
-          type="button"
-          aria-label="Edit medications"
-          data-testid="medications-edit"
-          className="inline-flex h-6 w-6 items-center justify-center rounded text-primary hover:bg-muted"
-          onClick={() => {
-            // TODO(phase-5): wire to medications edit route.
-            console.log("[MedicationsCard] edit clicked (TODO: wire route)");
-          }}
-        >
-          <Pencil className="h-4 w-4" />
-        </button>
+        <EditPencilButton
+          ariaLabel="Edit medications"
+          testId="medications-edit"
+          cardName="MedicationsCard"
+        />
       </CardHeader>
       <CardContent className="flex flex-col divide-y">
         {medications.map((med) => {

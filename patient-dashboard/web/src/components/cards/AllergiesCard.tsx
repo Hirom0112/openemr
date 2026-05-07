@@ -17,7 +17,7 @@
  * this file deliberately does not touch page.tsx.
  */
 import * as React from "react";
-import { Pencil } from "lucide-react";
+import { EditPencilButton } from "./EditPencilButton";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -119,18 +119,11 @@ export function AllergiesCardView({
     <Card size="sm" data-testid="allergies-card">
       <CardHeader className="grid-cols-[1fr_auto] items-center">
         <CardTitle className="text-primary">{CARD_TITLE}</CardTitle>
-        <button
-          type="button"
-          aria-label="Edit allergies"
-          data-testid="allergies-edit"
-          // Read-only stub per brief — full wiring lives in a later phase.
-          onClick={() => {
-            console.log("[AllergiesCard] TODO: wire edit affordance");
-          }}
-          className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted"
-        >
-          <Pencil className="h-4 w-4" aria-hidden="true" />
-        </button>
+        <EditPencilButton
+          ariaLabel="Edit allergies"
+          testId="allergies-edit"
+          cardName="AllergiesCard"
+        />
       </CardHeader>
       <CardContent>
         <ul className="flex flex-col gap-1" data-testid="allergies-list">
