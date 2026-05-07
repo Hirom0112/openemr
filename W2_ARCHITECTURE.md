@@ -386,15 +386,66 @@ A worker that dies mid-graph leaves a stub row in `processing` indefinitely. The
 
 ### 4.8 Synthetic locator grammar (multimodal expansion)
 
-*TBD — Phase 9 Slice 9.10 lands this body. Skeleton placeholder so cross-references in Phase 9 slices resolve.*
+Three structured formats join the citation surface in Phase 9 (HL7 v2, XLSX, DOCX). All three round-trip through `documents` and present as `source_type="document"` so the brief renderer, click-to-source affordance, and audit dual-write (§9.4) keep one code path. The discriminator is the shape of `Citation.field_or_chunk_id`: bboxes for OCR'd PDFs/PNGs/TIFFs, **synthetic locators** for parser-emitted facts. A synthetic locator names a deterministic position inside the source artefact rather than a pixel rectangle — when the critic re-walks the source (§4.8 critic-resolution rules below), the same locator must resolve to the same byte range every time.
 
-Three formats join the citation surface in Phase 9 (DOCX, HL7 v2, XLSX). All three round-trip through `documents` and present as `source_type="document"`; the discriminator is in `Citation.field_or_chunk_id` per the synthetic locator grammar drafted by the Ingestion Architect:
+**BNF.** The grammar is `format-discriminator + key=value pairs`, separated by `|`. Each format's discriminator is implicit in the source artefact's MIME, but the leading key in the locator makes the surface self-describing:
 
-- HL7: `SEG-FIELD[.COMPONENT][.SUBCOMPONENT][|seg=N]` — e.g. `OBX-5|seg=4`, `PID-3.1`.
-- XLSX: `sheet=NAME|row=N|col=KEY` (header text or A1 letter).
-- DOCX: `para={N}` or `para={N}|run={M}` (1-based, document-order).
+```
+locator       ::= hl7_locator | xlsx_locator | docx_locator
+hl7_locator   ::= segment "-" field [ "." component [ "." subcomponent ] ] [ "|seg=" int ] [ "|rep=" int ]
+                ;  e.g.  "OBX-5|seg=4"          (value at fourth segment)
+                ;       "OBX-3.1|seg=4"         (test code subcomponent)
+                ;       "PID-3.1|seg=1|rep=2"   (second MRN repetition)
+xlsx_locator  ::= "sheet=" sheet_name "|row=" int "|col=" col_key
+                ;  col_key is the header label (e.g. "Value", "DOB"); when
+                ;  the sheet has no header row the A1 letter is used instead.
+                ;  e.g.  "sheet=Patient|row=4|col=Value"
+                ;       "sheet=Labs_Trend|row=12|col=Result"
+docx_locator  ::= "para=" int [ "|run=" int ]
+                ;  paragraph-level OR run-level. Both indices are 1-based,
+                ;  document-order, continuing across body + table-cell
+                ;  paragraphs (per `documents/docx_loader.py` walk order).
+                ;  e.g.  "para=13"      (whole paragraph)
+                ;       "para=13|run=2" (a single run inside a multi-run HPI)
+segment       ::= [A-Z]{3}              ; HL7 segment code: PID, OBX, OBR, NTE, …
+field         ::= int                   ; 1-based field index inside the segment
+component     ::= int                   ; 1-based component index inside the field
+subcomponent  ::= int                   ; 1-based subcomponent index
+sheet_name    ::= string                ; canonical sheet name from the workbook
+                                        ; (Patient, Medications, Labs_Trend, Care_Gaps)
+col_key       ::= string                ; header label OR A1 letter (e.g. "B", "AA")
+int           ::= [0-9]+
+```
 
-Fidelity check (§8.4) extends to `normalize(quote_or_value)` substring of `normalize(structured_layout[locator].raw_value)`. OCR-confidence-degradation (§8.7) collapses for HL7 + XLSX (deterministic parse — sentinel `ocr_confidence_range=(1.0, 1.0)`); DOCX retains real OCR-style confidence only when the prose extractor yields one.
+HL7's `seg=N` is the **parser-assigned absolute segment index** across the entire message — not OBX-1's set-ID. Vendors disagree on set-ID ordering when an ORU has multiple OBR groups; the absolute index that `hl7apy.children` iteration produces is the only stable handle. `rep=M` is required when the field is repeating (e.g. PID-3 patient-identifier list, OBX-5 multi-value); omitted otherwise.
+
+XLSX `col` prefers the header label because clinicians read by name, not by column letter. The fallback to A1 letters only fires on header-less sheets, and the parser logs a `xlsx_header_missing` warning so the operator notices.
+
+DOCX `para=N|run=M` is the run-level granularity used when a value lives inside a single `python-docx` run (e.g. `"LDL-C at 142 mg/dL"` where `142` is its own bolded run). Run granularity is preferred for value citations; paragraph granularity is the fallback when the value spans runs or the run boundary is ambiguous.
+
+**Critic-resolution rules.** The critic node validates that every synthetic locator points to real source content — not a hallucinated field path. Resolution is deterministic per format and runs at the same boundary as bbox resolution (§8.3):
+
+1. **HL7.** Re-parse the source `*.hl7` artefact, walk to `seg=N`, then index by field/component/subcomponent. The locator resolves iff (a) the absolute segment index exists, (b) the segment code at that index matches the locator's segment code, and (c) the field/component/subcomponent path produces a non-empty value. A locator that points past the end of the message, or to a segment whose code disagrees with the locator's segment token, is unresolvable and hard-blocks.
+2. **XLSX.** Re-open the workbook, look up the sheet by name, then the cell by `(row, col_key)`. The locator resolves iff (a) the sheet exists, (b) the row index is in range, and (c) `col_key` matches a header label on that sheet (or, on header-less sheets, is a valid A1 letter within the sheet's bounding range). Merged cells are rejected up-front by the parser (`XlsxMergedCellsRejected` in `parsers/xlsx/exceptions.py`), so the critic never sees a locator into a merged region.
+3. **DOCX.** Re-walk the `python-docx` document with the same continuing-counter convention `documents/docx_loader.py` uses. The locator resolves iff (a) `para=N` is in the paragraph list and (b) when `run=M` is present, the run exists inside that paragraph. Embedded-image runs are dropped by the loader and the loader emits one `docx_image_dropped` log line per image, so a locator that lands on a dropped image is unresolvable rather than silently mis-pointed.
+
+For all three formats, the critic re-runs the parser deterministically — there is no LLM in the resolution path. An unresolvable synthetic locator is treated identically to an unresolvable bbox: hard-block, no soft-warn alternative.
+
+**Fidelity-rule extension.** §8.4's value-fidelity rule extends from "OCR text inside the cited bbox" to "raw cell/segment value at the cited locator". Concretely:
+
+- For HL7: `normalize(Citation.quote_or_value)` must appear as a normalized substring of `normalize(hl7_message[locator].raw_value)`, where `raw_value` is the un-decoded HL7 field/component/subcomponent string.
+- For XLSX: same rule against `normalize(workbook[sheet][row, col].value)` (openpyxl's typed value, coerced to string).
+- For DOCX: same rule against `normalize(paragraph.text)` for paragraph-granularity citations, or `normalize(paragraph.runs[m-1].text)` for run-granularity citations.
+
+The numeric normalization grammar of §8.6 is reused unchanged — decimals, thousand separators, Unicode middle-dot, sub/superscripts, scientific notation. Whitespace and case rules are reused. The only thing that changes is the oracle: structured `raw_value` instead of OCR text inside a bbox. Derived-field dependency rules (§8.5) and the fidelity test surface (§8.8) extend to synthetic locators with no carve-outs.
+
+**OCR-confidence-degradation collapse.** The §8.7 low-confidence regime exists because OCR text on a 0.45-confidence scan is not a trustworthy oracle. HL7, XLSX, and DOCX have no OCR layer — `raw_value` comes from a deterministic parse of bytes the upstream system wrote. The collapse rule is:
+
+- For HL7 and XLSX, the parser sets a sentinel `ocr_confidence_range=(1.0, 1.0)` on the staged extraction; the critic treats document-level confidence as `1.0` and never enters the §8.7 low-confidence regime. Value-fidelity is always enforced.
+- For DOCX, the same sentinel applies for the paragraph-walk path. The only DOCX path that retains real OCR-style confidence is the prose-extractor sub-path that recovers values from a paragraph the parser could not structure (e.g. `"LDL-C at 142 mg/dL"` mined out of free-text HPI prose); in that path the prose extractor yields a per-fact `ocr_confidence` and §8.7 applies on a per-fact basis exactly as for OCR'd PDFs.
+- For TIFF (a rasterised fax routed through `documents/tiff_loader.py` + the existing OCR pipeline), nothing collapses — TIFFs go through `pytesseract`, carry real per-page OCR confidence, and §8.7's degradation rules apply unchanged.
+
+The collapse is a property of the parse path, not the format MIME. A handwritten DOCX fragment routed to the prose extractor degrades; a structured DOCX paragraph-walk locator does not.
 
 ---
 
@@ -623,7 +674,7 @@ State carries `{patient_id, request_id, file_bytes_ref, ocr_layout, classifier_v
 
 ### 5.11 Cross-source conflict pass (multimodal expansion)
 
-Three sources can derive Observations for the same fact: HL7 ORU OBX, XLSX `Labs_Trend` cell, DOCX prose-extracted lab — and a fourth, the patient's already-written FHIR Observations on the chart. The intra-document conflict pass (§5.7) only sees one document at a time; the cross-source pass closes the multi-source case. A `cross_source_conflict` graph node lands between `structured.py` and `critic.py` (see `graph/build.py` marker `# ─── Phase 9 Slice 9.7 — cross-source conflict ───`) and walks the union of staged `LabValue` rows and persisted Observations for the same patient. The detector is a pure deterministic function in `conflict/detector.py` — no I/O, no LLM, no audit emission — so the same logic is replayable under `pytest` with hand-crafted fixtures.
+Three sources can derive Observations for the same fact: HL7 ORU OBX, XLSX `Labs_Trend` cell, DOCX prose-extracted lab — each citing back through the synthetic locator grammar of §4.8 — and a fourth, the patient's already-written FHIR Observations on the chart. The intra-document conflict pass (§5.7) only sees one document at a time; the cross-source pass closes the multi-source case. A `cross_source_conflict` graph node lands between `structured.py` and `critic.py` (see `graph/build.py` marker `# ─── Phase 9 Slice 9.7 — cross-source conflict ───`) and walks the union of staged `LabValue` rows and persisted Observations for the same patient. The detector is a pure deterministic function in `conflict/detector.py` — no I/O, no LLM, no audit emission — so the same logic is replayable under `pytest` with hand-crafted fixtures.
 
 The pass uses two dedup tiers. **Tier-1 collapse** uses the §7.5 key `(normalized_test_name, normalized_value, normalized_unit)`. Rows that agree on this key represent the same fact observed in multiple sources; their citations merge into one canonical row and the merged group is logged + audited but no soft-warn fires. **Tier-2 conflict** uses the wider key `(normalized_test_name, collection_date, normalized_unit)` — when rows share that key but disagree on `normalized_value`, the pass emits a `conflict_soft_warn` group. The critic is unchanged: the node appends one entry to `state["soft_warns"]` per group with the banner *"Sources disagree on this value. Verify before acting."* and the existing critic forwards it. When `collection_date` is missing on either side, tier-2 cannot run and the pass emits a `date_missing` deferral rather than over-collapsing.
 
@@ -1320,6 +1371,9 @@ If a post-pilot owner is not named for any subsystem, the honest-degradation pri
 | `scheduler/` | APScheduler setup, watchdog job, meta-eval drift check |
 | `synonyms/` | Clinical synonym map loader and CI check |
 | `normalization/` | Numeric and unit normalization grammar |
+| `parsers/` | Deterministic parsers for structured formats (HL7 v2 in `parsers/hl7/`, Excel in `parsers/xlsx/`). Public surface: `parse_hl7(...)` and `parse_and_stage(...)` returning typed `LabReport` / `IntakeForm` / `DemographicUpdateEvent` / `ParsedWorkbook`. Owns its own Prometheus instruments in `parsers/{hl7,xlsx}/_metrics.py`. Importlinter contracts `parsers-hl7-isolated` and `parsers-xlsx-isolated` forbid `parsers.{hl7,xlsx} -> agent`; only the dispatcher in `main.py` may consume them. |
+| `staging/` | Pending-write state machine (staged → approved → written → failed) backed by `copilot_pending_extractions`. Public surface: `staging.store` for state transitions, `staging.router` for the FastAPI sub-app, `staging.watchdog` for the APScheduler reaper. Owns its own Prometheus instruments in `staging/_metrics.py`. Importlinter contract `staging-isolated` forbids `staging -> agent`. |
+| `conflict/` | Cross-source conflict detection (§5.11). Pure deterministic detector — no I/O, no LLM, no audit emission. Public surface: `conflict.detector.detect_cross_source_conflicts(staged, persisted) -> list[ConflictGroup]`. Owns its own Prometheus instrument in `conflict/_metrics.py`. Importlinter contract `conflict-is-mostly-leaf` forbids `conflict -> agent`. |
 
 ### 17.3 New routes (`agent-api/main.py`)
 

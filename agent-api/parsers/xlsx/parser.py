@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import time
 import zipfile
 from datetime import datetime, timezone
@@ -360,11 +361,22 @@ async def parse_and_stage(
         document_reference_id=document_reference_id,
         patient_id=patient_id,
     )
+    # PHP custom-observation upsert enforces ``r"^copilot-\d+-..."``; the
+    # caller passes a document_reference_id like ``"local:UUID"`` on the
+    # local-disk fallback path, which would fail the pattern. Mirror the
+    # legacy PDF/PNG branch's derivation (main.py ~line 2489): trailing
+    # integer if present, otherwise a hash-derived numeric id.
+    _trail = re.search(r"(\d+)$", document_reference_id or "")
+    _doc_id_numeric = (
+        _trail.group(1)
+        if _trail
+        else str(abs(hash(document_reference_id or "")) % (10**9))
+    )
     if parsed.intake_form is not None:
         for allergy in parsed.intake_form.allergies:
             anchor = allergy.citations[0] if allergy.citations else None
             await _writer.stage_allergy(
-                document_id=document_reference_id,
+                document_id=_doc_id_numeric,
                 patient_id=patient_id,
                 file_batch_id=file_batch_id,
                 document_reference_id=document_reference_id,
@@ -379,7 +391,7 @@ async def parse_and_stage(
         for lab_value in report.values:
             anchor = lab_value.citations[0] if lab_value.citations else None
             await _writer.stage_observation(
-                document_id=document_reference_id,
+                document_id=_doc_id_numeric,
                 patient_id=patient_id,
                 lab_value=lab_value,
                 file_batch_id=file_batch_id,
@@ -392,7 +404,7 @@ async def parse_and_stage(
     for task in parsed.pending_tasks:
         anchor = task.measure.citations[0] if task.measure.citations else None
         await _writer.stage_task(
-            document_id=document_reference_id,
+            document_id=_doc_id_numeric,
             patient_id=patient_id,
             file_batch_id=file_batch_id,
             document_reference_id=document_reference_id,

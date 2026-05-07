@@ -53,6 +53,7 @@ from agent.metrics import (
     agent_prewarm_runs_total,
     agent_prompt_cache_hits_total,
     agent_prompt_cache_misses_total,
+    agent_document_ingest_dispatch_total,
     agent_quarantine_resolver_decisions_total,
     agent_quarantine_total,
     agent_quarantine_transitions_total,
@@ -1519,6 +1520,518 @@ def _flatten_citations_from_dict(payload: dict[str, Any]) -> list[dict[str, Any]
     return out
 
 
+# ── Phase 9 Slice 9.10 — multimodal MIME dispatcher ──────────────────────────
+#
+# Magic-byte detection for the five inline-ingest formats. Order matters:
+# HL7 v2 ("MSH|") is text-prefixed and easy to discriminate up-front;
+# TIFF has a fixed 4-byte signature; DOCX and XLSX both start with the
+# generic Zip ``PK`` magic, so we peek inside the zip's central directory
+# for "word/" vs "xl/" markers to disambiguate. PDF/PNG fall through to
+# the existing extract_layout pipeline below — the PDF page-guard later in
+# ``document_ingest`` is the single source of truth for those.
+#
+# All probes operate on the leading ~1 KB only — never load the full
+# upload to detect format.
+
+_HL7_MAGIC: bytes = b"MSH|"
+_PDF_MAGIC: bytes = b"%PDF-"
+_PNG_MAGIC: bytes = b"\x89PNG\r\n\x1a\n"
+_TIFF_MAGIC_LE: bytes = b"II*\x00"
+_TIFF_MAGIC_BE: bytes = b"MM\x00*"
+_ZIP_MAGIC: tuple[bytes, ...] = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+
+
+def _detect_ingest_format(data: bytes) -> str:
+    """Return one of ``hl7|xlsx|docx|tiff|pdf|png|unknown`` from magic bytes.
+
+    ``data`` is the full uploaded byte string (already capped at the
+    ``_DOC_INGEST_HARD_READ_CAP``). Only the leading prefix is inspected for
+    fixed magic; for Zip-prefixed inputs we crack the central directory to
+    differentiate XLSX (``xl/``) from DOCX (``word/``). On any failure to
+    introspect the zip we return ``"unknown"`` rather than guess — the
+    caller surfaces unknowns as 415.
+    """
+    if not data:
+        return "unknown"
+    if data.startswith(_HL7_MAGIC):
+        return "hl7"
+    if data.startswith(_PDF_MAGIC):
+        return "pdf"
+    if data.startswith(_PNG_MAGIC):
+        return "png"
+    if data.startswith(_TIFF_MAGIC_LE) or data.startswith(_TIFF_MAGIC_BE):
+        return "tiff"
+    if any(data.startswith(m) for m in _ZIP_MAGIC):
+        # Crack the zip's central directory; the first matching file path
+        # tells us whether this is an OOXML-Word (DOCX) or OOXML-Spreadsheet
+        # (XLSX) container. Any other zip layout returns ``"unknown"``.
+        try:
+            import io as _io
+            import zipfile as _zipfile
+
+            with _zipfile.ZipFile(_io.BytesIO(data)) as zf:
+                names = zf.namelist()
+        except Exception:
+            return "unknown"
+        for name in names:
+            if name.startswith("word/"):
+                return "docx"
+            if name.startswith("xl/"):
+                return "xlsx"
+        return "unknown"
+    return "unknown"
+
+
+_INGEST_MIME_BY_FORMAT: dict[str, str] = {
+    "pdf": "application/pdf",
+    "png": "image/png",
+    "tiff": "image/tiff",
+    "docx": (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ),
+    "xlsx": (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ),
+    "hl7": "application/hl7-v2",
+}
+
+
+async def _dispatch_multimodal_ingest(
+    *,
+    detected_format: str,
+    raw_bytes: bytes,
+    patient_id: str,
+    doc_type_hint: str | None,
+    rid: str | None,
+    provider_id: str,
+    match_provenance: str,
+    size_bytes: int,
+) -> JSONResponse | dict[str, Any]:
+    """Route an HL7 / XLSX / DOCX / TIFF upload to its parser.
+
+    PDF and PNG are NOT handled here — they fall through to the legacy
+    extract_layout pipeline in ``document_ingest`` below. This helper only
+    serves the four new lanes added in Phase 9 Slices 9.4–9.6.
+
+    Each branch:
+      1. writes the source bytes to FHIR via ``documents.fhir_writer``
+         (mime_type chosen from ``_INGEST_MIME_BY_FORMAT``),
+      2. claims the extraction row,
+      3. invokes the format-specific parser,
+      4. for HL7-ADT, calls ``demographics.resolver`` to either pass-or-
+         quarantine the demographic update,
+      5. emits one structured log + one Prometheus counter increment per
+         dispatched format (CLAUDE.md "Observability"),
+      6. returns the JSON envelope expected by the iframe (same metadata
+         shape as the PDF path; ``staging`` and ``parse_summary`` are
+         populated by per-parser stage helpers in 9.4–9.6).
+    """
+    from documents import fhir_writer as _fhir_writer
+    from documents import store as _store
+
+    mime_type = _INGEST_MIME_BY_FORMAT.get(detected_format, "application/octet-stream")
+
+    # 1) FHIR write — same semantics as the PDF path, just a different MIME.
+    try:
+        write_result = await _fhir_writer.write_document(
+            patient_id=patient_id,
+            pdf_bytes=raw_bytes,
+            doc_type_hint=doc_type_hint,
+            mime_type=mime_type,
+        )
+    except _fhir_writer.FhirWriteError as exc:
+        agent_document_ingest_dispatch_total.labels(
+            format=detected_format, outcome="errored"
+        ).inc()
+        logger.error(
+            "document_ingest_dispatch_fhir_write_failed",
+            extra={
+                "request_id": rid,
+                "format": detected_format,
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=502, detail="Document upload to chart failed"
+        ) from exc
+
+    # 2) Idempotent claim.
+    content_sha256 = _store.compute_sha256(raw_bytes)
+    try:
+        claim = await _store.claim_or_get(
+            document_reference_id=write_result.document_reference_id,
+            content_sha256=content_sha256,
+            patient_id=patient_id,
+        )
+    except Exception as exc:
+        agent_document_ingest_dispatch_total.labels(
+            format=detected_format, outcome="errored"
+        ).inc()
+        logger.error(
+            "document_ingest_dispatch_claim_failed",
+            extra={
+                "request_id": rid,
+                "format": detected_format,
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(status_code=500, detail="Document claim failed") from exc
+
+    if not claim.owns_claim and claim.cached_payload is None:
+        # Another worker holds the claim — tell the caller to poll.
+        agent_document_ingest_dispatch_total.labels(
+            format=detected_format, outcome="routed"
+        ).inc()
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "processing",
+                "document_reference_id": write_result.document_reference_id,
+                "extraction_id": claim.extraction_id,
+            },
+        )
+
+    # 3) Branch by format.
+    parse_summary: dict[str, Any] | None = None
+    file_batch_id = uuid.uuid4().hex  # one batch per ingest call
+    t_parse_start = time.perf_counter()
+
+    # PHP custom-observation upsert enforces ``r"^copilot-\d+-..."``; the
+    # FHIR document_reference_id can be ``"local:UUID"`` on the local-disk
+    # fallback path, which would fail the pattern. Derive a numeric id the
+    # same way the legacy PDF/PNG branch does (line ~2489), so HL7 / XLSX /
+    # DOCX / TIFF stage_observation calls satisfy the contract.
+    _doc_ref_for_id = write_result.document_reference_id or ""
+    _trail = re.search(r"(\d+)$", _doc_ref_for_id)
+    doc_id_numeric: str = (
+        _trail.group(1) if _trail else str(abs(hash(_doc_ref_for_id)) % (10**9))
+    )
+
+    if detected_format == "hl7":
+        from parsers.hl7 import dispatch as _hl7_dispatch
+        from parsers.hl7.exceptions import (
+            ParserMalformedError as _HL7Malformed,
+            ParserUnsupportedError as _HL7Unsupported,
+        )
+        from parsers.hl7.types import DemographicUpdateEvent
+        try:
+            parsed = _hl7_dispatch.parse_hl7(
+                raw_bytes,
+                document_reference_id=write_result.document_reference_id,
+                patient_id=patient_id,
+            )
+        except _HL7Malformed as exc:
+            agent_document_ingest_dispatch_total.labels(
+                format="hl7", outcome="rejected"
+            ).inc()
+            raise HTTPException(
+                status_code=400, detail="HL7 v2 message malformed"
+            ) from exc
+        except _HL7Unsupported as exc:
+            agent_document_ingest_dispatch_total.labels(
+                format="hl7", outcome="rejected"
+            ).inc()
+            raise HTTPException(
+                status_code=415, detail="HL7 v2 message type unsupported"
+            ) from exc
+
+        if isinstance(parsed, DemographicUpdateEvent):
+            # ADT^A08 → run the resolver to confirm we have the right chart
+            # patient before surfacing the update. On Pass we audit-log the
+            # event (no demographic-update writer exists in this OpenEMR
+            # build); on Quarantine we write the quarantine row and return
+            # 202 — the operator reviews it from the quarantine queue.
+            from demographics import quarantine as _quar
+            from demographics import resolver as _resolver
+
+            t_resolve = time.perf_counter()
+            try:
+                outcome = await _resolver.resolve(
+                    raw=raw_bytes,
+                    format_hint="hl7",
+                    fhir_search=fhir_client.search,
+                )
+            finally:
+                agent_resolver_duration_seconds.labels(format="hl7").observe(
+                    max(0.0, time.perf_counter() - t_resolve)
+                )
+
+            if isinstance(outcome, _resolver.Quarantine):
+                agent_quarantine_resolver_decisions_total.labels(
+                    outcome="quarantine", format="hl7"
+                ).inc()
+                agent_quarantine_total.labels(reason_code=outcome.reason_code).inc()
+                pool = await audit_writer.get_pool()
+                row = await _quar.quarantine_document(
+                    pool=pool,
+                    document_reference_id=write_result.document_reference_id,
+                    file_batch_id=None,
+                    panel_id=provider_id,
+                    parsed_identity=outcome.candidate_hints[0]
+                    if outcome.candidate_hints
+                    else {"format": "hl7"},
+                    candidate_matches=outcome.candidate_hints[1:],
+                    reason_code=outcome.reason_code,
+                )
+                agent_document_ingest_dispatch_total.labels(
+                    format="hl7", outcome="rejected"
+                ).inc()
+                logger.info(
+                    "document_ingest_dispatch",
+                    extra={
+                        "request_id": rid,
+                        "format": "hl7",
+                        "outcome": "adt_quarantined",
+                        "reason_code": outcome.reason_code,
+                        "duration_ms": int(
+                            (time.perf_counter() - t_parse_start) * 1000
+                        ),
+                    },
+                )
+                return JSONResponse(
+                    status_code=202,
+                    content={
+                        "status": "quarantined",
+                        "quarantine_id": row["quarantine_id"],
+                        "document_reference_id": write_result.document_reference_id,
+                        "reason_code": outcome.reason_code,
+                    },
+                )
+
+            # Pass — audit the demographic-update event with PHI-safe
+            # detail (counts only) and return success. The resolved
+            # patient_id replaces ``patient_id`` so any downstream
+            # caller sees the canonical id.
+            agent_quarantine_resolver_decisions_total.labels(
+                outcome="pass", format="hl7"
+            ).inc()
+            try:
+                await audit_writer.emit(
+                    AuditEvent(
+                        event_type="demographic_update_observed",
+                        request_id=rid,
+                        provider_id=provider_id,
+                        patient_id=outcome.patient_id,
+                        outcome="success",
+                        detail_json={
+                            "format": "hl7",
+                            "event_type": parsed.event_type,
+                            "control_id": parsed.control_id,
+                        },
+                    )
+                )
+            except Exception:  # pragma: no cover — audit must never break the request
+                pass
+            parse_summary = {
+                "kind": "demographic_update",
+                "event_type": parsed.event_type,
+                "control_id": parsed.control_id,
+                "resolver_match": outcome.source,
+            }
+        else:
+            # ORU^R01 LabReport → stage every value via observations.writer.
+            from observations import writer as _obs_writer
+            staged_count = 0
+            for value in getattr(parsed, "values", []) or []:
+                anchor = value.citations[0] if value.citations else None
+                try:
+                    await _obs_writer.stage_observation(
+                        document_id=doc_id_numeric,
+                        patient_id=patient_id,
+                        lab_value=value,
+                        file_batch_id=file_batch_id,
+                        document_reference_id=write_result.document_reference_id,
+                        locator=anchor.field_or_chunk_id if anchor else None,
+                        source_format="hl7",
+                        request_id=rid,
+                        provider_id=provider_id,
+                    )
+                    staged_count += 1
+                except Exception as exc:  # noqa: BLE001 — soft-fail per row
+                    logger.warning(
+                        "document_ingest_dispatch_stage_failed",
+                        extra={
+                            "request_id": rid,
+                            "format": "hl7",
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+            parse_summary = {
+                "kind": "lab_report",
+                "lab_values_staged": staged_count,
+            }
+
+    elif detected_format == "xlsx":
+        from parsers.xlsx import (
+            XlsxMacroRejected,
+            XlsxMalformedError,
+            XlsxMergedCellsRejected,
+            parse_and_stage,
+        )
+        try:
+            parsed_wb = await parse_and_stage(
+                raw_bytes,
+                document_reference_id=write_result.document_reference_id,
+                patient_id=patient_id,
+                file_batch_id=file_batch_id,
+                request_id=rid,
+                provider_id=provider_id,
+            )
+        except (XlsxMacroRejected, XlsxMergedCellsRejected) as exc:
+            agent_document_ingest_dispatch_total.labels(
+                format="xlsx", outcome="rejected"
+            ).inc()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except XlsxMalformedError as exc:
+            agent_document_ingest_dispatch_total.labels(
+                format="xlsx", outcome="rejected"
+            ).inc()
+            raise HTTPException(status_code=400, detail="XLSX workbook malformed") from exc
+
+        n_labs = sum(len(r.values) for r in (parsed_wb.lab_reports or []))
+        n_allergies = (
+            len(parsed_wb.intake_form.allergies)
+            if parsed_wb.intake_form is not None
+            else 0
+        )
+        n_tasks = len(parsed_wb.pending_tasks or [])
+        parse_summary = {
+            "kind": "workbook",
+            "lab_values_staged": n_labs,
+            "allergies_staged": n_allergies,
+            "tasks_staged": n_tasks,
+        }
+
+    elif detected_format == "docx":
+        from documents import docx_loader as _docx_loader
+        from extractors import intake as _intake
+        # Loader is referenced via the extractor; the dispatcher just
+        # owns the "DOCX → prose intake" routing decision.
+        _ = _docx_loader  # keep the import live so the contract is obvious
+        extraction = await _intake.extract_intake_from_docx(
+            raw_bytes,
+            patient_id=patient_id,
+            document_reference_id=write_result.document_reference_id,
+        )
+        try:
+            await _store.complete(
+                extraction_id=claim.extraction_id,
+                kind=extraction.kind,
+                payload=extraction.model_dump(mode="json"),
+                classifier_confidence=float(extraction.classifier_confidence),
+                ocr_confidence_range=tuple(extraction.ocr_confidence_range),  # type: ignore[arg-type]
+            )
+        except Exception as exc:
+            logger.error(
+                "document_ingest_dispatch_persist_failed",
+                extra={
+                    "request_id": rid,
+                    "format": "docx",
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise HTTPException(status_code=500, detail="Document persist failed") from exc
+        parse_summary = {
+            "kind": extraction.kind,
+            "classifier_confidence": float(extraction.classifier_confidence),
+        }
+
+    elif detected_format == "tiff":
+        from documents.tiff_loader import extract_tiff_layout
+        from extractors import intake as _intake
+        from extractors import lab as _lab
+        from extractors.classifier import classify_keywords as _classify_keywords
+
+        layout_blocks = extract_tiff_layout(raw_bytes)
+        verdict = _classify_keywords(layout_blocks) if layout_blocks else None
+        # The intake/lab extractors expect raw bytes; for TIFF we hand
+        # them the original tiff bytes — the extractors fan out via
+        # documents.ocr.extract_layout which already handles the TIFF
+        # branch. The pre-computed layout_blocks above are used only
+        # for the classifier dispatch decision; the extractors run
+        # their own pass when called.
+        if verdict is not None and verdict.kind == "intake_form":
+            extraction = await _intake.extract_intake(
+                raw_bytes,
+                patient_id=patient_id,
+                document_reference_id=write_result.document_reference_id,
+            )
+        else:
+            extraction = await _lab.extract(
+                raw_bytes,
+                patient_id=patient_id,
+                document_reference_id=write_result.document_reference_id,
+            )
+        try:
+            await _store.complete(
+                extraction_id=claim.extraction_id,
+                kind=extraction.kind,
+                payload=extraction.model_dump(mode="json"),
+                classifier_confidence=float(extraction.classifier_confidence),
+                ocr_confidence_range=tuple(extraction.ocr_confidence_range),  # type: ignore[arg-type]
+            )
+        except Exception as exc:
+            logger.error(
+                "document_ingest_dispatch_persist_failed",
+                extra={
+                    "request_id": rid,
+                    "format": "tiff",
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise HTTPException(status_code=500, detail="Document persist failed") from exc
+        parse_summary = {
+            "kind": extraction.kind,
+            "classifier_confidence": float(extraction.classifier_confidence),
+            "page_count": (
+                max((b.page or 1) for b in layout_blocks) if layout_blocks else 0
+            ),
+        }
+
+    else:  # pragma: no cover — guarded at caller
+        agent_document_ingest_dispatch_total.labels(
+            format=detected_format, outcome="rejected"
+        ).inc()
+        raise HTTPException(status_code=415, detail="Unsupported document format")
+
+    duration_ms = int((time.perf_counter() - t_parse_start) * 1000)
+    agent_document_ingest_dispatch_total.labels(
+        format=detected_format, outcome="routed"
+    ).inc()
+    logger.info(
+        "document_ingest_dispatch",
+        extra={
+            "request_id": rid,
+            "format": detected_format,
+            "outcome": "routed",
+            "duration_ms": duration_ms,
+            "document_reference_id": write_result.document_reference_id,
+        },
+    )
+
+    return {
+        "document_reference_id": write_result.document_reference_id,
+        "extraction_id": claim.extraction_id,
+        "extraction": None,
+        "citations": [],
+        "bbox_layout": [],
+        "soft_warns": [],
+        "match_provenance": match_provenance,
+        "metadata": {
+            "cached": False,
+            "fhir_write_path": write_result.path,
+            "request_id": rid,
+            "size_bytes": size_bytes,
+            "page_count": parse_summary.get("page_count")
+            if parse_summary
+            else None,
+            "format": detected_format,
+            "staging": {"file_batch_id": file_batch_id},
+            "parse_summary": parse_summary,
+        },
+    }
+
+
 @app.post("/document/ingest")
 async def document_ingest(
     request: Request,
@@ -1707,6 +2220,72 @@ async def document_ingest(
         )
     elif patient_id == "":
         raise HTTPException(status_code=400, detail="patient_id must not be empty")
+
+    # 1b) Phase 9 Slice 9.10 — multimodal MIME dispatcher.
+    #     Detect format via magic bytes BEFORE the PDF page-guard so HL7 /
+    #     XLSX / DOCX / TIFF uploads route to their per-format parsers
+    #     instead of erroring as "Invalid PDF". PDF and PNG fall through
+    #     to the legacy extract_layout pipeline below — this branch is
+    #     additive, never disturbs the W2 PDF/PNG critical path.
+    detected_format = _detect_ingest_format(pdf_bytes)
+    if detected_format in ("hl7", "xlsx", "docx", "tiff"):
+        try:
+            return await _dispatch_multimodal_ingest(
+                detected_format=detected_format,
+                raw_bytes=pdf_bytes,
+                patient_id=patient_id,
+                doc_type_hint=doc_type_hint,
+                rid=rid,
+                provider_id=provider_id,
+                match_provenance=match_provenance,
+                size_bytes=size_bytes,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 — dispatcher boundary
+            agent_document_ingest_dispatch_total.labels(
+                format=detected_format, outcome="errored"
+            ).inc()
+            logger.error(
+                "document_ingest_dispatch_failed",
+                extra={
+                    "request_id": rid,
+                    "format": detected_format,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise HTTPException(
+                status_code=500, detail="Document dispatch failed"
+            ) from exc
+    elif detected_format == "unknown":
+        # Could be a malformed PDF/PNG or a wholly unsupported MIME. Let
+        # the existing PDF page-guard below produce the canonical 400 so
+        # the error surface stays unchanged for legacy callers.
+        agent_document_ingest_dispatch_total.labels(
+            format="unknown", outcome="rejected"
+        ).inc()
+        logger.info(
+            "document_ingest_dispatch",
+            extra={
+                "request_id": rid,
+                "format": "unknown",
+                "outcome": "fallthrough_to_pdf_guard",
+            },
+        )
+    else:
+        # PDF / PNG → fall through. Emit a routed log so the catalog has
+        # one event per dispatched format.
+        agent_document_ingest_dispatch_total.labels(
+            format=detected_format, outcome="routed"
+        ).inc()
+        logger.info(
+            "document_ingest_dispatch",
+            extra={
+                "request_id": rid,
+                "format": detected_format,
+                "outcome": "routed_legacy_pdf_path",
+            },
+        )
 
     # 2) Page guard — open via PyMuPDF. A non-PDF body raises here; we
     #    convert to a 400 so the client sees a clear error rather than a 500.

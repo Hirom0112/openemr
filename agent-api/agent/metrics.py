@@ -426,3 +426,16 @@ agent_docx_parse_duration_seconds = Histogram(
     ["outcome"],
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
 )
+
+# ── Phase 9 Slice 9.10 — /document/ingest MIME dispatcher ────────────────────
+# Increments once per dispatched format at the entry of /document/ingest,
+# *after* magic-byte detection but *before* any per-format parser is invoked.
+# ``format`` ∈ {"pdf", "png", "hl7", "xlsx", "docx", "tiff", "unknown"};
+# ``outcome`` ∈ {"routed", "rejected", "errored"}. Paired 1:1 with the
+# ``document_ingest_dispatch`` structured log event in ``main.py`` per the
+# CLAUDE.md "Observability — verifiable latency claims" rule.
+agent_document_ingest_dispatch_total = Counter(
+    "agent_document_ingest_dispatch_total",
+    "Document ingest MIME dispatcher decisions, labelled by detected format",
+    ["format", "outcome"],
+)

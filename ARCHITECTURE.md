@@ -435,6 +435,66 @@ The observability primitives that satisfy §5.4 live in a dedicated leaf package
 | `agent_w2_ocr_confidence` | Histogram | `doc_type` |
 | `agent_watchdog_last_run_timestamp_seconds` | Gauge | — |
 
+**Phase 9 multimodal-expansion metrics (slices 9.2 / 9.3 / 9.4 / 9.5 / 9.6 / 9.7).** New formats (HL7 v2, XLSX, DOCX, TIFF), the pre-extraction resolver + quarantine, the pending-write staging state machine, and the cross-source conflict pass each emit one Prometheus instrument per call site per the CLAUDE.md "Observability — verifiable latency claims" rule. Counters and histograms registered outside `agent/metrics.py` are owned by their package's `_metrics.py` module — `agent/metrics.py` carries marker-comment blocks pointing operators at each carve-out (lines ~325, 357, 366, 377, 385, 395). The carve-outs exist because importlinter contracts (`parsers-hl7-isolated`, `parsers-xlsx-isolated`, `staging-isolated`, `conflict-is-mostly-leaf`) forbid those packages from importing `agent`.
+
+| Metric | Type | Labels | Emitted from |
+|---|---|---|---|
+| `agent_quarantine_total` | Counter | `reason_code` | `agent/metrics.py` (used by `main.py::document_ingest` + `demographics/quarantine.py`) |
+| `agent_quarantine_transitions_total` | Counter | `from`, `to`, `role` | `demographics/quarantine.py` state-machine transitions |
+| `agent_quarantine_resolver_decisions_total` | Counter | `outcome`, `format` | `demographics/resolver.py` (via `main.py::document_ingest`) |
+| `agent_resolver_duration_seconds` | Histogram | `format` | `demographics/resolver.py` (via `main.py::document_ingest`) |
+| `agent_hl7_parse_total` | Counter | `message_type`, `outcome` | `parsers/hl7/_metrics.py` (consumed by `parsers/hl7/dispatch.py`) |
+| `agent_hl7_parse_duration_seconds` | Histogram | `message_type` | `parsers/hl7/_metrics.py` (consumed by `parsers/hl7/dispatch.py`) |
+| `agent_xlsx_parse_total` | Counter | `outcome` | `parsers/xlsx/_metrics.py` (consumed by `parsers/xlsx/parser.py`) |
+| `agent_xlsx_parse_duration_seconds` | Histogram | `outcome` | `parsers/xlsx/_metrics.py` (consumed by `parsers/xlsx/parser.py`) |
+| `agent_xlsx_rows_extracted_total` | Counter | `sheet` | `parsers/xlsx/_metrics.py` (consumed by `parsers/xlsx/parser.py`) |
+| `agent_doc_parser_calls_total` | Counter | `format`, `outcome` | `documents/docx_loader.py`, `documents/tiff_loader.py` |
+| `agent_tiff_parse_duration_seconds` | Histogram | `outcome` | `documents/tiff_loader.py` |
+| `agent_docx_parse_duration_seconds` | Histogram | `outcome` | `documents/docx_loader.py` |
+| `agent_staging_transitions_total` | Counter | `from`, `to`, `role` | `staging/_metrics.py` (consumed by `staging/store.py`) |
+| `agent_staging_endpoint_total` | Counter | `endpoint`, `outcome` | `staging/_metrics.py` (consumed by `staging/router.py`) |
+| `agent_staging_endpoint_duration_seconds` | Histogram | `endpoint` | `staging/_metrics.py` (consumed by `staging/router.py`) |
+| `agent_staging_writer_total` | Counter | `target_resource_type`, `outcome`, `write_error` | `staging/_metrics.py` (consumed by `staging/store.py::approve`/`write`) |
+| `agent_staging_watchdog_runs_total` | Counter | `job`, `outcome` | `staging/_metrics.py` (consumed by `staging/watchdog.py`) |
+| `agent_staging_watchdog_rows_total` | Counter | `job`, `action` | `staging/_metrics.py` (consumed by `staging/watchdog.py`) |
+| `agent_staging_watchdog_duration_seconds` | Histogram | `job` | `staging/_metrics.py` (consumed by `staging/watchdog.py`) |
+| `agent_cross_source_conflict_total` | Counter | `outcome`, `source_pair`, `tier` | `conflict/_metrics.py` (consumed by `graph/nodes/cross_source_conflict.py`) |
+
+**Phase 9 multimodal-expansion log events.** Each parser, state-machine transition, and graph node emits one structured log line at the same boundary as its Prometheus instrument. Quarantine and staging audit-emit failures degrade to a single warning log line so a broken audit pool never silently drops the underlying transition.
+
+| Event name | Level | Source | Fields |
+|---|---|---|---|
+| `hl7_parse_completed` | INFO | `parsers/hl7/dispatch.py` | `message_type`, `control_id`, `duration_ms`, `outcome` (`ok`), `document_reference_id` |
+| `hl7_parse_failed` | WARNING | `parsers/hl7/dispatch.py` | `message_type`, `outcome` (`malformed`/`unsupported`), `code`, `document_reference_id` |
+| `xlsx_parse_completed` | INFO | `parsers/xlsx/parser.py` | `document_reference_id`, `duration_ms`, `outcome`, `sheets_present`, `patient_rows`, `medications_rows`, `labs_trend_rows`, `care_gaps_rows`, `lab_reports_emitted`, `pending_tasks_emitted`, `warnings` |
+| `xlsx_parse_failed` | WARNING | `parsers/xlsx/parser.py` | `document_reference_id`, `outcome`, `code`, `duration_ms` |
+| `tool_outcome` (`docx_loader`) | INFO | `documents/docx_loader.py` | `tool_name` (`docx_loader`), `duration_ms`, `cache` (`n/a`), `outcome`, `n_paragraphs`, `tracked_changes_present`, `embedded_images_dropped` |
+| `tool_outcome` (`tiff_loader`) | INFO | `documents/tiff_loader.py` | `tool_name` (`tiff_loader`), `duration_ms`, `cache` (`n/a`), `outcome`, `n_pages`, `n_blocks` |
+| `staging_list` / `staging_get_one` / `staging_approve` / `staging_batch_approve` / `staging_reject` / `staging_retry` | INFO | `staging/router.py` | `endpoint`, `outcome`, `duration_ms`, `panel_id`, `staging_id` (where applicable) |
+| `staging_audit_emit_failed` | WARNING | `staging/store.py` | `event_type` (the audit event whose emit was dropped) |
+| `staging_watchdog_started` | INFO | `staging/watchdog.py` | `n_jobs` |
+| `watchdog_audit_emit_failed` | WARNING | `staging/watchdog.py` | `event_type` |
+| `quarantine_list` / `quarantine_claimed` / `quarantine_matched` / `quarantine_rejected` / `quarantine_*_rejected` | INFO / WARNING | `main.py::quarantine_*` | `panel_id`, `quarantine_id`, `outcome`, `duration_ms` |
+| `cross_source_conflict_pass_complete` | INFO | `graph/nodes/cross_source_conflict.py` | `n_groups`, `n_collapsed`, `n_soft_warns`, `n_date_missing`, `duration_ms` |
+| `cross_source_conflict_pass_failed` | WARNING | `graph/nodes/cross_source_conflict.py` | `error` |
+| `cross_source_conflict_metric_failed` | WARNING | `graph/nodes/cross_source_conflict.py` | `error` |
+| `cross_source_conflict_audit_emit_failed` | WARNING | `graph/nodes/cross_source_conflict.py` | `error` |
+
+**Phase 9 audit `event_type` additions** (written via `audit/writer.py`, PHI-safe `detail_json`):
+
+| `event_type` | Emitted from | `detail_json` shape |
+|---|---|---|
+| `document_quarantined` | `main.py::document_ingest` | `quarantine_id`, `reason_code`, `format` |
+| `document_quarantine_claimed` | `main.py::quarantine_claim` | `quarantine_id`, `panel_id` |
+| `document_quarantine_matched` | `main.py::quarantine_match` | `quarantine_id`, `resolved_patient_id` (FHIR id only) |
+| `document_quarantine_rejected` | `main.py::quarantine_reject` | `quarantine_id`, `reason_code` |
+| `extraction_staged` | `staging/store.py` | `staging_id`, `target_resource_type`, `panel_id` |
+| `extraction_approved` | `staging/store.py` | `staging_id`, `target_resource_type` |
+| `extraction_rejected` | `staging/store.py` | `staging_id`, `reason_code` |
+| `extraction_written` | `staging/store.py` | `staging_id`, `target_resource_type`, `target_resource_id` |
+| `extraction_write_failed` | `staging/store.py` | `staging_id`, `target_resource_type`, `write_error` |
+| `cross_source_conflict_detected` | `graph/nodes/cross_source_conflict.py` | counts, source types, source IDs, ISO collection dates (no values, no prose, no free clinical text) |
+
 **W2 audit event-type catalog.** PHI-safe audit events written via `audit/writer.py`. Spec lives in `W2_ARCHITECTURE.md` §9.4; this table reflects only what is currently emitted by the code (verified by `git grep "event_type=" agent-api/`). Events from §9.4 that are not yet emitted (e.g. `document_processing_timeout`, `document_extraction_abandoned`, `intra_doc_conflict_detected`, `record_evidence_contradiction`, `classifier_verdict`) are intentionally omitted here until the call sites land.
 
 | `event_type` | Emitted from | `detail_json` shape |
