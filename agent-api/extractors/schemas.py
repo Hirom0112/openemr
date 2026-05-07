@@ -187,6 +187,14 @@ class MedicationItem(BaseModel):
     dose: Optional[str] = None
     citations: List[Citation] = Field(min_length=1)
     needs_review: bool = False
+    # Phase 9 Slice 9.1 — XLSX Medications sheet carries Indication, Prescriber,
+    # Last_Filled, and Refills_Remaining columns that the v1 IntakeForm path
+    # could not represent. They're optional and additive; older payloads
+    # without these fields still validate.
+    indication: Optional[TextField] = None
+    prescriber: Optional[TextField] = None
+    last_filled: Optional[date] = None
+    refills_remaining: Optional[int] = None
 
 
 class AllergyItem(BaseModel):
@@ -242,3 +250,38 @@ ExtractionResult = Annotated[
     Union[LabReport, IntakeForm, UnknownDocument],
     Field(discriminator="kind"),
 ]
+
+
+# --------------------------------------------------------------------------- #
+# PendingTask (Phase 9 Slice 9.1) — XLSX Care_Gaps staging row
+# --------------------------------------------------------------------------- #
+#
+# PendingTask is NOT a discriminated-union member of ``ExtractionResult``. It
+# is a separate top-level model used by the XLSX Care_Gaps importer to stage
+# rows that will eventually become FHIR Tasks. The dispatch path is:
+#
+#     XLSX Care_Gaps row → PendingTask → copilot_pending_extractions
+#         (target_resource_type='Task') → clinician approval → FHIR Task POST
+#
+# Per todo.md Slice 9.5 the v1 build has no Task writer endpoint, so approved
+# rows transition to ``failed`` with ``write_error='task_writer_unavailable'``.
+# The schema here lands in Slice 9.1 so the staging table can carry the
+# payload from day one.
+
+
+class PendingTask(BaseModel):
+    """A staged Care_Gaps row destined to become a FHIR Task on approval."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    kind: Literal["pending_task"] = "pending_task"
+    schema_version: Literal["1.0"] = "1.0"
+    patient_id: str
+    document_reference_id: str
+    measure: TextField
+    measure_ref: Optional[TextField] = None
+    status: Literal["UP TO DATE", "OVERDUE", "DUE_SOON", "NOT_DUE"]
+    last_done: Optional[date] = None
+    due_date: Optional[date] = None
+    notes: Optional[TextField] = None
+    staged_at: datetime

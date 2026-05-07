@@ -17,6 +17,9 @@ root_packages =
     demographics
     rag
     observations
+    parsers
+    staging
+    conflict
 
 # audit is a leaf: HIPAA-style audit emission must not depend on any
 # business sibling — it is consumed by the dispatcher and HTTP layer only.
@@ -270,3 +273,105 @@ forbidden_modules =
     graph
     rag
     demographics
+
+# Phase 9 Slice 9.1 — multimodal-ingestion package boundaries.
+#
+# parsers.hl7 is a structured-lane leaf: deterministic HL7 v2 message parsing
+# producing existing LabReport / IntakeForm instances. It must not reach into
+# clinical siblings or the dispatcher tool surface, and must not pull HTTP
+# transport libraries — parsers run in-process behind the ingest route.
+[importlinter:contract:parsers-hl7-isolated]
+name = parsers.hl7 must be a structured-lane leaf
+type = forbidden
+source_modules =
+    parsers.hl7
+forbidden_modules =
+    triage
+    query
+    briefing
+    verification
+    medication
+    handoff
+    checkpointer
+    agent
+    agent.tools
+    graph
+    rag
+    demographics
+    fastapi
+    starlette
+    httpx
+
+# parsers.xlsx is a structured-lane leaf: openpyxl-driven 4-sheet importer
+# emitting IntakeForm + LabReport + PendingTask. Same isolation as parsers.hl7
+# minus the HTTP-transport ban (xlsx parsing is purely in-memory).
+[importlinter:contract:parsers-xlsx-isolated]
+name = parsers.xlsx must be a structured-lane leaf
+type = forbidden
+source_modules =
+    parsers.xlsx
+forbidden_modules =
+    triage
+    query
+    briefing
+    verification
+    medication
+    handoff
+    checkpointer
+    agent
+    agent.tools
+    graph
+    rag
+    demographics
+
+# staging is the pending-write subsystem (copilot_pending_extractions). It
+# consumes audit (shared asyncpg pool), observations (writer entry points
+# for the post-approval landing), documents (DocumentReference linkage),
+# extractors (typed payloads), auth (JWT mint helpers), and observability
+# (logging + metrics). It must not import any clinical sibling, the
+# dispatcher tool surface, the LangGraph topology, or the RAG retriever.
+[importlinter:contract:staging-isolated]
+name = staging must not depend on clinical siblings
+type = forbidden
+source_modules =
+    staging
+forbidden_modules =
+    triage
+    query
+    briefing
+    verification
+    medication
+    handoff
+    checkpointer
+    agent
+    agent.tools
+    graph
+    rag
+    demographics
+
+# conflict is a near-leaf cross-source disagreement detector consumed by a
+# single graph node (graph.nodes.cross_source_conflict). It owns its own
+# ranking + dedup; it must not reach into the dispatcher, clinical siblings,
+# the auth/checkpointer/handoff plumbing, or the documents/RAG/graph layers.
+# It is allowed to import extractors.schemas (typed payloads) and
+# observability (logging + metrics) — not listed here because forbidden lists
+# are explicit allowlists-by-omission.
+[importlinter:contract:conflict-is-mostly-leaf]
+name = conflict must be a near-leaf
+type = forbidden
+source_modules =
+    conflict
+forbidden_modules =
+    agent
+    briefing
+    triage
+    query
+    verification
+    medication
+    handoff
+    auth
+    checkpointer
+    documents
+    graph
+    demographics
+    rag

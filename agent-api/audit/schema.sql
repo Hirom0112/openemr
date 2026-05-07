@@ -120,3 +120,133 @@ CREATE INDEX IF NOT EXISTS copilot_guideline_chunks_embedding_idx
     WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS copilot_guideline_chunks_source_idx
     ON copilot_guideline_chunks (source_id);
+
+-- ── Phase 9 Slice 9.1 — Multimodal pending-write + quarantine schema ─────────
+--
+-- Multimodal ingestion (DOCX / HL7 v2 / TIFF / XLSX) stages every clinical
+-- write before it lands in OpenEMR. ``copilot_pending_extractions`` is the
+-- per-record staging table; ``copilot_quarantined_documents`` is the holding
+-- pen for documents whose patient identity could not be resolved with
+-- sufficient confidence (see todo.md Phase 9 Slices 9.1–9.3).
+--
+-- Idempotency: every CREATE here uses IF NOT EXISTS to match the rest of
+-- this file, so re-bootstrapping the schema on an existing volume is a
+-- no-op. The revival-blocking trigger is created with CREATE OR REPLACE
+-- FUNCTION + DROP TRIGGER IF EXISTS to stay idempotent.
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Pending extractions: one row per (DocumentReference, target FHIR resource)
+-- staged for clinician approval before the FHIR write fires.
+--
+-- target_resource_type is one of three: Observation (lab values), Task
+-- (Care_Gaps from XLSX), or AllergyIntolerance (XLSX Patient sheet allergies).
+-- target_resource_id mirrors the deterministic id produced by
+-- ``observations.writer.deterministic_observation_id`` and the equivalent
+-- minters for Task / AllergyIntolerance — the regex is the same one the
+-- PHP ObservationController enforces at oe-module-clinical-copilot/
+-- src/ObservationController.php:51.
+--
+-- State machine:
+--   pending → approved → written      (happy path)
+--   pending → rejected                (clinician declined)
+--   approved → failed                 (writer error)
+--   failed   → approved               (explicit retry; only legal terminal
+--                                      → non-terminal transition)
+-- Terminal states (rejected, written, failed) are otherwise immutable —
+-- enforced by the BEFORE UPDATE trigger below. Re-staging a rejected/written
+-- record requires a new row with a new target_resource_id (partial unique
+-- index on (document_reference_id, target_resource_id) WHERE state='pending'
+-- allows that without dropping the global uniqueness invariant).
+CREATE TABLE IF NOT EXISTS copilot_pending_extractions (
+    id                     BIGSERIAL PRIMARY KEY,
+    document_reference_id  TEXT NOT NULL,
+    file_batch_id          UUID NOT NULL,
+    patient_id             TEXT NOT NULL,
+    target_resource_type   TEXT NOT NULL
+        CHECK (target_resource_type IN ('Observation', 'Task', 'AllergyIntolerance')),
+    target_resource_id     TEXT NOT NULL
+        CHECK (target_resource_id ~ '^copilot-\d+-[\w.\-]+$'),
+    state                  TEXT NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending', 'approved', 'rejected', 'written', 'failed')),
+    payload                JSONB NOT NULL,
+    write_error            TEXT,
+    retry_count            INTEGER NOT NULL DEFAULT 0,
+    staged_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    decided_at             TIMESTAMPTZ,
+    decided_by             TEXT,
+    written_at             TIMESTAMPTZ
+);
+
+-- Partial unique on (document_reference_id, target_resource_id) restricted
+-- to pending rows: terminal-state rows are immutable and may co-exist with
+-- a freshly-staged retry row that targets a NEW deterministic id. We do
+-- NOT add a global UNIQUE constraint on the same pair — that would block
+-- legitimate post-rejection re-staging via a different resource id.
+CREATE UNIQUE INDEX IF NOT EXISTS copilot_pending_extractions_pending_unique_idx
+    ON copilot_pending_extractions (document_reference_id, target_resource_id)
+    WHERE state = 'pending';
+CREATE INDEX IF NOT EXISTS copilot_pending_extractions_patient_state_idx
+    ON copilot_pending_extractions (patient_id, state);
+CREATE INDEX IF NOT EXISTS copilot_pending_extractions_file_batch_idx
+    ON copilot_pending_extractions (file_batch_id);
+CREATE INDEX IF NOT EXISTS copilot_pending_extractions_state_staged_idx
+    ON copilot_pending_extractions (state, staged_at);
+
+-- Revival-blocking trigger: terminal states (rejected, written, failed)
+-- are immutable except for the explicit retry transition failed → approved.
+-- Any other state mutation away from a terminal state raises an exception
+-- — the staging API must INSERT a new row instead.
+CREATE OR REPLACE FUNCTION copilot_pending_extractions_block_revival()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.state IN ('rejected', 'written', 'failed') AND NEW.state <> OLD.state THEN
+        IF OLD.state = 'failed' AND NEW.state = 'approved' THEN
+            RETURN NEW;
+        END IF;
+        RAISE EXCEPTION
+            'copilot_pending_extractions: terminal state % is immutable (id=%, attempted new state=%)',
+            OLD.state, OLD.id, NEW.state;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS copilot_pending_extractions_block_revival_trg
+    ON copilot_pending_extractions;
+CREATE TRIGGER copilot_pending_extractions_block_revival_trg
+    BEFORE UPDATE ON copilot_pending_extractions
+    FOR EACH ROW
+    EXECUTE FUNCTION copilot_pending_extractions_block_revival();
+
+-- Quarantined documents: pre-created here so schema migrations stay atomic
+-- even though the resolver that populates this table lands in Slice 9.2.
+-- One row per upload whose patient identity could not be resolved with
+-- sufficient confidence. Operators (panel-scoped) match, claim, or reject.
+CREATE TABLE IF NOT EXISTS copilot_quarantined_documents (
+    id                     BIGSERIAL PRIMARY KEY,
+    quarantine_id          UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
+    document_reference_id  TEXT NOT NULL,
+    file_batch_id          UUID,
+    panel_id               TEXT,
+    parsed_identity        JSONB NOT NULL,
+    candidate_matches      JSONB,
+    reason_code            TEXT NOT NULL,
+    state                  TEXT NOT NULL DEFAULT 'unclaimed'
+        CHECK (state IN ('unclaimed', 'claimed', 'matched', 'rejected', 'expired')),
+    claimed_by             TEXT,
+    claimed_at             TIMESTAMPTZ,
+    claim_expires_at       TIMESTAMPTZ,
+    resolved_patient_id    TEXT,
+    resolved_at            TIMESTAMPTZ,
+    resolved_by            TEXT,
+    rejected_reason        TEXT,
+    quarantined_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at             TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '36 hours'
+);
+CREATE INDEX IF NOT EXISTS copilot_quarantined_documents_state_idx
+    ON copilot_quarantined_documents (state, quarantined_at);
+CREATE INDEX IF NOT EXISTS copilot_quarantined_documents_panel_idx
+    ON copilot_quarantined_documents (panel_id, state);
+CREATE INDEX IF NOT EXISTS copilot_quarantined_documents_doc_ref_idx
+    ON copilot_quarantined_documents (document_reference_id);
