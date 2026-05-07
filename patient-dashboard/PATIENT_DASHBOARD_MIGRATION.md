@@ -1,10 +1,164 @@
-# Defense material — drafted on Day 1, to be polished on Day 3
+# Patient Dashboard Port — Migration Defense
+
+## Framework choice: Next.js 15 + TypeScript + Auth.js + shadcn/ui + Tailwind
+
+The choice was not made in the abstract. It was made by mapping each
+problem the audit identified to a specific framework capability. Every
+selection below traces back to an audit finding documented in
+`dashboard-inventory.md`.
+
+### The five problems the audit identified
+
+1. **Presentation coupled to data access.** The original dashboard's
+   cards both render HTML and execute SQL queries from the same files.
+   No data-layer abstraction exists.
+
+2. **Auth model incompatible with a decoupled frontend.** Session
+   cookies + CSRF tokens work for server-rendered apps in the same
+   process; they don't work for a separate frontend talking to an API.
+
+3. **Hybrid card-loading model with no uniform pattern.** Nine cards
+   AJAX-load HTML fragments; four cards render inline as Twig in the
+   dashboard's entry-point file. Both pull from the database directly.
+
+4. **FHIR token security.** A decoupled frontend that handles clinical
+   data must not expose the FHIR access token to the browser, where
+   third-party scripts could read it.
+
+5. **Missing FHIR resource (MedicationStatement).** This OpenEMR build
+   does not implement MedicationStatement. The Medications and
+   Prescriptions cards must be synthesized from MedicationRequest with
+   filter logic — synthesis logic that has to be exactly right or the
+   cards display wrong clinical data.
+
+### Why Next.js 15 with TypeScript solves these
+
+**Server Components solve problems #1 and #4.** A Server Component runs
+only on the server. Its code is never bundled to the browser. The FHIR
+access token is read server-side, used to fetch FHIR data, and only the
+rendered HTML reaches the user. The token cannot leak into client
+bundles by construction. This is enforced by the framework, not
+developer discipline.
+
+**One uniform card pattern solves problem #3.** All seven cards extend a
+single `<Card>` component (scaffolded from shadcn/ui) with consistent
+loading, empty, and error states. The original dashboard's hybrid model
+collapses into one pattern in the port. Adding new cards is a single
+file with no auth wiring, no database queries, and no template
+selection — the data layer, auth, and component model are all uniform.
+
+**TypeScript solves problem #5.** The MedicationRequest synthesis logic
+filters by `intent` and `status` to derive both Medications and
+Prescriptions cards from the same FHIR resource. TypeScript verifies
+the filter logic against the FHIR R4 type definitions at compile time.
+Wrong field name, missing case in an enum exhaustiveness check, or
+mismatched shape between the synthesis output and the component prop —
+all caught before runtime. The original architecture's PHP+SQL layer
+has no equivalent compile-time guarantee.
+
+### Why Auth.js solves problem #2
+
+Auth.js is the JavaScript auth library with a documented Generic
+OAuth Provider pattern that handles arbitrary OAuth2/OIDC servers.
+OpenEMR is not a pre-built provider like Google or GitHub, so the
+library's flexibility matters. The library handles authorization code
+flow, token storage in encrypted server-side sessions (token off the
+browser, again), automatic refresh on 401, and callback URL handling
+that works identically in dev and production with one environment
+variable change.
+
+When the OAuth flow breaks at deployment — and OAuth flows commonly
+break at deployment — Auth.js has the largest debugging precedent of
+any JS auth library. The session+CSRF model in the original is replaced
+by industry-standard OAuth2/OIDC with SMART scopes for FHIR access.
+
+### Why shadcn/ui and Tailwind for the UI
+
+The original dashboard's UI is dense, professional, clinical. shadcn/ui
+scaffolds Tailwind components into the repository as editable code
+rather than imported library dependencies. The components do not
+impose opinionated styling that would fight the original's clinical
+density.
+
+One Card component is built once and reused by all seven sections. The
+loading skeleton, empty state, and error display are consistent across
+the dashboard. This is the uniform pattern problem #3 required, and it
+ships in roughly 200 lines of TypeScript.
+
+### Why Railway for deployment
+
+The Co-Pilot project's OpenEMR fork is already deployed on Railway.
+Reusing the same platform avoids learning a new deployment surface in
+week 5 of a sprint. Railway's internal networking allows the dashboard
+service to reach the OpenEMR service over a private network rather
+than the public internet — faster, more secure, and the FHIR token
+exchange does not traverse the open web.
+
+The dashboard deploys as a new service in the same Railway project
+as OpenEMR. Environment variables are set in Railway's dashboard.
+The OAuth client registered in the deployed OpenEMR points at the
+dashboard's Railway-issued callback URL. The deployment is bounded
+in scope and predictable in failure modes.
+
+### What we considered and rejected
+
+**SvelteKit + TypeScript.** Smaller bundles, simpler reactivity model,
+and `+page.server.ts` solves the token-safety problem cleanly. Rejected
+because the auth library precedent is thinner — when the OAuth flow
+hits an edge case at deployment, the documented escape hatches exist
+in the React + Auth.js ecosystem more than in the Svelte + @auth/sveltekit
+ecosystem. For a five-day sprint with a graded deployment requirement,
+ecosystem depth beats architectural elegance.
+
+**Remix / React Router 7 + TypeScript.** Cleaner data-loading model
+than Next.js, same React ecosystem. Rejected because the Remix → React
+Router 7 transition has caused documentation inconsistencies that would
+add friction for a developer new to the ecosystem. The architecture is
+slightly cleaner; the documentation is meaningfully worse.
+
+**HTMX + Go or FastAPI.** Genuinely modern in a non-React direction
+with strong defense angles for "modern doesn't have to mean SPA."
+Rejected because debugging HTMX issues against an OAuth-protected
+backend has thinner precedent than the React equivalents. The defense
+angle is strong; the operational risk is higher than this sprint can
+absorb.
+
+### What we gave up
+
+Bundle sizes will be larger than SvelteKit's by an estimated 50–100KB.
+For a low-traffic clinical dashboard, this delta is not perceptible to
+users and does not affect grading. The tradeoff is accepted.
+
+The Next.js App Router has documented rough edges, particularly around
+caching layers (router cache, fetch cache, full route cache). One
+budgeted hour for caching-related debugging is included in the sprint
+plan.
+
+TypeScript adds a learning curve for a developer new to it. This curve
+is real but pays back within two days through compile-time error
+catching. The alternative — shipping JavaScript and debugging shape
+mismatches at runtime — is more expensive over a five-day sprint, not
+less.
+
+### What this stack does not solve
+
+The audit identified one problem this stack cannot solve at the framework
+level: the missing MedicationStatement controller in OpenEMR's FHIR layer.
+That gap is documented as an explicit constraint of the underlying
+backend, with a synthesis approach using MedicationRequest filters. No
+framework choice closes a backend gap; the framework choice only
+determines how cleanly the synthesis is expressed in code. TypeScript
+makes the synthesis verifiable at compile time, which is the most a
+frontend stack can do for a missing backend resource.
+
+---
+
+# Defense material — drafted on Day 1 (kept for reference)
 
 These paragraphs were captured during the architecture audit phase, while
-the findings were fresh and the codebase evidence was concrete. They are
-drafts. On Day 3 they will be reorganized into the formal defense
-sections of this document (framework choice, what we kept, what we
-changed, tradeoffs, known limitations).
+the findings were fresh and the codebase evidence was concrete. They
+were the source material for the polished defense above; preserved here
+as historical context.
 
 The architecture findings these paragraphs draw from are documented in
 `dashboard-inventory.md` under "Architecture finding (verified twice
