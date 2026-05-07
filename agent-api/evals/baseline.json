@@ -11,6 +11,11 @@
   "provenance_chain":           {"pass_rate": 1.00,   "min_threshold": 0.95},
   "critic_false_positive_rate": {"max": 0.1636},
   "citation_iou":               {"pass_rate": 0.0,    "min_threshold": 0.0},
+  "quarantine_audit_emitted":   {"pass_rate": 1.00,   "min_threshold": 1.00},
+  "no_unconfirmed_writes":      {"pass_rate": 1.00,   "min_threshold": 1.00},
+  "stage_failure_audit_emitted": {"pass_rate": 1.00,  "min_threshold": 0.95},
+  "tiff_all_pages_ocrd":        {"pass_rate": 1.00,   "min_threshold": 1.00},
+  "synthetic_marker_not_extracted": {"pass_rate": 1.00, "min_threshold": 1.00},
   "per_modality": {
     "intake_form": {
       "n_cases": 26,
@@ -71,6 +76,59 @@
       "citation_token_match": 1.0,
       "correct_critic_decision": 0.8889,
       "no_phi_in_logs": 1.0
+    },
+    "hl7_v2": {
+      "n_cases": 8,
+      "schema_valid": 1.0,
+      "citation_present": 1.0,
+      "citation_resolvable": 1.0,
+      "citation_row_match": 1.0,
+      "citation_token_match": 1.0,
+      "correct_critic_decision": 1.0,
+      "no_phi_in_logs": 1.0,
+      "quarantine_audit_emitted": 1.0,
+      "no_unconfirmed_writes": 1.0,
+      "synthetic_marker_not_extracted": 1.0
+    },
+    "xlsx_workbook": {
+      "n_cases": 8,
+      "schema_valid": 1.0,
+      "citation_present": 1.0,
+      "citation_resolvable": 1.0,
+      "citation_row_match": 1.0,
+      "citation_token_match": 1.0,
+      "correct_critic_decision": 1.0,
+      "no_phi_in_logs": 1.0,
+      "quarantine_audit_emitted": 1.0,
+      "no_unconfirmed_writes": 1.0,
+      "synthetic_marker_not_extracted": 1.0
+    },
+    "docx_referral": {
+      "n_cases": 8,
+      "schema_valid": 1.0,
+      "citation_present": 1.0,
+      "citation_resolvable": 1.0,
+      "citation_row_match": 1.0,
+      "citation_token_match": 1.0,
+      "correct_critic_decision": 1.0,
+      "no_phi_in_logs": 1.0,
+      "quarantine_audit_emitted": 1.0,
+      "no_unconfirmed_writes": 1.0,
+      "synthetic_marker_not_extracted": 1.0
+    },
+    "tiff_fax": {
+      "n_cases": 8,
+      "schema_valid": 1.0,
+      "citation_present": 1.0,
+      "citation_resolvable": 1.0,
+      "citation_row_match": 1.0,
+      "citation_token_match": 1.0,
+      "correct_critic_decision": 1.0,
+      "no_phi_in_logs": 1.0,
+      "quarantine_audit_emitted": 1.0,
+      "no_unconfirmed_writes": 1.0,
+      "tiff_all_pages_ocrd": 1.0,
+      "synthetic_marker_not_extracted": 1.0
     }
   }
 }

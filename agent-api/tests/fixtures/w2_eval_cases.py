@@ -52,6 +52,13 @@ DocumentModality = Literal[
     "multi_column",      # multi-column layouts
     "synthetic",         # programmatically generated, ground-truth available
     "unknown",           # not yet classified
+    # Phase 9 — multimodal expansion (W2 expansion, NOT W3).
+    # Each new modality routes through a dedicated parser pipeline and
+    # earns its own per-modality bucket in baseline.json.
+    "hl7_v2",            # HL7 v2.x message (ADT/ORU/etc.)
+    "xlsx_workbook",     # multi-sheet Excel workbook (Patient/Labs_Trend/etc.)
+    "docx_referral",     # DOCX referral / consult / intake (prose-mode)
+    "tiff_fax",          # multi-page TIFF fax packet (OCR per page)
 ]
 
 
@@ -94,6 +101,14 @@ class W2EvalCase:
     # gating in diff_baseline.py. Defaults to "unknown" so a forgotten
     # backfill is loud (the bucket reports zero coverage).
     document_modality: DocumentModality = "unknown"
+    # Phase 9 Slice 9.9 — multimodal expansion fields.
+    # All three default to False / empty so the existing 50 W2 cases stay
+    # valid (they exercise neither quarantine nor staging). New multimodal
+    # cases set these explicitly to gate the new mechanical rubrics
+    # (quarantine_audit_emitted, no_unconfirmed_writes, stage_failure_audit_emitted).
+    expected_quarantine: bool = False
+    expected_staging: bool = False
+    expected_target_resource_ids: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -1540,3 +1555,459 @@ def _load_annotated_cases() -> int:
 
 
 _load_annotated_cases()
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 Slice 9.9 — W2 multimodal expansion (HL7 / XLSX / DOCX / TIFF).
+#
+# 32 new cases (8 per format) appended additively after ``_validate()`` so
+# the original 50-case bucket contract (BUCKET_COUNTS) stays a true accounting
+# of the W2 baseline. New cases reuse existing ``Bucket`` literals (the
+# Bucket type is closed and ``test_w2_eval.py:_VALID_BUCKETS`` is closed) but
+# carry new ``document_modality`` values (``hl7_v2``, ``xlsx_workbook``,
+# ``docx_referral``, ``tiff_fax``) so per-modality gating in baseline.json
+# routes them into their own buckets.
+#
+# case_id naming: ``<format>_<flavor>_<NNN>_<modifier>``. NO ``W3-*`` prefix —
+# this is W2 expansion. The Bucket value is the *scenario* bucket (existing
+# vocab); the modality is what segregates the new lanes in the gate.
+#
+# Fixtures live under ``tests/fixtures/w2/multimodal/{hl7v2,docx,xlsx,tiff}``
+# — 15 anchors + 20 derivatives produced by ``_generate_w2_multimodal_corpus.py``.
+# fixture_key is the file stem (matching the corpus generator's output keys).
+# ---------------------------------------------------------------------------
+
+
+PT_AISHA_PATEL = _patient(
+    pid="pt-100612", mrn="100612", given="Aisha", family="Patel", dob="1976-04-10",
+    gender="female",
+)
+PT_DAVID_JOHNSON = _patient(
+    pid="pt-100623", mrn="100623", given="David", family="Johnson", dob="1949-12-22",
+    gender="male",
+)
+PT_BAO_NGUYEN = _patient(
+    pid="pt-100634", mrn="100634", given="Bao", family="Nguyen", dob="1988-07-05",
+    gender="male",
+)
+
+
+_MULTIMODAL_CASES: list[W2EvalCase] = [
+    # ===== HL7 v2 — 8 cases (modality=hl7_v2) =====
+    W2EvalCase(
+        case_id="hl7_oru_nominal_001_lipid_chen",
+        bucket="lab_nominal",
+        fixture_key="p01-chen-oru-r01",
+        doc_type_hint="lab_report",
+        chart_patient=PT_MARGARET_CHEN,
+        expected_kind="lab_report",
+        expected_critic_decision="pass",
+        notes="HL7 ORU-R01 nominal — lipid panel for Chen.",
+        document_modality="hl7_v2",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="hl7_oru_nominal_002_cbc_whitaker",
+        bucket="lab_nominal",
+        fixture_key="p02-whitaker-oru-r01",
+        doc_type_hint="lab_report",
+        chart_patient=PT_JAMES_WHITAKER,
+        expected_kind="lab_report",
+        expected_critic_decision="pass",
+        notes="HL7 ORU-R01 nominal — CBC for Whitaker.",
+        document_modality="hl7_v2",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="hl7_oru_nominal_003_hba1c_reyes",
+        bucket="lab_nominal",
+        fixture_key="p03-reyes-oru-r01",
+        doc_type_hint="lab_report",
+        chart_patient=PT_LUIS_REYES,
+        expected_kind="lab_report",
+        expected_critic_decision="pass",
+        notes="HL7 ORU-R01 nominal — HbA1c for Reyes.",
+        document_modality="hl7_v2",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="hl7_oru_nominal_004_cmp_kowalski",
+        bucket="lab_nominal",
+        fixture_key="p04-kowalski-oru-r01",
+        doc_type_hint="lab_report",
+        chart_patient=PT_ANDRZEJ_KOWALSKI,
+        expected_kind="lab_report",
+        expected_critic_decision="pass",
+        notes="HL7 ORU-R01 nominal — CMP for Kowalski.",
+        document_modality="hl7_v2",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="hl7_oru_wrong_patient_005_pid3_mutation_chen",
+        bucket="wrong_patient",
+        fixture_key="p01-chen-oru-r01.wrong-patient",
+        doc_type_hint="lab_report",
+        chart_patient=PT_MARGARET_CHEN,
+        expected_kind="lab_report",
+        expected_critic_decision="hard_block",
+        notes=(
+            "HL7 ORU with PID-3 mutated to a non-matching MRN — identity "
+            "resolver must quarantine. quarantine_audit_emitted gates this."
+        ),
+        document_modality="hl7_v2",
+        expected_quarantine=True,
+        expected_violation_codes=("identity_mismatch",),
+    ),
+    W2EvalCase(
+        case_id="hl7_oru_missing_data_006_blank_obx_patel",
+        bucket="missing_data",
+        fixture_key="p05-patel-oru-r01.blank-obx",
+        doc_type_hint="lab_report",
+        chart_patient=PT_AISHA_PATEL,
+        expected_kind="lab_report",
+        expected_critic_decision="soft_warn",
+        notes="HL7 ORU with all OBX-5 values blanked — schema valid, no values.",
+        document_modality="hl7_v2",
+    ),
+    W2EvalCase(
+        case_id="hl7_oru_multi_patient_007_packet_johnson",
+        bucket="mixed_content",
+        fixture_key="p06-johnson-oru-r01.multi-patient",
+        doc_type_hint="lab_report",
+        chart_patient=PT_DAVID_JOHNSON,
+        expected_kind="lab_report",
+        expected_critic_decision="hard_block",
+        notes=(
+            "HL7 packet with two MSH segments + two PID segments — current "
+            "single-patient parser must hard-block; quarantine the whole packet."
+        ),
+        document_modality="hl7_v2",
+        expected_quarantine=True,
+    ),
+    W2EvalCase(
+        case_id="hl7_oru_intra_doc_conflict_008_dup_obx_nguyen",
+        bucket="intra_doc_conflict",
+        fixture_key="p07-nguyen-oru-r01.dup-obx",
+        doc_type_hint="lab_report",
+        chart_patient=PT_BAO_NGUYEN,
+        expected_kind="lab_report",
+        expected_critic_decision="soft_warn",
+        notes="HL7 ORU with two OBX rows for the same loinc — conflict resolver soft-warns.",
+        document_modality="hl7_v2",
+        expected_staging=True,
+    ),
+
+    # ===== XLSX — 8 cases (modality=xlsx_workbook) =====
+    W2EvalCase(
+        case_id="xlsx_full_001_chen_workbook",
+        bucket="mixed_content",
+        fixture_key="p01-chen-workbook",
+        doc_type_hint=None,
+        chart_patient=PT_MARGARET_CHEN,
+        expected_kind="unknown",
+        expected_critic_decision="pass",
+        notes="XLSX nominal — full Chen workbook (Patient, Labs_Trend, Allergies).",
+        document_modality="xlsx_workbook",
+        expected_staging=True,
+        expected_target_resource_ids=("Patient", "Observation", "AllergyIntolerance"),
+    ),
+    W2EvalCase(
+        case_id="xlsx_full_002_whitaker_workbook",
+        bucket="mixed_content",
+        fixture_key="p02-whitaker-workbook",
+        doc_type_hint=None,
+        chart_patient=PT_JAMES_WHITAKER,
+        expected_kind="unknown",
+        expected_critic_decision="pass",
+        notes="XLSX nominal — full Whitaker workbook.",
+        document_modality="xlsx_workbook",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="xlsx_full_003_reyes_workbook",
+        bucket="mixed_content",
+        fixture_key="p03-reyes-workbook",
+        doc_type_hint=None,
+        chart_patient=PT_LUIS_REYES,
+        expected_kind="unknown",
+        expected_critic_decision="pass",
+        notes="XLSX nominal — full Reyes workbook.",
+        document_modality="xlsx_workbook",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="xlsx_sparse_004_chen_labs_trend",
+        bucket="missing_data",
+        fixture_key="p01-chen-workbook.sparse-labs",
+        doc_type_hint=None,
+        chart_patient=PT_MARGARET_CHEN,
+        expected_kind="unknown",
+        expected_critic_decision="soft_warn",
+        notes="XLSX with Labs_Trend mostly blank — gaps treated as missing, not zero.",
+        document_modality="xlsx_workbook",
+    ),
+    W2EvalCase(
+        case_id="xlsx_wrong_patient_005_mrn_mismatch_whitaker",
+        bucket="wrong_patient",
+        fixture_key="p02-whitaker-workbook.wrong-mrn",
+        doc_type_hint=None,
+        chart_patient=PT_JAMES_WHITAKER,
+        expected_kind="unknown",
+        expected_critic_decision="hard_block",
+        notes="XLSX Patient sheet MRN doesn't match chart — quarantine.",
+        document_modality="xlsx_workbook",
+        expected_quarantine=True,
+        expected_violation_codes=("identity_mismatch",),
+    ),
+    W2EvalCase(
+        case_id="xlsx_intra_conflict_006_reyes_dup_lab",
+        bucket="intra_doc_conflict",
+        fixture_key="p03-reyes-workbook.dup-lab",
+        doc_type_hint=None,
+        chart_patient=PT_LUIS_REYES,
+        expected_kind="unknown",
+        expected_critic_decision="soft_warn",
+        notes="XLSX Labs_Trend has same loinc twice with different values — soft-warn.",
+        document_modality="xlsx_workbook",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="xlsx_missing_007_chen_no_allergies",
+        bucket="missing_data",
+        fixture_key="p01-chen-workbook.no-allergies",
+        doc_type_hint=None,
+        chart_patient=PT_MARGARET_CHEN,
+        expected_kind="unknown",
+        expected_critic_decision="pass",
+        notes="XLSX with Allergies sheet absent — Patient + Labs only, NKDA inferred.",
+        document_modality="xlsx_workbook",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="xlsx_blank_008_empty_workbook",
+        bucket="blank_noise",
+        fixture_key="p01-chen-workbook.blank",
+        doc_type_hint=None,
+        chart_patient=PT_MARGARET_CHEN,
+        expected_kind="unknown",
+        expected_critic_decision="hard_block",
+        notes="XLSX with only sheet headers, no rows — extractor must hard-block.",
+        document_modality="xlsx_workbook",
+    ),
+
+    # ===== DOCX — 8 cases (modality=docx_referral) =====
+    W2EvalCase(
+        case_id="docx_referral_001_chen_intake",
+        bucket="intake_nominal",
+        fixture_key="p01-chen-referral",
+        doc_type_hint="intake_form",
+        chart_patient=PT_MARGARET_CHEN,
+        expected_kind="intake_form",
+        expected_critic_decision="pass",
+        notes="DOCX referral nominal — Chen.",
+        document_modality="docx_referral",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="docx_referral_002_whitaker_intake",
+        bucket="intake_nominal",
+        fixture_key="p02-whitaker-referral",
+        doc_type_hint="intake_form",
+        chart_patient=PT_JAMES_WHITAKER,
+        expected_kind="intake_form",
+        expected_critic_decision="pass",
+        notes="DOCX referral nominal — Whitaker.",
+        document_modality="docx_referral",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="docx_referral_003_reyes_intake",
+        bucket="intake_nominal",
+        fixture_key="p03-reyes-referral",
+        doc_type_hint="intake_form",
+        chart_patient=PT_LUIS_REYES,
+        expected_kind="intake_form",
+        expected_critic_decision="pass",
+        notes="DOCX referral nominal — Reyes.",
+        document_modality="docx_referral",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="docx_referral_004_kowalski_intake",
+        bucket="intake_nominal",
+        fixture_key="p04-kowalski-referral",
+        doc_type_hint="intake_form",
+        chart_patient=PT_ANDRZEJ_KOWALSKI,
+        expected_kind="intake_form",
+        expected_critic_decision="pass",
+        notes="DOCX referral nominal — Kowalski.",
+        document_modality="docx_referral",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="docx_referral_005_patel_with_labs",
+        bucket="mixed_content",
+        fixture_key="p05-patel-referral",
+        doc_type_hint="intake_form",
+        chart_patient=PT_AISHA_PATEL,
+        expected_kind="intake_form",
+        expected_critic_decision="pass",
+        notes="DOCX referral with embedded Pertinent Labs section.",
+        document_modality="docx_referral",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="docx_referral_006_johnson_meds_history",
+        bucket="mixed_content",
+        fixture_key="p06-johnson-referral",
+        doc_type_hint="intake_form",
+        chart_patient=PT_DAVID_JOHNSON,
+        expected_kind="intake_form",
+        expected_critic_decision="pass",
+        notes="DOCX referral with multi-section meds + family history.",
+        document_modality="docx_referral",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="docx_referral_007_nguyen_wrong_patient",
+        bucket="wrong_patient",
+        fixture_key="p07-nguyen-referral.wrong-name",
+        doc_type_hint="intake_form",
+        chart_patient=PT_BAO_NGUYEN,
+        expected_kind="intake_form",
+        expected_critic_decision="hard_block",
+        notes="DOCX referral name doesn't match chart — quarantine.",
+        document_modality="docx_referral",
+        expected_quarantine=True,
+        expected_violation_codes=("identity_mismatch",),
+    ),
+    W2EvalCase(
+        case_id="docx_referral_008_chen_corrupt_xml",
+        bucket="low_quality_scan",
+        fixture_key="p01-chen-referral.corrupt-xml",
+        doc_type_hint="intake_form",
+        chart_patient=PT_MARGARET_CHEN,
+        expected_kind="unknown",
+        expected_critic_decision="hard_block",
+        notes="DOCX with malformed document.xml — parser must surface stage_failure audit.",
+        document_modality="docx_referral",
+    ),
+
+    # ===== TIFF — 8 cases (modality=tiff_fax) =====
+    W2EvalCase(
+        case_id="tiff_fax_001_chen_p1",
+        bucket="low_quality_scan",
+        fixture_key="p01-chen-fax-packet",
+        doc_type_hint=None,
+        chart_patient=PT_MARGARET_CHEN,
+        expected_kind="unknown",
+        expected_critic_decision="pass",
+        notes="TIFF nominal — Chen multi-page fax packet.",
+        document_modality="tiff_fax",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="tiff_fax_002_kowalski_p1",
+        bucket="low_quality_scan",
+        fixture_key="p04-kowalski-fax-packet",
+        doc_type_hint=None,
+        chart_patient=PT_ANDRZEJ_KOWALSKI,
+        expected_kind="unknown",
+        expected_critic_decision="pass",
+        notes="TIFF nominal — Kowalski multi-page fax packet (gates tiff_all_pages_ocrd).",
+        document_modality="tiff_fax",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="tiff_fax_003_chen_lab_report",
+        bucket="lab_nominal",
+        fixture_key="p01-chen-fax-packet.lab-only",
+        doc_type_hint="lab_report",
+        chart_patient=PT_MARGARET_CHEN,
+        expected_kind="lab_report",
+        expected_critic_decision="pass",
+        notes="TIFF derivative — single-page lab from Chen fax packet.",
+        document_modality="tiff_fax",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="tiff_fax_004_kowalski_intake",
+        bucket="intake_nominal",
+        fixture_key="p04-kowalski-fax-packet.intake-only",
+        doc_type_hint="intake_form",
+        chart_patient=PT_ANDRZEJ_KOWALSKI,
+        expected_kind="intake_form",
+        expected_critic_decision="pass",
+        notes="TIFF derivative — single-page intake from Kowalski fax packet.",
+        document_modality="tiff_fax",
+        expected_staging=True,
+    ),
+    W2EvalCase(
+        case_id="tiff_fax_005_chen_mode1_1bit",
+        bucket="low_quality_scan",
+        fixture_key="p01-chen-fax-packet.mode1",
+        doc_type_hint=None,
+        chart_patient=PT_MARGARET_CHEN,
+        expected_kind="unknown",
+        expected_critic_decision="soft_warn",
+        notes="TIFF mode-1 (1-bit B/W) derivative — exercises image conversion path.",
+        document_modality="tiff_fax",
+    ),
+    W2EvalCase(
+        case_id="tiff_fax_006_kowalski_corrupt_ifd",
+        bucket="blank_noise",
+        fixture_key="p04-kowalski-fax-packet.corrupt-ifd",
+        doc_type_hint=None,
+        chart_patient=PT_ANDRZEJ_KOWALSKI,
+        expected_kind="unknown",
+        expected_critic_decision="hard_block",
+        notes="TIFF with corrupted IFD — parser must surface stage_failure audit.",
+        document_modality="tiff_fax",
+    ),
+    W2EvalCase(
+        case_id="tiff_fax_007_chen_wrong_cover",
+        bucket="wrong_patient",
+        fixture_key="p01-chen-fax-packet.wrong-cover",
+        doc_type_hint=None,
+        chart_patient=PT_MARGARET_CHEN,
+        expected_kind="unknown",
+        expected_critic_decision="hard_block",
+        notes="TIFF with cover-sheet name mismatch — quarantine.",
+        document_modality="tiff_fax",
+        expected_quarantine=True,
+        expected_violation_codes=("identity_mismatch",),
+    ),
+    W2EvalCase(
+        case_id="tiff_fax_008_kowalski_4page_iterator",
+        bucket="low_quality_scan",
+        fixture_key="p04-kowalski-fax-packet.4page",
+        doc_type_hint=None,
+        chart_patient=PT_ANDRZEJ_KOWALSKI,
+        expected_kind="unknown",
+        expected_critic_decision="pass",
+        notes=(
+            "TIFF 4-page derivative — gates tiff_all_pages_ocrd "
+            "(catches seek() off-by-one)."
+        ),
+        document_modality="tiff_fax",
+        expected_staging=True,
+    ),
+]
+
+
+CASES.extend(_MULTIMODAL_CASES)
+
+
+def _validate_multimodal_unique() -> None:
+    ids = [c.case_id for c in CASES]
+    if len(set(ids)) != len(ids):
+        seen: set[str] = set()
+        dups: list[str] = []
+        for cid in ids:
+            if cid in seen:
+                dups.append(cid)
+            seen.add(cid)
+        raise AssertionError(f"Duplicate case_id after multimodal append: {dups}")
+
+
+_validate_multimodal_unique()

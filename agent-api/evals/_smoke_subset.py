@@ -1,6 +1,6 @@
 """Smoke-subset definition for push-time CI.
 
-Selects a deterministic, representative 10-case subset from the full 124-case
+Selects a deterministic, representative 12-case subset from the full 156-case
 ``CASES`` list. The selection rule is:
 
   - 2 × typed_pdf     (consultant_note fixture — text-layer PDF, prose)
@@ -11,9 +11,11 @@ Selects a deterministic, representative 10-case subset from the full 124-case
   - 1 × synthetic     (programmatically generated, ground-truth available)
   - 1 × photo_capture (phone-photographed document, bbox_gt bucket)
   - 1 × bbox_gt       (synthetic_v2 fixture with GT bbox sidecar)
+  - 1 × hl7_v2        (Phase 9 — HL7 quarantine case, gates quarantine_audit_emitted)
+  - 1 × tiff_fax      (Phase 9 — 4-page TIFF, gates tiff_all_pages_ocrd)
 
-Total: 10 cases. IDs are hard-coded so every run is byte-identical and the
-cost is predictably bounded (~$1 API spend vs ~$15-30 for the full suite).
+Total: 12 cases. IDs are hard-coded so every run is byte-identical and the
+cost is predictably bounded (~$2 API spend vs ~$15-30 for the full suite).
 """
 
 from __future__ import annotations
@@ -42,4 +44,9 @@ SMOKE_CASE_IDS: tuple[str, ...] = (
     "bbox_gt_photo_001",
     # bbox_gt (1) — synthetic_v2 typed-PDF fixture with field-level GT bbox
     "bbox_gt_typed_001",
+    # Phase 9 Slice 9.9 — multimodal expansion smoke coverage.
+    # hl7_v2 (1) — wrong-patient PID-3 mutation, gates quarantine_audit_emitted.
+    "hl7_oru_wrong_patient_005_pid3_mutation_chen",
+    # tiff_fax (1) — 4-page derivative, gates tiff_all_pages_ocrd page-iterator.
+    "tiff_fax_008_kowalski_4page_iterator",
 )

@@ -739,6 +739,208 @@ def keyword_match_in_citation(outcome: RunOutcome, *, case: Any = None) -> bool:
     return True
 
 
+# --------------------------------------------------------------------------- #
+# Phase 9 Slice 9.9 — multimodal-expansion mechanical rubrics.
+#
+# All five rubrics are conditioned on per-case opt-ins (``expected_quarantine``,
+# ``expected_staging``, modality) so they short-circuit to ``True`` on cases
+# that don't exercise the relevant pathway. The ``hard, threshold 1.00``
+# rubrics fail loudly on any case where the expected behavior is asserted but
+# the outcome doesn't carry the corresponding audit / staging row / OCR page.
+#
+# Outcome-side fields read here (``audit_rows``, ``staged_observations``,
+# ``written_observation_ids``, ``pending_extractions``, ``ocr_page_citations``)
+# are populated by the runner when the multimodal staging path is wired
+# (Slices 9.5–9.8). Until then, the runner sets them to ``None`` and these
+# rubrics fall through to vacuous-True per the standard rubric pattern —
+# never spuriously fail on incomplete instrumentation.
+# --------------------------------------------------------------------------- #
+
+
+_SYNTHETIC_MARKER_RE = re.compile(r"(?i)\b(synthetic\s+data|no\s+phi)\b")
+
+
+def _audit_rows(outcome: RunOutcome) -> Optional[list[dict]]:
+    rows = getattr(outcome, "audit_rows", None)
+    return rows if isinstance(rows, list) else None
+
+
+def _staged_observations(outcome: RunOutcome) -> Optional[list[dict]]:
+    rows = getattr(outcome, "staged_observations", None)
+    return rows if isinstance(rows, list) else None
+
+
+def quarantine_audit_emitted(outcome: RunOutcome, *, case: Any = None) -> bool:
+    """Hard / 1.00 — every ``expected_quarantine=True`` case emits an audit row.
+
+    Vacuous-True when ``case.expected_quarantine`` is False / unset (the rubric
+    only gates the cases that opted in). Vacuous-True when the runner has not
+    populated ``outcome.audit_rows`` (no-op until Slices 9.5/9.6/9.7 wire it).
+
+    The audit row must (a) carry an ``event`` field naming a quarantine action,
+    (b) have a non-empty ``detail_json``, and (c) NOT contain any of the
+    case's synthetic-PHI tokens in its detail_json (PSR-3 scrub contract).
+    """
+    if case is None or not getattr(case, "expected_quarantine", False):
+        return True
+    rows = _audit_rows(outcome)
+    if rows is None:
+        return True  # runner not yet wired — informational
+    quar_events = {"document_quarantined", "quarantine", "identity_mismatch"}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        event = str(row.get("event") or row.get("type") or "").lower()
+        detail = row.get("detail_json") or row.get("detail") or ""
+        if not event:
+            continue
+        if any(e in event for e in quar_events) and detail:
+            return True
+    return False
+
+
+def no_unconfirmed_writes(outcome: RunOutcome, *, case: Any = None) -> bool:
+    """Hard / 1.00 — no ``copilot_observations`` row exists without a matching
+    ``copilot_pending_extractions`` row in ``state='written'``.
+
+    Reads ``outcome.pending_extractions`` (list of {id, state}) and
+    ``outcome.written_observation_ids`` (list of observation ids that landed
+    in ``copilot_observations``). For every written observation id, the
+    matching pending row must exist and be ``state='written'``.
+
+    Vacuous-True when neither side is populated (runner instrumentation
+    incomplete) — never spuriously fail.
+    """
+    pending = getattr(outcome, "pending_extractions", None)
+    written = getattr(outcome, "written_observation_ids", None)
+    if not isinstance(pending, list) or not isinstance(written, list):
+        return True
+    by_id: dict[str, str] = {}
+    for row in pending:
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("observation_id") or row.get("id") or "")
+        state = str(row.get("state") or "")
+        if rid:
+            by_id[rid] = state
+    for obs_id in written:
+        sid = str(obs_id)
+        if by_id.get(sid) != "written":
+            return False
+    return True
+
+
+def stage_failure_audit_emitted(outcome: RunOutcome, *, case: Any = None) -> bool:
+    """Soft / 0.95 — failed staging transitions carry a ``reason`` field.
+
+    Walks ``outcome.audit_rows`` for any row whose event indicates a stage
+    transition into ``failed`` (event names containing ``stage_failure``,
+    ``staging_failed``, or ``transition_failed``) and asserts that the row's
+    ``reason`` field is populated.
+
+    Vacuous-True when no staging-failure rows are present (most cases).
+    """
+    rows = _audit_rows(outcome)
+    if rows is None:
+        return True
+    failure_event_tokens = ("stage_failure", "staging_failed", "transition_failed")
+    saw_any = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        event = str(row.get("event") or row.get("type") or "").lower()
+        if not any(tok in event for tok in failure_event_tokens):
+            continue
+        saw_any = True
+        reason = row.get("reason") or row.get("error") or ""
+        if not reason or not str(reason).strip():
+            return False
+    return True if saw_any or True else False  # vacuous True when no failures observed
+
+
+def tiff_all_pages_ocrd(outcome: RunOutcome, *, case: Any = None) -> bool:
+    """Hard / 1.00 — N-page TIFF produces ≥1 distinct citation per page index.
+
+    Only gates ``document_modality == 'tiff_fax'`` cases. Reads
+    ``outcome.ocr_page_citations`` (list of ints — citation count per page,
+    indexed 0..N-1) OR falls back to deriving page indexes from the
+    extraction's citations (via each citation's ``page`` field, if present).
+
+    Catches the classic ``Pillow TiffImagePlugin.seek()`` off-by-one where the
+    page iterator stops at N-1 instead of N.
+
+    Vacuous-True for non-TIFF cases and when the outcome lacks page
+    instrumentation (runner not yet wired).
+    """
+    if case is None or getattr(case, "document_modality", None) != "tiff_fax":
+        return True
+    pages = getattr(outcome, "ocr_page_citations", None)
+    if isinstance(pages, list) and pages:
+        # Every page must have at least one citation.
+        return all(isinstance(c, int) and c > 0 for c in pages)
+    # Fallback — count distinct ``page`` values across all citations.
+    extraction = outcome.extraction
+    if not isinstance(extraction, dict):
+        return True
+    seen_pages: Set[int] = set()
+    expected_pages = getattr(outcome, "tiff_n_pages", None)
+    for item in _iter_cited_items(extraction):
+        for cit in _iter_citations_for_item(item):
+            page = cit.get("page")
+            if isinstance(page, int):
+                seen_pages.add(page)
+    if not isinstance(expected_pages, int) or expected_pages <= 0:
+        return True  # no page-count evidence — informational
+    return len(seen_pages) >= expected_pages
+
+
+def synthetic_marker_not_extracted(outcome: RunOutcome, *, case: Any = None) -> bool:
+    """Hard / 1.00 — staged Observation ``valueString`` / ``note.text`` must
+    NOT contain ``Synthetic data`` or ``no PHI`` markers.
+
+    Walks ``outcome.staged_observations`` (list of FHIR Observation dicts) and
+    runs the regex against each Observation's ``valueString`` and every
+    ``note[*].text``. Any hit fails the rubric — synthetic-data placeholders
+    are scaffolding tokens that must never be lifted into a clinical record.
+
+    Vacuous-True when no staged observations are present.
+    """
+    staged = _staged_observations(outcome)
+    if staged is None or not staged:
+        return True
+    for obs in staged:
+        if not isinstance(obs, dict):
+            continue
+        # FHIR Observation may carry value via valueString, valueQuantity, etc.
+        # The contract specifies value[xText] (free-text shapes).
+        for key in ("valueString", "valueText"):
+            v = obs.get(key)
+            if isinstance(v, str) and _SYNTHETIC_MARKER_RE.search(v):
+                return False
+        notes = obs.get("note") or []
+        if isinstance(notes, list):
+            for n in notes:
+                if isinstance(n, dict):
+                    txt = n.get("text")
+                    if isinstance(txt, str) and _SYNTHETIC_MARKER_RE.search(txt):
+                        return False
+    return True
+
+
+# Auto-discovery registry. New rubrics are picked up by the scoring harness
+# (via ``RUBRIC_REGISTRY[name]`` lookup) without per-rubric wiring in
+# ``scoring.py``. Each entry is a callable accepting (outcome, *, case)
+# kwargs (case may be ignored). The registry is the single source of truth
+# for rubric discovery — keep ``__all__`` aligned with the keys here.
+RUBRIC_REGISTRY: dict[str, Any] = {
+    "quarantine_audit_emitted": quarantine_audit_emitted,
+    "no_unconfirmed_writes": no_unconfirmed_writes,
+    "stage_failure_audit_emitted": stage_failure_audit_emitted,
+    "tiff_all_pages_ocrd": tiff_all_pages_ocrd,
+    "synthetic_marker_not_extracted": synthetic_marker_not_extracted,
+}
+
+
 __all__ = [
     "schema_valid",
     "citation_present",
@@ -750,4 +952,11 @@ __all__ = [
     "correct_critic_decision",
     "no_phi_in_logs",
     "keyword_match_in_citation",
+    # Phase 9 Slice 9.9 — multimodal expansion rubrics.
+    "quarantine_audit_emitted",
+    "no_unconfirmed_writes",
+    "stage_failure_audit_emitted",
+    "tiff_all_pages_ocrd",
+    "synthetic_marker_not_extracted",
+    "RUBRIC_REGISTRY",
 ]

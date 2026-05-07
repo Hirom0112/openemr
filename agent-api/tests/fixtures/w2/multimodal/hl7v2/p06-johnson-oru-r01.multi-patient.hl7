@@ -1,0 +1,33 @@
+MSH|^~\&|HFH-LIS|HENRY FORD HEALTH LAB|EHR^^L|EHR|20260506143215||ORU^R01^ORU_R01|MSG-p06-20260506143215-ORU|P|2.5.1
+PID|1||HFH-8866213^^^MRN^MR||JOHNSON^MARCUS^T||19540208|M||2054-5^Black or African American^HL70005|8821 WOODWARD AVE^^DETROIT^MI^48202^USA||^PRN^PH^^^313^5550156|||W|||||||2054-5^Black or African American^HL70005
+PV1|1|O|HFH IM CLINIC^^^DETROIT||||1543765287^BENNETT^OLIVIA^^^^^^NPI|1543765287^BENNETT^OLIVIA^^^^^^NPI||||||||||VN-JOHNSON-ORU|||||||||||||||||||||||||20260506
+ORC|RE|ORD-p06-0001|FIL-p06-0001|||||||||1543765287^BENNETT^OLIVIA^^^^^^NPI
+OBR|1|ORD-p06-0001|FIL-p06-0001|24320-4^Basic metabolic 2000 panel - Serum or Plasma^LN|||20260425100000|||||||20260425100000||1543765287^BENNETT^OLIVIA^^^^^^NPI|||||||20260506143215|||F
+OBX|1|NM|2951-2^Sodium [Moles/volume] in Serum or Plasma^LN||138|mmol/L|136-145|N|||F|||20260425100000
+OBX|2|NM|2823-3^Potassium [Moles/volume] in Serum or Plasma^LN||4.9|mmol/L|3.5-5.1|N|||F|||20260425100000
+OBX|3|NM|2075-0^Chloride [Moles/volume] in Serum or Plasma^LN||104|mmol/L|98-107|N|||F|||20260425100000
+OBX|4|NM|2028-9^Carbon dioxide, total [Moles/volume] in Serum or Plasma^LN||24|mmol/L|22-29|N|||F|||20260425100000
+OBX|5|NM|3094-0^Urea nitrogen [Mass/volume] in Serum or Plasma^LN||32|mg/dL|7-20|H|||F|||20260425100000
+OBX|6|NM|2160-0^Creatinine [Mass/volume] in Serum or Plasma^LN||1.6|mg/dL|0.70-1.30|H|||F|||20260425100000
+OBX|7|NM|2345-7^Glucose [Mass/volume] in Serum or Plasma^LN||132|mg/dL|70-99|H|||F|||20260425100000
+OBX|8|NM|17861-6^Calcium [Mass/volume] in Serum or Plasma^LN||9.1|mg/dL|8.6-10.2|N|||F|||20260425100000
+NTE|1|L|eGFR 47 — CKD stage 3a. Avoid nephrotoxins; cardiology co-management.
+ORC|RE|ORD-p06-0002|FIL-p06-0002|||||||||1543765287^BENNETT^OLIVIA^^^^^^NPI
+OBR|2|ORD-p06-0002|FIL-p06-0002|42637-9^Natriuretic peptide.B [Mass/volume] in Serum or Plasma^LN|||20260425100000|||||||20260425100000||1543765287^BENNETT^OLIVIA^^^^^^NPI|||||||20260506143215|||F
+OBX|1|NM|30934-4^Natriuretic peptide B [Mass/volume] in Serum or Plasma^LN||842|pg/mL|<100|HH|||F|||20260425100000
+OBX|2|NM|718-7^Hemoglobin [Mass/volume] in Blood^LN||11.2|g/dL|13.5-17.5|L|||F|||20260425100000
+NTE|1|L|BNP elevated — consistent with HFrEF decompensation. Anemia of CKD.
+
+MSH|^~\&|UWM-LIS|UW MEDICAL CENTER LAB|EHR^^L|EHR|20260506143215||ORU^R01^ORU_R01|MSG-p07-20260506143215-ORU|P|2.5.1
+PID|1||UWM-3320175^^^MRN^MR||NGUYEN^OLIVIA^T||19971019|F||2028-9^Asian^HL70005|2104 NE 65TH ST^^SEATTLE^WA^98115^USA||^PRN^PH^^^206^5550149|||S|||||||2028-9^Asian^HL70005
+PV1|1|O|UWM FAMILY MED^^^SEATTLE||||1249270285^WALSH^STEPHEN^^^^^^NPI|1249270285^WALSH^STEPHEN^^^^^^NPI||||||||||VN-NGUYEN-ORU|||||||||||||||||||||||||20260506
+ORC|RE|ORD-p07-0001|FIL-p07-0001|||||||||1249270285^WALSH^STEPHEN^^^^^^NPI
+OBR|1|ORD-p07-0001|FIL-p07-0001|24109-1^Thyroid panel - Serum or Plasma^LN|||20260405084500|||||||20260405084500||1249270285^WALSH^STEPHEN^^^^^^NPI|||||||20260506143215|||F
+OBX|1|NM|3016-3^Thyrotropin [Units/volume] in Serum or Plasma^LN||8.4|mIU/L|0.4-4.0|H|||F|||20260405084500
+OBX|2|NM|3024-7^Thyroxine (T4) free [Mass/volume] in Serum or Plasma^LN||0.7|ng/dL|0.8-1.8|L|||F|||20260405084500
+NTE|1|L|Hypothyroid; levothyroxine titration. Recheck TSH in 6 weeks.
+ORC|RE|ORD-p07-0002|FIL-p07-0002|||||||||1249270285^WALSH^STEPHEN^^^^^^NPI
+OBR|2|ORD-p07-0002|FIL-p07-0002|8099-2^Thyroperoxidase Ab [Units/volume] in Serum^LN|||20260405084500|||||||20260405084500||1249270285^WALSH^STEPHEN^^^^^^NPI|||||||20260506143215|||F
+OBX|1|NM|8099-2^Thyroperoxidase Ab [Units/volume] in Serum^LN||412|IU/mL|<35|HH|||F|||20260405084500
+OBX|2|NM|2276-4^Ferritin [Mass/volume] in Serum or Plasma^LN||18|ng/mL|20-200|L|||F|||20260405084500
+NTE|1|L|TPO Ab strongly positive — Hashimoto's thyroiditis. Iron deficiency without anemia.

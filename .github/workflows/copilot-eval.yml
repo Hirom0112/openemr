@@ -186,6 +186,13 @@ jobs:
         # gate then asserts derivedFrom + citations end-to-end.
         # TODO(stage-4-followup): replace with the canonical OpenEMR migration
         # once the agent-api side is mounted alongside the PHP container.
+        #
+        # Phase 9 Slice 9.9 — adds copilot_pending_extractions and
+        # copilot_quarantined_documents so the new mechanical rubrics
+        # (no_unconfirmed_writes, quarantine_audit_emitted) can probe the
+        # tables instead of silently skipping. Schemas are minimal — the
+        # canonical migrations live in sql/copilot/* and replace these once
+        # the agent-api side is mounted alongside the PHP container.
         run: |
           mysql --host=127.0.0.1 --user=openemr --password=openemr openemr <<'SQL'
           CREATE TABLE IF NOT EXISTS copilot_observations (
@@ -193,9 +200,29 @@ jobs:
             fhir_resource JSON NOT NULL,
             citations JSON NOT NULL
           );
+          CREATE TABLE IF NOT EXISTS copilot_pending_extractions (
+            id VARCHAR(64) NOT NULL PRIMARY KEY,
+            observation_id VARCHAR(64) NULL,
+            state VARCHAR(32) NOT NULL,
+            reason TEXT NULL,
+            payload JSON NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE IF NOT EXISTS copilot_quarantined_documents (
+            id VARCHAR(64) NOT NULL PRIMARY KEY,
+            patient_hint VARCHAR(128) NULL,
+            event VARCHAR(64) NOT NULL,
+            detail_json JSON NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
           SQL
       - name: Generate eval fixture corpus
         run: python3 agent-api/tests/fixtures/eval/_generate_eval_corpus.py
+      - name: Generate W2 multimodal corpus (Phase 9 Slice 9.9)
+        # 15 anchors checked into git + 20 derivatives generated on-demand
+        # (HL7 wrong-patient/multi-patient, XLSX sparse/wrong-mrn/blank,
+        # DOCX wrong-name/corrupt-xml, TIFF mode1/4-page/corrupt-IFD).
+        run: python3 agent-api/tests/fixtures/w2/multimodal/_generate_w2_multimodal_corpus.py
       # Pull the most recent successful w2-eval artifact from the base branch
       # so we can re-run only previously-failing cases on this PR. Falls back
       # to full mode silently if no prior artifact exists.
