@@ -47,13 +47,17 @@ migration doc updated, lights out.
 - [x] Commit
 
 ### 1.2 — Register OAuth client in OpenEMR (~30 min)
-- [ ] Navigate to Administration → System → API Clients
-- [ ] Register confidential client
-- [ ] Set redirect URI to `http://localhost:3000/api/auth/callback/openemr`
-- [ ] Request scopes: openid, fhirUser, patient/*.read,
-      user/*.read, offline_access
-- [ ] Save client ID and secret to password manager
-- [ ] Document in `auth-notes.md` (no secrets in git)
+- [x] ~~Navigate to Administration → System → API Clients~~
+      Done via RFC 7591 dynamic registration (curl `POST /oauth2/default/registration`)
+- [x] Register confidential client (`application_type=private`)
+- [x] Set redirect URI to `http://localhost:3000/api/auth/callback/openemr`
+- [x] Request scopes: openid, fhirUser, offline_access, user/Patient.read,
+      user/AllergyIntolerance.read, user/Condition.read,
+      user/MedicationRequest.read, user/CareTeam.read, user/Observation.read
+- [x] Save client_id + client_secret to `patient-dashboard/.env.local`
+      (gitignored — verified via `git check-ignore`)
+- [x] Document in `auth-notes.md` (no secrets in git)
+- [x] Flip `oauth_clients.is_enabled = 1` via SQL (skips admin-UI approval)
 
 ### 1.3 — Test OAuth flow end-to-end with curl (~45 min)
 - [ ] Hit authorize URL in browser, approve scopes
@@ -65,9 +69,9 @@ migration doc updated, lights out.
 - [ ] Commit
 
 ### 1.4 — Have Claude Code build the API map (~45 min)
-- [ ] Send the API map prompt referencing inventory and auth-notes
-- [ ] Claude Code maps every field to a FHIR endpoint
-- [ ] Output: `dashboard-api-map.md`
+- [x] Send the API map prompt referencing inventory and auth-notes
+- [x] Claude Code maps every field to a FHIR endpoint
+- [x] Output: `dashboard-api-map.md`
 
 ### 1.5 — Verify the API map by hitting 4-5 endpoints with curl (~45 min)
 - [ ] Pick 4-5 endpoints at random from the map
