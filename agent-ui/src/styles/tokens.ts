@@ -14,6 +14,18 @@ export const BRAND = {
   onBrand: '#FFFFFF',
 };
 
+// Slice 9.8 — lane indicator tokens. Each lane in the multimodal pipeline
+// (DOCUMENT/HL7/WORKBOOK) gets its own color so the LaneChip is identifiable
+// at a glance in the dropzone, ApprovalModal header, and quarantine card.
+// Closed enum — anything outside this set falls back to NEU in LaneChip.
+export type Lane = 'DOCUMENT' | 'HL7' | 'WORKBOOK';
+
+export const LANE: Record<Lane, { bg: string; border: string; text: string; label: string }> = {
+  DOCUMENT: { bg: BRAND.tint,   border: BRAND.base, text: BRAND.base,  label: 'Document' },
+  HL7:      { bg: '#F3E8FF',    border: '#7E22CE',  text: '#581C87',   label: 'HL7' },
+  WORKBOOK: { bg: '#CCFBF1',    border: '#0F766E',  text: '#134E4A',   label: 'Workbook' },
+};
+
 export const SURFACE = {
   bg: '#FFFFFF',
   panel: '#F9FAFB',

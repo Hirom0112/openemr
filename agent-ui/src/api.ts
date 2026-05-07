@@ -618,6 +618,227 @@ export interface IngestResponse {
   };
 }
 
+// ── Slice 9.8: discriminated ingest result + staging/quarantine surface ─────
+
+/**
+ * Quarantine response payload (HTTP 202). Server schema mirrored from
+ * `agent-api/main.py` document_ingest quarantine branch (~line 1678).
+ */
+export interface QuarantineIngestPayload {
+  status: 'quarantined';
+  quarantine_id: string;
+  document_reference_id: string;
+  reason_code: string;
+  hint_summary: Record<string, unknown>;
+  expires_at: string;
+}
+
+/** Staging metadata block carried on a 200 response when rows were staged. */
+export interface StagingMetadata {
+  file_batch_id: string;
+  pending_extraction_ids: number[];
+}
+
+export interface ParseSummary {
+  parsed_format?: string;
+  n_records?: number;
+  [k: string]: unknown;
+}
+
+/**
+ * Discriminated union returned by the FileDropZone wrapper. Branching is
+ * status-code + metadata-shape driven so callers don't pattern-match on
+ * server prose:
+ *   - 202 → `quarantined`
+ *   - 200 + metadata.staging present → `staged`
+ *   - 200 otherwise → `committed` (legacy synchronous-write path)
+ */
+export type IngestResult =
+  | { kind: 'committed'; response: IngestResponse }
+  | { kind: 'staged'; response: IngestResponse; staging: StagingMetadata; parseSummary?: ParseSummary }
+  | { kind: 'quarantined'; payload: QuarantineIngestPayload };
+
+// ── Pending extractions (Slice 9.3) ─────────────────────────────────────────
+
+export type PendingState = 'pending' | 'approved' | 'rejected' | 'written' | 'failed';
+export type TargetResourceType = 'Observation' | 'Task' | 'AllergyIntolerance';
+
+export interface PendingExtractionRow {
+  id: number;
+  document_reference_id: string;
+  file_batch_id: string;
+  patient_id: string;
+  target_resource_type: TargetResourceType;
+  target_resource_id: string;
+  state: PendingState;
+  payload: Record<string, unknown>;
+  write_error?: string | null;
+  retry_count?: number;
+  staged_at?: string | null;
+  decided_at?: string | null;
+  decided_by?: string | null;
+  written_at?: string | null;
+}
+
+export interface ListPendingResponse {
+  rows: PendingExtractionRow[];
+  patient_id: string;
+}
+
+export interface ApproveOneResponse {
+  pending_id: number;
+  state: PendingState;
+  target_resource_id: string;
+  write_error?: string | null;
+}
+
+export interface BatchApproveResultItem {
+  pending_id: number;
+  state: PendingState;
+  write_error?: string | null;
+  error?: string | null;
+}
+
+export interface BatchApproveResponse {
+  results: BatchApproveResultItem[];
+  n_approved: number;
+  n_failed: number;
+}
+
+export interface RejectResponse {
+  pending_id: number;
+  state: PendingState;
+}
+
+// ── Quarantine (Slice 9.2) ──────────────────────────────────────────────────
+
+export interface QuarantineRow {
+  quarantine_id: string;
+  document_reference_id: string;
+  file_batch_id?: string | null;
+  panel_id: string;
+  state: 'unclaimed' | 'claimed' | 'matched' | 'rejected' | 'expired';
+  reason_code: string;
+  parsed_identity: Record<string, unknown>;
+  candidate_matches: unknown[];
+  claimed_by?: string | null;
+  claim_expires_at?: string | null;
+  resolved_patient_id?: string | null;
+  expires_at?: string | null;
+  created_at?: string | null;
+}
+
+export interface QuarantineListResponse {
+  rows: QuarantineRow[];
+  panel_id: string;
+}
+
+export interface QuarantineMatchResponse {
+  quarantine_id: string;
+  state: string;
+  resolved_patient_id: string;
+}
+
+export interface QuarantineRejectResponse {
+  quarantine_id: string;
+  state: string;
+}
+
+// ── Network helper ──────────────────────────────────────────────────────────
+
+async function _jsonOrThrow<T>(res: Response, op: string): Promise<T> {
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`${op} failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  return (await res.json()) as T;
+}
+
+// ── Pending-extractions exports ─────────────────────────────────────────────
+
+/** GET /pending-extractions?patient_id=...&state=...&file_batch_id=... */
+export async function getPending(
+  baseUrl: string,
+  params: { patient_id: string; state?: PendingState; file_batch_id?: string; limit?: number },
+): Promise<ListPendingResponse> {
+  const qs = new URLSearchParams();
+  qs.set('patient_id', params.patient_id);
+  if (params.state) qs.set('state', params.state);
+  if (params.file_batch_id) qs.set('file_batch_id', params.file_batch_id);
+  if (params.limit !== undefined) qs.set('limit', String(params.limit));
+  const res = await fetch(`${baseUrl}/pending-extractions?${qs.toString()}`, withAuth({ method: 'GET' }));
+  return _jsonOrThrow<ListPendingResponse>(res, 'list pending');
+}
+
+/** GET /pending-extractions/{id} */
+export async function getPendingOne(baseUrl: string, pendingId: number): Promise<PendingExtractionRow> {
+  const res = await fetch(`${baseUrl}/pending-extractions/${pendingId}`, withAuth({ method: 'GET' }));
+  return _jsonOrThrow<PendingExtractionRow>(res, 'get pending');
+}
+
+/** POST /pending-extractions/{id}/approve */
+export async function approveOne(baseUrl: string, pendingId: number): Promise<ApproveOneResponse> {
+  const res = await fetch(`${baseUrl}/pending-extractions/${pendingId}/approve`, withAuth({ method: 'POST' }));
+  return _jsonOrThrow<ApproveOneResponse>(res, 'approve');
+}
+
+/** POST /pending-extractions/batch-approve  body: { ids: [...] } */
+export async function approveBatch(baseUrl: string, ids: number[]): Promise<BatchApproveResponse> {
+  const res = await fetch(`${baseUrl}/pending-extractions/batch-approve`, withAuth({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  }));
+  return _jsonOrThrow<BatchApproveResponse>(res, 'batch approve');
+}
+
+/** POST /pending-extractions/{id}/reject  body: { reason } */
+export async function rejectOne(baseUrl: string, pendingId: number, reason: string): Promise<RejectResponse> {
+  const res = await fetch(`${baseUrl}/pending-extractions/${pendingId}/reject`, withAuth({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  }));
+  return _jsonOrThrow<RejectResponse>(res, 'reject');
+}
+
+// ── Quarantine exports ──────────────────────────────────────────────────────
+
+/** GET /document/quarantine?state=... */
+export async function quarantineList(baseUrl: string, state?: QuarantineRow['state']): Promise<QuarantineListResponse> {
+  const qs = state ? `?state=${encodeURIComponent(state)}` : '';
+  const res = await fetch(`${baseUrl}/document/quarantine${qs}`, withAuth({ method: 'GET' }));
+  return _jsonOrThrow<QuarantineListResponse>(res, 'quarantine list');
+}
+
+/** POST /document/quarantine/{id}/match  body: { target_patient_id } */
+export async function quarantineMatch(
+  baseUrl: string,
+  quarantineId: string,
+  targetPatientId: string,
+): Promise<QuarantineMatchResponse> {
+  const res = await fetch(`${baseUrl}/document/quarantine/${encodeURIComponent(quarantineId)}/match`, withAuth({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_patient_id: targetPatientId }),
+  }));
+  return _jsonOrThrow<QuarantineMatchResponse>(res, 'quarantine match');
+}
+
+/** POST /document/quarantine/{id}/reject  body: { reason } */
+export async function quarantineReject(
+  baseUrl: string,
+  quarantineId: string,
+  reason: string,
+): Promise<QuarantineRejectResponse> {
+  const res = await fetch(`${baseUrl}/document/quarantine/${encodeURIComponent(quarantineId)}/reject`, withAuth({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  }));
+  return _jsonOrThrow<QuarantineRejectResponse>(res, 'quarantine reject');
+}
+
 /**
  * Upload a single PDF or PNG to the ingest endpoint as multipart/form-data.
  *
@@ -656,6 +877,90 @@ export async function ingestDocument(
     throw new Error(`ingest failed: ${res.status} ${text.slice(0, 200)}`);
   }
   return (await res.json()) as IngestResponse;
+}
+
+/**
+ * Slice 9.8 wrapper around ``POST /document/ingest`` that returns a
+ * discriminated union instead of a single ``IngestResponse``. Branching:
+ *   - HTTP 202 → ``quarantined`` (server held the file, needs operator match)
+ *   - HTTP 200 + ``metadata.staging`` → ``staged`` (rows in pending queue)
+ *   - HTTP 200 otherwise → ``committed`` (legacy synchronous-write path)
+ *
+ * The structured-error branch (4xx with a JSON sub-code) is surfaced via
+ * an ``IngestStructuredError`` thrown to the caller; FileDropZone maps the
+ * sub-code to its copy table.
+ */
+export class IngestStructuredError extends Error {
+  public readonly status: number;
+  public readonly subCode: string | null;
+  public readonly raw: string;
+  constructor(status: number, subCode: string | null, raw: string) {
+    super(`ingest_${status}${subCode ? '_' + subCode : ''}`);
+    this.name = 'IngestStructuredError';
+    this.status = status;
+    this.subCode = subCode;
+    this.raw = raw;
+  }
+}
+
+function _extractSubCode(body: string): string | null {
+  // Servers in this repo emit either `{"detail":"<msg>"}` (FastAPI default)
+  // or `{"detail":{"code":"...","message":"..."}}` for structured errors.
+  // Try both shapes; fall back to null.
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown };
+    const d = parsed.detail;
+    if (d && typeof d === 'object' && 'code' in d && typeof (d as { code: unknown }).code === 'string') {
+      return (d as { code: string }).code;
+    }
+  } catch {
+    // not JSON or no detail.code — fall through
+  }
+  return null;
+}
+
+export async function ingestDocumentWithResult(
+  baseUrl: string,
+  file: File,
+  patientId: string | null,
+  docTypeHint?: string,
+): Promise<IngestResult> {
+  const form = new FormData();
+  form.append('file', file);
+  if (patientId) form.append('patient_id', patientId);
+  if (docTypeHint) form.append('doc_type_hint', docTypeHint);
+
+  const headers: Record<string, string> = {};
+  const jwt = getAuthToken();
+  if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
+
+  const res = await fetch(`${baseUrl}/document/ingest`, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+
+  if (res.status === 202) {
+    const payload = (await res.json()) as QuarantineIngestPayload;
+    return { kind: 'quarantined', payload };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new IngestStructuredError(res.status, _extractSubCode(body), body.slice(0, 400));
+  }
+  const response = (await res.json()) as IngestResponse;
+  const meta = response.metadata as
+    | { staging?: StagingMetadata; parse_summary?: ParseSummary }
+    | undefined;
+  if (meta && meta.staging && Array.isArray(meta.staging.pending_extraction_ids)) {
+    return {
+      kind: 'staged',
+      response,
+      staging: meta.staging,
+      parseSummary: meta.parse_summary,
+    };
+  }
+  return { kind: 'committed', response };
 }
 
 export async function sendQuery(sessionId: string, patientId: string, query: string) {

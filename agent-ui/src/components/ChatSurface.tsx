@@ -12,7 +12,11 @@ import SoftWarnBanner from './SoftWarnBanner';
 import CitationChip from './CitationChip';
 import DocumentViewer from './DocumentViewer';
 import FileDropZone from './FileDropZone';
-import type { IngestResponse } from '../api';
+import ApprovalModal from './ApprovalModal';
+import QuarantineCard from './QuarantineCard';
+import { laneFromFilename } from './LaneChip';
+import type { IngestResponse, QuarantineIngestPayload, StagingMetadata } from '../api';
+import type { Lane } from '../styles/tokens';
 import type { Citation as W2Citation, BboxLayoutBlock, SoftWarn } from '../types/citation';
 
 /**
@@ -570,6 +574,20 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   // first id; 0 = dropzone disabled.
   const ingestPatientId: string | null = patientIds.length > 0 ? patientIds[0] : null;
   const ingestBaseUrl: string = (window.__COPILOT_CONFIG__?.agentApiUrl as string | undefined) ?? '';
+
+  // Slice 9.8 — root-level state for the new approval / quarantine surfaces.
+  // Each captures the lane from the originating upload so the modal/card
+  // header can render the matching LaneChip.
+  const [pendingApproval, setPendingApproval] = useState<{ staging: StagingMetadata; lane: Lane | null } | null>(null);
+  const [pendingQuarantine, setPendingQuarantine] = useState<{ payload: QuarantineIngestPayload; lane: Lane | null } | null>(null);
+
+  const handleStaged = useCallback((staging: StagingMetadata, _resp: IngestResponse, file: File): void => {
+    setPendingApproval({ staging, lane: laneFromFilename(file.name) });
+  }, []);
+
+  const handleQuarantined = useCallback((payload: QuarantineIngestPayload, file: File): void => {
+    setPendingQuarantine({ payload, lane: laneFromFilename(file.name) });
+  }, []);
 
   // When a NEW finalized assistant message arrives, collapse all prior assistant messages.
   // Census responses are exempt — they stay open as the persistent reference frame.
@@ -1763,6 +1781,8 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
             baseUrl={ingestBaseUrl}
             patientId={ingestPatientId}
             onExtraction={handleIngestExtraction}
+            onStaged={handleStaged}
+            onQuarantined={handleQuarantined}
           />
         </div>
 
@@ -1803,6 +1823,37 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           bboxLayout={viewerSource.bboxLayout}
           onClose={() => setViewerSource(null)}
         />
+      )}
+      {/* Slice 9.8 — staging approval surface, mounted at root so it overlays
+          the entire chat. Sibling to PostIngestContextCard at :1603 (which
+          renders inline as part of an assistant turn). */}
+      {pendingApproval && (
+        <ApprovalModal
+          baseUrl={ingestBaseUrl}
+          staging={pendingApproval.staging}
+          lane={pendingApproval.lane}
+          onClose={() => setPendingApproval(null)}
+        />
+      )}
+      {/* Slice 9.8 — quarantine card, mounted at root as a sticky bottom-right
+          panel-style notice. Distinct from PostIngestContextCard. */}
+      {pendingQuarantine && (
+        <div
+          style={{
+            position: 'fixed',
+            right: 16,
+            bottom: 16,
+            zIndex: 1050,
+            width: 'min(420px, calc(100% - 32px))',
+          }}
+        >
+          <QuarantineCard
+            baseUrl={ingestBaseUrl}
+            payload={pendingQuarantine.payload}
+            lane={pendingQuarantine.lane}
+            onClose={() => setPendingQuarantine(null)}
+          />
+        </div>
       )}
     </>
   );

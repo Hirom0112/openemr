@@ -8,8 +8,11 @@ import { validateDroppedFiles } from './FileDropZone';
  * multi-file drops.
  */
 
-function makeFile(name: string, type: string): File {
-  return new File(['x'], name, { type });
+function makeFile(name: string, type: string, sizeBytes = 1): File {
+  // File size is determined by the blob parts; pad to the requested size for
+  // the MAX_FILE_SIZE_BYTES path in Slice 9.8.
+  const body = sizeBytes <= 1 ? 'x' : 'x'.repeat(sizeBytes);
+  return new File([body], name, { type });
 }
 
 describe('FileDropZone.validateDroppedFiles', () => {
@@ -31,12 +34,48 @@ describe('FileDropZone.validateDroppedFiles', () => {
     expect(result.ok).toBe(true);
   });
 
-  test('rejects a Word document', () => {
+  // Slice 9.8: docx/xlsx/tiff/hl7 are now in the whitelist.
+  test('accepts a Word document (.docx)', () => {
     const result = validateDroppedFiles([
       makeFile('note.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
     ]);
+    expect(result.ok).toBe(true);
+  });
+
+  test('accepts an XLSX workbook', () => {
+    const result = validateDroppedFiles([
+      makeFile('book.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+    ]);
+    expect(result.ok).toBe(true);
+  });
+
+  test('accepts a TIFF (by extension when MIME is image/tiff)', () => {
+    const result = validateDroppedFiles([makeFile('fax.tiff', 'image/tiff')]);
+    expect(result.ok).toBe(true);
+  });
+
+  test('accepts an HL7 file with text/plain MIME (fallback)', () => {
+    const result = validateDroppedFiles([makeFile('lab.hl7', 'text/plain')]);
+    expect(result.ok).toBe(true);
+  });
+
+  test('accepts an HL7 file with application/octet-stream MIME (fallback)', () => {
+    const result = validateDroppedFiles([makeFile('lab.hl7', 'application/octet-stream')]);
+    expect(result.ok).toBe(true);
+  });
+
+  test('rejects an unrelated text file', () => {
+    const result = validateDroppedFiles([makeFile('notes.txt', 'text/plain')]);
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/Unsupported/);
+  });
+
+  test('rejects files larger than 25 MB', () => {
+    // 26 MB string blob — over the cap.
+    const big = 26 * 1024 * 1024;
+    const result = validateDroppedFiles([makeFile('huge.pdf', 'application/pdf', big)]);
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/too large/i);
   });
 
   test('rejects multiple files', () => {
