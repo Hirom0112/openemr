@@ -300,3 +300,24 @@ agent_supervisor_handoff_total = Counter(
     "Total supervisor → worker handoffs by source and target node",
     ["from", "to"],
 )
+
+# ── Post-ingest document context + chat (Wave 2D) ────────────────────────────
+# Pair-of-pairs covering the two endpoints that drive the post-ingest UX:
+#   /document/post-ingest-context       — deterministic doc summary + RAG
+#   /document/{document_reference_id}/chat — document-grounded follow-up chat
+# Both endpoints emit a paired ``post_ingest_endpoint_outcome`` log line via
+# ``observability.tool_logging.log_tool_outcome`` so latency and outcome
+# claims are falsifiable from both a log line and a metric (see CLAUDE.md
+# "Observability — verifiable latency claims").
+agent_post_ingest_requests_total = Counter(
+    "agent_post_ingest_requests_total",
+    "Post-ingest endpoint requests by endpoint and outcome",
+    ["endpoint", "outcome"],
+)
+
+agent_post_ingest_duration_seconds = Histogram(
+    "agent_post_ingest_duration_seconds",
+    "Post-ingest endpoint wall-clock seconds, labelled by endpoint",
+    ["endpoint"],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0),
+)

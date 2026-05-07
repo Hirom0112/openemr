@@ -47,6 +47,8 @@ from agent.dispatcher import dispatch
 from agent.metrics import (
     agent_client_timing_seconds,
     agent_dispatch_latency_seconds,
+    agent_post_ingest_duration_seconds,
+    agent_post_ingest_requests_total,
     agent_prewarm_duration_seconds,
     agent_prewarm_runs_total,
     agent_prompt_cache_hits_total,
@@ -2322,74 +2324,98 @@ async def document_post_ingest_context(
     never raises 500 for an unrecognised extraction shape — that path is
     short-circuited with an empty query string.
     """
+    from observability.tool_logging import log_tool_outcome as _log_tool_outcome
+
     rid = request_id_var.get() or uuid.uuid4().hex
     started = time.perf_counter()
+    _endpoint_label = "post_ingest_context"
+    _outcome = "success"
 
-    extraction = body.extraction or {}
-    summary = _synthesize_doc_summary(extraction)
-    query = _build_rag_query_from_extraction(extraction)
+    try:
+        extraction = body.extraction or {}
+        summary = _synthesize_doc_summary(extraction)
+        query = _build_rag_query_from_extraction(extraction)
 
-    guideline_dicts: list[dict[str, Any]] = []
-    if query:
-        # Local import — same pattern as /evidence/search.
-        from rag import retrieve as _rag_retrieve
+        guideline_dicts: list[dict[str, Any]] = []
+        if query:
+            # Local import — same pattern as /evidence/search.
+            from rag import retrieve as _rag_retrieve
 
-        try:
-            snippets = await _rag_retrieve.search(query, k=5)
-        except Exception as exc:  # noqa: BLE001 — retriever boundary
-            logger.warning(
-                "post_ingest_context_retriever_failed",
-                extra={
-                    "request_id": rid,
-                    "error_type": type(exc).__name__,
-                },
-            )
-            snippets = []
+            try:
+                snippets = await _rag_retrieve.search(query, k=5)
+            except Exception as exc:  # noqa: BLE001 — retriever boundary
+                logger.warning(
+                    "post_ingest_context_retriever_failed",
+                    extra={
+                        "request_id": rid,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                snippets = []
 
-        for s in snippets:
-            d = s._asdict()
-            ivd = d.get("indexed_version_date")
-            if ivd is not None and not isinstance(ivd, str):
-                try:
-                    d["indexed_version_date"] = ivd.isoformat()
-                except Exception:
-                    d["indexed_version_date"] = str(ivd)
-            content = d.get("content")
-            if isinstance(content, str) and len(content) > 400:
-                d["content"] = content[:400]
-            guideline_dicts.append(
-                {
-                    "chunk_id": d.get("chunk_id"),
-                    "source_id": d.get("source_id"),
-                    "document_title": d.get("document_title"),
-                    "section": d.get("section"),
-                    "page_number": d.get("page_number"),
-                    "content": d.get("content"),
-                    "relevance_score": d.get("relevance_score"),
-                }
-            )
+            for s in snippets:
+                d = s._asdict()
+                ivd = d.get("indexed_version_date")
+                if ivd is not None and not isinstance(ivd, str):
+                    try:
+                        d["indexed_version_date"] = ivd.isoformat()
+                    except Exception:
+                        d["indexed_version_date"] = str(ivd)
+                content = d.get("content")
+                if isinstance(content, str) and len(content) > 400:
+                    d["content"] = content[:400]
+                guideline_dicts.append(
+                    {
+                        "chunk_id": d.get("chunk_id"),
+                        "source_id": d.get("source_id"),
+                        "document_title": d.get("document_title"),
+                        "section": d.get("section"),
+                        "page_number": d.get("page_number"),
+                        "content": d.get("content"),
+                        "relevance_score": d.get("relevance_score"),
+                    }
+                )
 
-    duration_ms = int((time.perf_counter() - started) * 1000)
-    logger.info(
-        "post_ingest_context_completed",
-        extra={
-            "request_id": rid,
-            "query_prefix": query[:30],
-            "n_guidelines": len(guideline_dicts),
-            "duration_ms": duration_ms,
-        },
-    )
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        logger.info(
+            "post_ingest_context_completed",
+            extra={
+                "request_id": rid,
+                "query_prefix": query[:30],
+                "n_guidelines": len(guideline_dicts),
+                "duration_ms": duration_ms,
+            },
+        )
 
-    return {
-        "summary": summary,
-        "query_used": query,
-        "guidelines": guideline_dicts,
-        "metadata": {
-            "request_id": rid,
-            "patient_id": body.patient_id,
-            "document_reference_id": body.document_reference_id,
-        },
-    }
+        return {
+            "summary": summary,
+            "query_used": query,
+            "guidelines": guideline_dicts,
+            "metadata": {
+                "request_id": rid,
+                "patient_id": body.patient_id,
+                "document_reference_id": body.document_reference_id,
+            },
+        }
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        _duration_s = time.perf_counter() - started
+        _duration_ms = int(_duration_s * 1000)
+        agent_post_ingest_requests_total.labels(
+            endpoint=_endpoint_label, outcome=_outcome
+        ).inc()
+        agent_post_ingest_duration_seconds.labels(
+            endpoint=_endpoint_label
+        ).observe(_duration_s)
+        _log_tool_outcome(
+            tool_name=_endpoint_label,
+            duration_ms=_duration_ms,
+            cache="n/a",
+            patient_id=body.patient_id,
+            extra={"endpoint": _endpoint_label, "outcome": _outcome},
+        )
 
 
 class _ChatHistoryTurn(BaseModel):
@@ -2429,119 +2455,150 @@ async def document_chat(
     ``query.conversation`` — that path runs FHIR retrieval, which is the wrong
     semantics here (we already have the document in hand).
     """
+    from observability.tool_logging import log_tool_outcome as _log_tool_outcome
+
     rid = request_id_var.get() or uuid.uuid4().hex
-
-    question = (body.question or "").strip()
-    if not question:
-        raise HTTPException(status_code=400, detail="question must not be empty")
-
-    # Compact JSON (no whitespace) keeps the prompt short.
-    import json as _json
-
-    extraction_json = _json.dumps(body.extraction or {}, separators=(",", ":"))[:8000]
-
-    # Question-aware second retrieval: the post-ingest pass biases toward the
-    # document; here we re-retrieve scoped to what the clinician actually
-    # asked, then merge with the doc-time guidelines (dedup by chunk_id).
-    merged: dict[str, dict[str, Any]] = {}
-    for g in (body.guidelines or []):
-        if isinstance(g, dict) and g.get("chunk_id"):
-            merged[g["chunk_id"]] = g
-    try:
-        from rag import retrieve as _rag_retrieve
-
-        tags = _extract_condition_tags(body.extraction or {})
-        question_query = " ".join([*tags[:1], question]).strip()[:199]
-        if question_query:
-            extra_snippets = await _rag_retrieve.search(question_query, k=5)
-            for s in extra_snippets:
-                d = s._asdict()
-                ivd = d.get("indexed_version_date")
-                if ivd is not None and not isinstance(ivd, str):
-                    d["indexed_version_date"] = ivd.isoformat()
-                cid = d.get("chunk_id")
-                if cid and cid not in merged:
-                    merged[cid] = d
-    except Exception as exc:  # noqa: BLE001 — retriever boundary
-        logger.warning(
-            "document_chat_question_retrieval_failed",
-            extra={"request_id": rid, "error_type": type(exc).__name__},
-        )
-
-    guidelines_compact = [
-        {"chunk_id": g.get("chunk_id"), "content": g.get("content")}
-        for g in merged.values()
-        if isinstance(g, dict)
-    ]
-    guidelines_json = _json.dumps(guidelines_compact, separators=(",", ":"))[:8000]
-
-    messages: list[dict[str, Any]] = []
-    for turn in body.history or []:
-        if turn.role in ("user", "assistant") and turn.content:
-            messages.append({"role": turn.role, "content": turn.content})
-
-    user_payload = (
-        f"DOCUMENT_EXTRACTION:\n{extraction_json}\n\n"
-        f"GUIDELINES:\n{guidelines_json}\n\n"
-        f"DOCUMENT_REFERENCE_ID: {document_reference_id}\n"
-        f"QUESTION: {question}"
-    )
-    messages.append({"role": "user", "content": user_payload})
-
-    # Inline anthropic client — replicates the conversation.py setup pattern
-    # without importing conversation.py (per task constraint).
-    import anthropic as _anthropic
-
-    client = _anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    _started = time.perf_counter()
+    _endpoint_label = "document_chat"
+    _outcome = "success"
 
     try:
-        completion = await client.messages.create(
-            model=_DOC_CHAT_MODEL,
-            max_tokens=1024,
-            system=_DOC_CHAT_SYSTEM_PROMPT,
-            messages=messages,
+        question = (body.question or "").strip()
+        if not question:
+            _outcome = "error"
+            raise HTTPException(status_code=400, detail="question must not be empty")
+
+        # Compact JSON (no whitespace) keeps the prompt short.
+        import json as _json
+
+        extraction_json = _json.dumps(body.extraction or {}, separators=(",", ":"))[:8000]
+
+        # Question-aware second retrieval: the post-ingest pass biases toward the
+        # document; here we re-retrieve scoped to what the clinician actually
+        # asked, then merge with the doc-time guidelines (dedup by chunk_id).
+        merged: dict[str, dict[str, Any]] = {}
+        for g in (body.guidelines or []):
+            if isinstance(g, dict) and g.get("chunk_id"):
+                merged[g["chunk_id"]] = g
+        try:
+            from rag import retrieve as _rag_retrieve
+
+            tags = _extract_condition_tags(body.extraction or {})
+            question_query = " ".join([*tags[:1], question]).strip()[:199]
+            if question_query:
+                extra_snippets = await _rag_retrieve.search(question_query, k=5)
+                for s in extra_snippets:
+                    d = s._asdict()
+                    ivd = d.get("indexed_version_date")
+                    if ivd is not None and not isinstance(ivd, str):
+                        d["indexed_version_date"] = ivd.isoformat()
+                    cid = d.get("chunk_id")
+                    if cid and cid not in merged:
+                        merged[cid] = d
+        except Exception as exc:  # noqa: BLE001 — retriever boundary
+            logger.warning(
+                "document_chat_question_retrieval_failed",
+                extra={"request_id": rid, "error_type": type(exc).__name__},
+            )
+
+        guidelines_compact = [
+            {"chunk_id": g.get("chunk_id"), "content": g.get("content")}
+            for g in merged.values()
+            if isinstance(g, dict)
+        ]
+        guidelines_json = _json.dumps(guidelines_compact, separators=(",", ":"))[:8000]
+
+        messages: list[dict[str, Any]] = []
+        for turn in body.history or []:
+            if turn.role in ("user", "assistant") and turn.content:
+                messages.append({"role": turn.role, "content": turn.content})
+
+        user_payload = (
+            f"DOCUMENT_EXTRACTION:\n{extraction_json}\n\n"
+            f"GUIDELINES:\n{guidelines_json}\n\n"
+            f"DOCUMENT_REFERENCE_ID: {document_reference_id}\n"
+            f"QUESTION: {question}"
         )
-    except Exception as exc:  # noqa: BLE001 — provider boundary
-        logger.error(
-            "document_chat_anthropic_failed",
+        messages.append({"role": "user", "content": user_payload})
+
+        # Inline anthropic client — replicates the conversation.py setup pattern
+        # without importing conversation.py (per task constraint).
+        import anthropic as _anthropic
+
+        client = _anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+        try:
+            completion = await client.messages.create(
+                model=_DOC_CHAT_MODEL,
+                max_tokens=1024,
+                system=_DOC_CHAT_SYSTEM_PROMPT,
+                messages=messages,
+            )
+        except Exception as exc:  # noqa: BLE001 — provider boundary
+            logger.error(
+                "document_chat_anthropic_failed",
+                extra={
+                    "request_id": rid,
+                    "error_type": type(exc).__name__,
+                    "n_guidelines_provided": len(guidelines_compact),
+                },
+            )
+            _outcome = "error"
+            raise HTTPException(status_code=502, detail="Chat unavailable")
+
+        # Extract plain-text answer from the response. The Anthropic SDK returns
+        # a list of content blocks; we want the concatenated ``text`` blocks.
+        raw_content = getattr(completion, "content", None) or []
+        parts: list[str] = []
+        for block in raw_content:
+            text_attr = getattr(block, "text", None)
+            if isinstance(text_attr, str):
+                parts.append(text_attr)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        answer_text = "".join(parts)
+
+        citations_used = _parse_citations_from_answer(answer_text)
+
+        logger.info(
+            "document_chat_completed",
             extra={
                 "request_id": rid,
-                "error_type": type(exc).__name__,
                 "n_guidelines_provided": len(guidelines_compact),
+                "n_citations_used": len(citations_used),
+                "answer_len": len(answer_text),
             },
         )
-        raise HTTPException(status_code=502, detail="Chat unavailable")
 
-    # Extract plain-text answer from the response. The Anthropic SDK returns
-    # a list of content blocks; we want the concatenated ``text`` blocks.
-    raw_content = getattr(completion, "content", None) or []
-    parts: list[str] = []
-    for block in raw_content:
-        text_attr = getattr(block, "text", None)
-        if isinstance(text_attr, str):
-            parts.append(text_attr)
-        elif isinstance(block, dict) and isinstance(block.get("text"), str):
-            parts.append(block["text"])
-    answer_text = "".join(parts)
-
-    citations_used = _parse_citations_from_answer(answer_text)
-
-    logger.info(
-        "document_chat_completed",
-        extra={
-            "request_id": rid,
-            "n_guidelines_provided": len(guidelines_compact),
-            "n_citations_used": len(citations_used),
-            "answer_len": len(answer_text),
-        },
-    )
-
-    return {
-        "answer": answer_text,
-        "citations_used": citations_used,
-        "metadata": {
-            "request_id": rid,
-            "model": _DOC_CHAT_MODEL,
-            "n_guidelines_provided": len(guidelines_compact),
-        },
-    }
+        return {
+            "answer": answer_text,
+            "citations_used": citations_used,
+            "metadata": {
+                "request_id": rid,
+                "model": _DOC_CHAT_MODEL,
+                "n_guidelines_provided": len(guidelines_compact),
+            },
+        }
+    except HTTPException:
+        if _outcome == "success":
+            _outcome = "error"
+        raise
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        _duration_s = time.perf_counter() - _started
+        _duration_ms = int(_duration_s * 1000)
+        agent_post_ingest_requests_total.labels(
+            endpoint=_endpoint_label, outcome=_outcome
+        ).inc()
+        agent_post_ingest_duration_seconds.labels(
+            endpoint=_endpoint_label
+        ).observe(_duration_s)
+        _log_tool_outcome(
+            tool_name=_endpoint_label,
+            duration_ms=_duration_ms,
+            cache="n/a",
+            patient_id=body.patient_id,
+            extra={"endpoint": _endpoint_label, "outcome": _outcome},
+        )
