@@ -159,9 +159,13 @@ describe("VitalsCardView (render)", () => {
     expect(labels).not.toContain("Vital signs panel");
     expect(values).toEqual(expect.arrayContaining(["96 /min", "18 /min"]));
 
-    // "Last updated" subtitle is present and formatted YYYY-MM-DD HH:mm.
-    const subtitle = screen.getByTestId("vitals-last-updated");
-    expect(subtitle.textContent).toBe("Last updated: 2026-04-29 05:45");
+    // "Most recent vitals from" header is present and formatted YYYY-MM-DD HH:mm.
+    const header = screen.getByTestId("vitals-most-recent");
+    expect(header.textContent).toBe("Most recent vitals from: 2026-04-29 05:45");
+
+    // Trailing trend link from `vitals_fragment.php:45`.
+    const link = screen.getByTestId("vitals-trend-link");
+    expect(link.textContent).toBe("Click here to view and graph all vitals.");
   });
 
   it("renders ONLY the most-recent observation per LOINC (the rule under test)", () => {

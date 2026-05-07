@@ -66,6 +66,33 @@ const LOINC_BP_DIASTOLIC = "8462-4";
 // counterpart unit at render time.
 const LOINC_TEMPERATURE = "8310-5";
 
+/**
+ * Fixed display order from `dashboard-inventory.md` § Vitals → Fields.
+ * Mirrors the case-branch sequence in `interface/forms/vitals/report.php`
+ * (the original PHP card). LOINCs not in this list render at the bottom
+ * in stable insertion order so an unknown vital-sign is still surfaced.
+ *
+ * Temp Method (`form_vitals.temp_method`) is intentionally absent: it
+ * has no LOINC mapping in `FhirObservationVitalsService` and the FHIR
+ * vital-signs endpoint does not expose it. Documented as an explicit
+ * port-side cut in `PATIENT_DASHBOARD_MIGRATION.md`.
+ */
+const VITALS_DISPLAY_ORDER: readonly string[] = [
+    LOINC_BP_PANEL,        // Blood Pressure
+    LOINC_TEMPERATURE,     // Temperature
+    "8867-4",              // Pulse / Heart rate
+    "9279-1",              // Respiration
+    "2708-6",              // Oxygen Saturation
+    "59408-5",             // Pulse Oximetry (alias)
+    "8302-2",              // Height
+    "29463-7",             // Weight
+    "39156-5",             // BMI
+    "9843-4",              // Head Circumference
+    "8280-0",              // Waist Circumference (if surfaced)
+];
+
+const TRENDS_HREF = "/interface/encounter/trend_form.php?formname=vitals";
+
 /** Convert °F → °C with one decimal. */
 export function fahrenheitToCelsius(f: number): number {
     return Math.round(((f - 32) * 5) / 9 * 10) / 10;
@@ -291,14 +318,15 @@ export function VitalsCardView({
     return <EmptyCard title={CARD_TITLE} message="No vitals recorded" />;
   }
 
-  // Stable order: sort by display label so renders are deterministic
-  // for tests and the screen-reader sequence is alphabetical. The
-  // original dashboard's row order is fixed (BP, Temp, ...); we don't
-  // reproduce that ordering exactly because the inventory's seven-row
-  // hardcoded sequence is form-specific, not LOINC-driven.
-  rows.sort((a, b) => displayLabel(a).localeCompare(displayLabel(b)));
+  // Fixed display order, mirroring the case-branch sequence in the
+  // original `vitals_report()`. Rows whose LOINC is not in
+  // `VITALS_DISPLAY_ORDER` render last in stable insertion order.
+  // (Spec: dashboard-inventory.md § Vitals → Fields; corrected
+  // 2026-05-08 from the previous alpha-sort, which was a port deviation.)
+  rows.sort((a, b) => orderIndex(loincOf(a)) - orderIndex(loincOf(b)));
 
-  const lastUpdated = lastUpdatedLabel(rows);
+  const mostRecentFrom = lastUpdatedLabel(rows);
+  const lastUpdated = lastUpdatedFromMeta(rows) ?? mostRecentFrom;
 
   return (
     <Card size="sm" data-testid="vitals-card">
@@ -315,12 +343,12 @@ export function VitalsCardView({
         />
       </CardHeader>
       <CardContent>
-        {lastUpdated ? (
+        {mostRecentFrom ? (
           <p
-            className="mb-2 text-xs text-muted-foreground"
-            data-testid="vitals-last-updated"
+            className="mb-2 text-sm font-semibold"
+            data-testid="vitals-most-recent"
           >
-            Last updated: {lastUpdated}
+            Most recent vitals from: {mostRecentFrom}
           </p>
         ) : null}
         <dl
@@ -342,10 +370,61 @@ export function VitalsCardView({
               </React.Fragment>
             );
           })}
+          {lastUpdated ? (
+            <React.Fragment>
+              <dt
+                className="font-medium text-muted-foreground"
+                data-testid="vitals-last-updated-label"
+              >
+                Last Updated:
+              </dt>
+              <dd data-testid="vitals-last-updated">{lastUpdated}</dd>
+            </React.Fragment>
+          ) : null}
         </dl>
+        <a
+          href={TRENDS_HREF}
+          className="mt-3 inline-block text-sm text-primary hover:underline"
+          data-testid="vitals-trend-link"
+        >
+          Click here to view and graph all vitals.
+        </a>
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * Map a LOINC code to its position in `VITALS_DISPLAY_ORDER`. Unknown
+ * codes (or null) sort to the end via `Number.MAX_SAFE_INTEGER`.
+ */
+function orderIndex(loinc: string | null): number {
+    if (!loinc) return Number.MAX_SAFE_INTEGER;
+    const i = VITALS_DISPLAY_ORDER.indexOf(loinc);
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+}
+
+/**
+ * Pick the latest `meta.lastUpdated` across the kept observations and
+ * format as `YYYY-MM-DD HH:mm`. Returns null when none of the rows carry
+ * a `meta.lastUpdated`. Distinct from `lastUpdatedLabel`, which uses
+ * `effectiveDateTime` for the "Most recent vitals from" header line.
+ */
+export function lastUpdatedFromMeta(observations: FhirObservation[]): string | null {
+    let latest = -Infinity;
+    let latestRaw: string | null = null;
+    for (const obs of observations) {
+        const ts = obs.meta?.lastUpdated;
+        if (!ts) continue;
+        const t = Date.parse(ts);
+        if (Number.isFinite(t) && t > latest) {
+            latest = t;
+            latestRaw = ts;
+        }
+    }
+    if (!latestRaw) return null;
+    const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(latestRaw);
+    return m ? `${m[1]} ${m[2]}` : latestRaw;
 }
 
 /**
