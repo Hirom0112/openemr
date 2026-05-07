@@ -12,11 +12,12 @@
  *   - patient-dashboard/reference-screenshots/10-card-header.png
  */
 import * as React from "react";
-import { History, Plus, User as UserIcon, X as XIcon } from "lucide-react";
+import { User as UserIcon, X as XIcon } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorCard } from "@/components/cards/card-states";
+import { EncounterControls } from "@/components/cards/EncounterControls";
 import { FhirClient } from "@/lib/fhir/client";
 import { authSessionTokenProvider } from "@/lib/fhir/token";
 import type { FhirPatient } from "@/lib/fhir/types";
@@ -196,40 +197,11 @@ export function PatientHeaderView({
           </div>
         </div>
 
-        {/* Encounter controls — STUB.
-            Per dashboard-inventory.md "Encounter picker": shows recent-
-            encounters icon + "Select Encounter (N)" select; (N) is the
-            count. Wiring to the FHIR Encounter endpoint is out of scope
-            for the read-only header per task brief. Rendered disabled
-            with the literal "(1)" matching the reference screenshot for
-            Gloria Tran. */}
-        <div className="ml-auto flex flex-wrap items-center gap-3">
-          <div
-            className="flex items-center gap-1 rounded border bg-muted/40 px-2 py-1 text-sm text-muted-foreground"
-            data-testid="encounter-picker-stub"
-            aria-disabled="true"
-          >
-            <History className="h-4 w-4" aria-hidden="true" />
-            <span>Select Encounter (1)</span>
-          </div>
-          <span
-            className="text-sm text-muted-foreground"
-            data-testid="open-encounter-stub"
-          >
-            Open Encounter: None
-          </span>
-          {/* New-encounter "+" button — STUB. Per inventory "New encounter":
-              creates a new encounter (target URL TODO in inventory). */}
-          <button
-            type="button"
-            aria-label="New encounter (not yet wired)"
-            disabled
-            className="inline-flex h-8 w-8 items-center justify-center rounded border text-muted-foreground opacity-60"
-            data-testid="new-encounter-stub"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
-        </div>
+        {/* Encounter controls (R2.2). Click any of them → toast
+            "Encounter management is not implemented in this port".
+            "Open Encounter: None" is a label, not interactive. The
+            literal "(1)" matches Gloria's reference screenshot. */}
+        <EncounterControls count={1} />
       </CardContent>
     </Card>
   );
