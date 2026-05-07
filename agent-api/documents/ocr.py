@@ -129,6 +129,12 @@ def _format_bbox_id(page: int, idx: int) -> str:
 # Magic-byte signatures for the image formats we accept as "image input".
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _JPEG_MAGIC_PREFIX = b"\xff\xd8\xff"
+# Phase 9 Slice 9.6: TIFF (both byte orders) + DOCX (Zip archive).
+_TIFF_MAGIC_LE = b"II*\x00"
+_TIFF_MAGIC_BE = b"MM\x00*"
+_DOCX_ZIP_MAGIC_PRIMARY = b"PK\x03\x04"
+_DOCX_ZIP_MAGIC_EMPTY = b"PK\x05\x06"
+_DOCX_ZIP_MAGIC_SPANNED = b"PK\x07\x08"
 
 
 def _is_png(data: bytes) -> bool:
@@ -137,6 +143,77 @@ def _is_png(data: bytes) -> bool:
 
 def _is_jpeg(data: bytes) -> bool:
     return data.startswith(_JPEG_MAGIC_PREFIX)
+
+
+def _is_tiff(data: bytes) -> bool:
+    """True iff ``data`` begins with either TIFF magic-byte signature."""
+    return data.startswith(_TIFF_MAGIC_LE) or data.startswith(_TIFF_MAGIC_BE)
+
+
+def _is_docx(data: bytes) -> bool:
+    """True iff ``data`` begins with a Zip-archive magic signature.
+
+    A DOCX is always a zip; not every zip is a DOCX, so the inner loader
+    (``documents.docx_loader.extract_docx_paragraphs``) trusts python-docx
+    to reject non-DOCX zips and falls through to the empty-block path on
+    error.
+    """
+    return (
+        data.startswith(_DOCX_ZIP_MAGIC_PRIMARY)
+        or data.startswith(_DOCX_ZIP_MAGIC_EMPTY)
+        or data.startswith(_DOCX_ZIP_MAGIC_SPANNED)
+    )
+
+
+def _extract_docx_layout(docx_bytes: bytes) -> List[LayoutBlock]:
+    """Bridge DOCX paragraphs into LayoutBlocks with synthetic locator IDs.
+
+    DOCX has no native bbox / page concept — the production extractor
+    (``extractors.intake.extract_intake_from_docx``) drives directly off
+    the paragraph list and ignores LayoutBlock geometry. We still emit
+    blocks so callers that go through ``extract_layout`` (e.g. the
+    classifier's keyword tier) get a usable text surface. ``bbox_id``
+    carries the synthetic ``para=N|run=M`` locator; ``page=1`` is a
+    placeholder (DOCX-sourced citations leave ``page`` ``None`` at the
+    Citation level — see ``docx_loader.format_locator``).
+    """
+    # Local import: docx_loader has its own metrics + log emission.
+    from documents.docx_loader import extract_docx_paragraphs, format_locator
+
+    paragraphs, _meta = extract_docx_paragraphs(docx_bytes)
+    blocks: List[LayoutBlock] = []
+    for para in paragraphs:
+        text = (para.text or "").strip()
+        if not text:
+            continue
+        # Paragraph-level block first, then per-run blocks. The classifier
+        # consumes paragraph-level text (line granularity); the prose
+        # extractor consumes the per-run granularity for citation emission.
+        blocks.append(
+            LayoutBlock(
+                bbox_id=format_locator(para.para_idx),
+                page=1,
+                bbox=(0.0, 0.0, 0.0, 0.0),
+                text=text,
+                ocr_confidence=1.0,
+                granularity=BlockGranularity.LINE,
+            )
+        )
+        for run in para.runs:
+            run_text = (run.text or "").strip()
+            if not run_text:
+                continue
+            blocks.append(
+                LayoutBlock(
+                    bbox_id=format_locator(para.para_idx, run.run_idx),
+                    page=1,
+                    bbox=(0.0, 0.0, 0.0, 0.0),
+                    text=run_text,
+                    ocr_confidence=1.0,
+                    granularity=BlockGranularity.WORD,
+                )
+            )
+    return blocks
 
 
 def _extract_pdf_layout(pdf_bytes: bytes) -> List[LayoutBlock]:
@@ -425,16 +502,25 @@ def _extract_image_layout(image_bytes: bytes, *, filetype: str) -> List[LayoutBl
 
 
 def extract_layout(doc_bytes: bytes) -> List[LayoutBlock]:
-    """Extract layout blocks from a PDF or raster image.
+    """Extract layout blocks from a PDF, raster image, multi-page TIFF, or DOCX.
 
     Auto-detects content type from magic bytes:
       * PDF: per-block text from the embedded text layer (confidence 1.0).
       * PNG / JPEG: rasterized via PyMuPDF, OCR'd via pytesseract if available;
         otherwise a single page-level block with confidence 0.0 is returned
         (the critic's degradation path will soft-warn on low confidence).
+      * TIFF (Phase 9 Slice 9.6): multi-page page walker via
+        ``PIL.ImageSequence.Iterator``, bitonal-fax preprocess pipeline,
+        per-page LayoutBlocks tagged with the real 1-based page index.
+      * DOCX (Phase 9 Slice 9.6): python-docx paragraph + run walk; emits
+        page-1 LayoutBlocks whose ``bbox_id`` carries the ``para=N|run=M``
+        synthetic locator (no real bbox — page/bbox stay zero-width). The
+        DOCX prose extractor in ``extractors.intake.extract_intake_from_docx``
+        is the production caller; this branch keeps ``extract_layout`` total
+        so the dispatcher can route by magic byte alone.
 
     Args:
-        doc_bytes: raw PDF or image bytes.
+        doc_bytes: raw PDF / image / TIFF / DOCX bytes.
 
     Returns:
         List of LayoutBlock, ordered page-then-block-index.
@@ -443,6 +529,16 @@ def extract_layout(doc_bytes: bytes) -> List[LayoutBlock]:
         blocks = _extract_image_layout(doc_bytes, filetype="png")
     elif _is_jpeg(doc_bytes):
         blocks = _extract_image_layout(doc_bytes, filetype="jpeg")
+    elif _is_tiff(doc_bytes):
+        # Local import: tiff_loader pulls Pillow's ImageSequence which is
+        # already a transitive requirement, but keeping the import lazy
+        # mirrors the photo_preprocess pattern and lets the documents
+        # package stay importable in slim envs without TIFF support.
+        from documents.tiff_loader import extract_tiff_layout
+
+        blocks = extract_tiff_layout(doc_bytes)
+    elif _is_docx(doc_bytes):
+        blocks = _extract_docx_layout(doc_bytes)
     else:
         blocks = _extract_pdf_layout(doc_bytes)
 

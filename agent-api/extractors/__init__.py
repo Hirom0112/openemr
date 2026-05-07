@@ -10,7 +10,7 @@ Public API:
 """
 
 from extractors.classifier import ClassifierVerdict, classify_keywords
-from extractors.intake import extract_intake
+from extractors.intake import extract_intake, extract_intake_from_docx
 from extractors.lab import ExtractionFailed, extract
 from extractors.schemas import IntakeForm
 
@@ -21,4 +21,5 @@ __all__ = [
     "classify_keywords",
     "extract",
     "extract_intake",
+    "extract_intake_from_docx",
 ]

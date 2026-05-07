@@ -26,12 +26,25 @@ from __future__ import annotations
 
 from typing import Tuple
 
-from extractors.prompts import intake_form, lab_report_tabular, other_narrative
+from extractors.prompts import (
+    intake_form,
+    intake_form_prose,
+    lab_report_tabular,
+    other_narrative,
+)
 
 # Closed set of doc classes that route to an LLM extractor. Keep in sync
 # with the Claude classifier's tool-use enum (extractors/classifier.py).
+#
+# Phase 9 Slice 9.6: ``intake_form_prose`` is the DOCX-driven sibling of
+# ``intake_form`` — same ``IntakeForm`` schema, ``para=N|run=M`` locator
+# grammar instead of bbox_id. The classifier's tool-use enum is NOT
+# extended (DOCX dispatch is "magic byte → prose mode", not "classifier
+# said so"); registering the class here lets the prompt registry serve
+# both modes through a single ``get_prompt`` call.
 DOC_CLASSES: Tuple[str, ...] = (
     "intake_form",
+    "intake_form_prose",
     "lab_report_tabular",
     "other_narrative",
 )
@@ -43,6 +56,10 @@ NON_EXTRACTABLE: str = "non_extractable"
 
 _REGISTRY: dict[str, tuple[str, dict[str, tuple[str, ...]]]] = {
     "intake_form": (intake_form.PROMPT, intake_form.SECTION_HEADERS),
+    "intake_form_prose": (
+        intake_form_prose.PROMPT,
+        intake_form_prose.SECTION_HEADERS,
+    ),
     "lab_report_tabular": (
         lab_report_tabular.PROMPT,
         lab_report_tabular.SECTION_HEADERS,

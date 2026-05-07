@@ -27,6 +27,13 @@ python-multipart==0.0.20
 pytesseract==0.3.13
 Pillow>=10.0.0
 
+# Phase 9 Slice 9.6: DOCX paragraph + run extraction for the doc-lane
+# prose-mode intake extractor. python-docx is pinned at the major-minor
+# the loader was tested against — newer 1.x versions tend to rename
+# private attributes (e.g. ``paragraph._p``) which the embedded-image and
+# tracked-changes detectors rely on.
+python-docx==1.1.2
+
 # Wave 2A: PaddleOCR as an alternate OCR engine, gated by the ``OCR_ENGINE``
 # env var (default ``tesseract``). CPU-only wheels — never use the GPU
 # variants in this image. paddleocr 2.8.x is the latest stable that pairs

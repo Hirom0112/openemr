@@ -29,6 +29,11 @@ import anthropic
 import pymupdf
 
 from agent.metrics import agent_citation_repoint_total
+from documents.docx_loader import (
+    DocxParagraph,
+    extract_docx_paragraphs,
+    format_locator,
+)
 from documents.ocr import LayoutBlock, extract_layout
 from extractors.classifier import classify_keywords
 from extractors.lab import ExtractionFailed  # re-export single failure class
@@ -1053,6 +1058,270 @@ async def extract_intake(
             "n_meds": len(final.current_medications),
             "n_allergies": len(final.allergies),
             "classifier_confidence": final.classifier_confidence,
+        },
+    )
+    return final
+
+
+# --------------------------------------------------------------------------- #
+# Phase 9 Slice 9.6 — DOCX prose-mode branch
+# --------------------------------------------------------------------------- #
+#
+# Vision-mode (above) feeds Claude per-page PNGs + an OCR layout JSON. DOCX
+# has no images and no bboxes — only paragraphs and runs. The prose-mode
+# branch swaps:
+#
+#   _render_pages_to_png          → dropped (no image blocks)
+#   _build_user_content           → _build_user_content_prose
+#   prompt key "intake_form"      → "intake_form_prose"
+#
+# Same ``_MODEL_CANDIDATES`` chain, same ``IntakeForm`` schema, same
+# ``submit_intake_form`` tool. The vision branch is unchanged for
+# back-compat (50 W2 eval cases reference its bbox_id contract).
+
+
+_PROMPT_PROSE = get_prompt("intake_form_prose")
+
+
+def _paragraphs_to_prompt_json(paragraphs: List[DocxParagraph]) -> str:
+    """Serialize paragraphs into the JSON the prose prompt expects.
+
+    Each entry carries the synthetic locator (``para=N`` for paragraph,
+    plus the per-run locator), the section name resolved by the leading-
+    bold forward pass, the paragraph style, and the rendered text. Empty
+    paragraphs are omitted — they're noise for the LLM and a hallucination
+    surface."""
+    out: list[dict[str, Any]] = []
+    for para in paragraphs:
+        text = (para.text or "").strip()
+        if not text:
+            continue
+        runs_payload = [
+            {
+                "locator": format_locator(para.para_idx, r.run_idx),
+                "run_idx": r.run_idx,
+                "text": r.text,
+                "bold": r.bold,
+            }
+            for r in para.runs
+            if (r.text or "").strip()
+        ]
+        out.append(
+            {
+                "locator": format_locator(para.para_idx),
+                "para_idx": para.para_idx,
+                "section": para.section,
+                "style": para.style,
+                "text": text,
+                "runs": runs_payload,
+            }
+        )
+    return json.dumps(out, ensure_ascii=False)
+
+
+def _build_user_content_prose(
+    paragraphs: List[DocxParagraph],
+    patient_id: str,
+    document_reference_id: str,
+    *,
+    tracked_changes_present: bool = False,
+) -> List[dict[str, Any]]:
+    """Build the Claude user-content list for DOCX prose-mode extraction.
+
+    Sibling of ``_build_user_content``. NO image blocks (DOCX has no
+    images). One text block carrying the paragraph + run JSON, the
+    patient_id / document_reference_id / current UTC, and a
+    ``tracked_changes_present`` soft-warn flag when relevant.
+    """
+    body = (
+        f"patient_id = {patient_id}\n"
+        f"document_reference_id = {document_reference_id}\n"
+        f"current_utc = {datetime.now(timezone.utc).isoformat()}\n"
+        f"tracked_changes_present = {str(tracked_changes_present).lower()}\n\n"
+        "DOCX paragraph + run JSON (the only source of truth for "
+        "para=N|run=M locators):\n"
+        f"{_paragraphs_to_prompt_json(paragraphs)}"
+    )
+    return [{"type": "text", "text": body}]
+
+
+async def _call_claude_extract_prose(
+    client: anthropic.AsyncAnthropic,
+    user_content: List[dict[str, Any]],
+) -> dict[str, Any]:
+    """Sibling of ``_call_claude_extract`` using the prose-mode system prompt."""
+    tool = {
+        "name": "submit_intake_form",
+        "description": (
+            "Submit the structured IntakeForm extracted from the DOCX prose."
+        ),
+        "input_schema": IntakeForm.model_json_schema(),
+    }
+    last_err: Exception | None = None
+    for model in _MODEL_CANDIDATES:
+        try:
+            t0 = time.monotonic()
+            resp = await client.messages.create(
+                model=model,
+                max_tokens=4096,
+                tools=[tool],
+                tool_choice={"type": "tool", "name": "submit_intake_form"},
+                system=_PROMPT_PROSE,
+                messages=[{"role": "user", "content": user_content}],
+            )
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            logger.info(
+                "extractor_claude_call_ok",
+                extra={
+                    "model": model,
+                    "duration_ms": duration_ms,
+                    "tool": "intake_prose",
+                },
+            )
+            for block in resp.content:
+                if (
+                    getattr(block, "type", None) == "tool_use"
+                    and getattr(block, "name", None) == "submit_intake_form"
+                ):
+                    return dict(block.input)
+            last_err = RuntimeError("no tool_use block in response")
+            logger.error(
+                "extractor_claude_no_tool_use",
+                extra={"model": model, "tool": "intake_prose"},
+            )
+        except anthropic.NotFoundError as e:
+            last_err = e
+            logger.warning(
+                "extractor_claude_model_unavailable",
+                extra={"model": model, "tool": "intake_prose"},
+            )
+            continue
+        except Exception as e:  # noqa: BLE001 — boundary, re-wrapped below
+            last_err = e
+            logger.error(
+                "extractor_claude_call_failed",
+                extra={
+                    "model": model,
+                    "tool": "intake_prose",
+                    "error_type": type(e).__name__,
+                },
+            )
+            break
+
+    raise ExtractionFailed("vision call failed") from last_err
+
+
+async def extract_intake_from_docx(
+    docx_bytes: bytes,
+    *,
+    patient_id: str,
+    document_reference_id: str,
+) -> IntakeForm | UnknownDocument:
+    """Run the DOCX prose-mode intake extractor.
+
+    Mirrors ``extract_intake`` but drives off ``extract_docx_paragraphs``
+    instead of ``extract_layout`` (which would lose the run granularity)
+    and skips the vision content blocks entirely. Returns the same
+    ``IntakeForm | UnknownDocument`` discriminated union the vision
+    branch returns; raises ``ExtractionFailed`` only on terminal LLM
+    failure or schema rejection.
+
+    Edge cases:
+      - Empty paragraph list → ``UnknownDocument`` summary stub, no LLM call.
+      - Tracked changes detected → soft-warn flag passed into the prompt
+        (``docx_tracked_changes_present`` in the user content) so the
+        downstream critic can surface the warning without us having to
+        re-parse the OOXML.
+      - Embedded images: dropped at the loader level; per-image
+        ``docx_image_dropped`` log already emitted.
+    """
+    paragraphs, meta = extract_docx_paragraphs(docx_bytes)
+    if not paragraphs:
+        logger.error(
+            "extractor_no_layout_blocks",
+            extra={
+                "document_reference_id": document_reference_id,
+                "tool": "intake_prose",
+            },
+        )
+        # Return UnknownDocument rather than raise — empty DOCX is a
+        # degraded but non-terminal state (some referrals arrive empty
+        # from the fax stack).
+        return UnknownDocument(
+            kind="unknown",
+            schema_version="1.0",
+            patient_id=patient_id,
+            document_reference_id=document_reference_id,
+            document_kind_guess="docx_empty",
+            summary="DOCX contained no extractable paragraphs.",
+            key_facts=[
+                KeyFact(
+                    text="(empty document)",
+                    citations=[
+                        Citation(
+                            source_type="document",
+                            source_id=document_reference_id,
+                            page_or_section="prose",
+                            field_or_chunk_id=format_locator(1),
+                            quote_or_value="(empty)",
+                        )
+                    ],
+                )
+            ],
+            classifier_confidence=0.0,
+            ocr_confidence_range=(1.0, 1.0),
+            extracted_at=datetime.now(timezone.utc),
+        )
+
+    client = anthropic.AsyncAnthropic()
+    user_content = _build_user_content_prose(
+        paragraphs,
+        patient_id,
+        document_reference_id,
+        tracked_changes_present=bool(meta.get("tracked_changes_present")),
+    )
+    tool_input = await _call_claude_extract_prose(client, user_content)
+
+    try:
+        form = IntakeForm.model_validate_json(json.dumps(tool_input))
+    except Exception as e:  # noqa: BLE001 — boundary
+        logger.error(
+            "extractor_validation_failed",
+            extra={
+                "document_reference_id": document_reference_id,
+                "error_type": type(e).__name__,
+                "tool": "intake_prose",
+            },
+        )
+        raise ExtractionFailed("vision call failed") from e
+
+    # Force the structural fields the schema requires that the LLM may
+    # not have populated (vision mode hydrates these from layout
+    # confidence; prose mode has no OCR so we hardcode 1.0).
+    final = form.model_copy(
+        update={
+            "patient_id": patient_id,
+            "document_reference_id": document_reference_id,
+            "ocr_confidence_range": (1.0, 1.0),
+            # If the LLM didn't set classifier_confidence, fall back to a
+            # mid-band default — the prose extractor has no classifier
+            # tier (classifier_confidence is a vision-mode artifact).
+            "classifier_confidence": (
+                form.classifier_confidence
+                if form.classifier_confidence > 0.0
+                else 0.85
+            ),
+        }
+    )
+    logger.info(
+        "extractor_intake_prose_ok",
+        extra={
+            "document_reference_id": document_reference_id,
+            "n_meds": len(final.current_medications),
+            "n_allergies": len(final.allergies),
+            "n_paragraphs": meta.get("n_paragraphs"),
+            "tracked_changes_present": meta.get("tracked_changes_present"),
+            "embedded_images_dropped": meta.get("embedded_images_dropped"),
         },
     )
     return final
