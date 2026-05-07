@@ -29,8 +29,12 @@ import { authSessionTokenProvider } from "@/lib/fhir/token";
 async function resolvePatientUuid(pid: string): Promise<string | null> {
     const baseUrl = process.env.OPENEMR_BASE_URL;
     if (!baseUrl) return null;
+    // Match the suffix every card applies — `OPENEMR_BASE_URL` is the
+    // OpenEMR origin, the FHIR API hangs off `/apis/default/fhir`.
+    // (Follow-up: hoist this into a shared helper or have FhirClient
+    // know the FHIR path internally so callers don't repeat themselves.)
     const client = new FhirClient({
-        baseUrl,
+        baseUrl: `${baseUrl.replace(/\/+$/, "")}/apis/default/fhir`,
         tokenProvider: authSessionTokenProvider,
     });
     const patient = await client.getPatientByPid(pid);
