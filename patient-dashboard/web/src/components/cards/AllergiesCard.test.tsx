@@ -127,6 +127,42 @@ describe("AllergiesCardView (render)", () => {
     expect(button.tagName).toBe("BUTTON");
     expect(button.getAttribute("type")).toBe("button");
   });
+
+  it("highlights rows with criticality=high (parity with bg-warning)", () => {
+    // Synthetic OpenEMR data has neither `criticality` nor severe
+    // reactions on any AllergyIntolerance, so this branch cannot be
+    // verified visually. Locked in here against the FHIR shape.
+    const peanutHighCriticality: FhirAllergyIntolerance = {
+      ...peanut,
+      id: "peanut-high-crit",
+      criticality: "high",
+    };
+    render(
+      <AllergiesCardView
+        allergies={[peanutHighCriticality, gloriaSulfonamide]}
+      />,
+    );
+    const rows = screen.getAllByTestId("allergy-row");
+    const highRiskRows = rows.filter(
+      (r) => r.getAttribute("data-high-risk") === "true",
+    );
+    expect(highRiskRows).toHaveLength(1);
+    expect(highRiskRows[0].className).toContain("bg-yellow-300");
+    expect(highRiskRows[0].className).toContain("font-bold");
+  });
+
+  it("highlights rows where reaction[0].severity is severe", () => {
+    // Penicillin fixture already has severity=severe; verify the
+    // highlight branch fires off that signal too (criticality is
+    // absent on this row).
+    render(<AllergiesCardView allergies={[penicillin, peanut]} />);
+    const rows = screen.getAllByTestId("allergy-row");
+    const highRiskRows = rows.filter(
+      (r) => r.getAttribute("data-high-risk") === "true",
+    );
+    expect(highRiskRows).toHaveLength(1);
+    expect(highRiskRows[0].textContent).toContain("Penicillin G");
+  });
 });
 
 describe("reactionText", () => {
