@@ -69,42 +69,47 @@ export default async function PatientPage({
 
             {patientUuid ? (
                 <>
-                    {/* Two-column body: left = inline clinical cards, right = vitals.
-                        Mirrors dashboard-inventory.md per-card "## Position" rules:
-                        left column holds Allergies / Medical Problems / Medications /
-                        Prescriptions in a 2x2 grid; right column holds Vitals.
-                        Care Team is full-width below (per inventory ## Care Team
-                        ### Position — col-12 in original demographics.php:1268). */}
+                    {/*
+                        Layout (corrected 2026-05-08, see
+                        `parity-investigation-2026-05-08.md` § B3):
+
+                          Row 1: Allergies | Medical Problems | Medications (3-up)
+                          Row 2: Prescriptions full-width
+                          Row 3: Care Team full-width
+                          Row 4: Vitals full-width
+
+                        This is "spirit of the layout" — the original
+                        `demographics.php` places these cards across three
+                        rows of a 4-up + col-md-8/col-md-4 grid that also
+                        holds out-of-scope sections (Demographics, Insurance,
+                        Labs, Portal, Reminders, etc.). A strict mirror would
+                        require a `col-md-8` row whose right column is empty
+                        for our scope; that degrades parity rather than
+                        improves it. Defense paragraph in
+                        `PATIENT_DASHBOARD_MIGRATION.md`.
+                    */}
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                        <div className="grid grid-cols-1 gap-3 md:col-span-2 md:grid-cols-2">
-                            <Suspense fallback={<AllergiesCardSkeleton />}>
-                                <AllergiesCard patientUuid={patientUuid} />
-                            </Suspense>
-                            <Suspense
-                                fallback={<MedicalProblemsCardSkeleton />}
-                            >
-                                <MedicalProblemsCard
-                                    patientUuid={patientUuid}
-                                />
-                            </Suspense>
-                            <Suspense fallback={<MedicationsCardSkeleton />}>
-                                <MedicationsCard patientUuid={patientUuid} />
-                            </Suspense>
-                            <Suspense
-                                fallback={<PrescriptionsCardSkeleton />}
-                            >
-                                <PrescriptionsCard patientUuid={patientUuid} />
-                            </Suspense>
-                        </div>
-                        <div className="md:col-span-1">
-                            <Suspense fallback={<VitalsCardSkeleton />}>
-                                <VitalsCard patientUuid={patientUuid} />
-                            </Suspense>
-                        </div>
+                        <Suspense fallback={<AllergiesCardSkeleton />}>
+                            <AllergiesCard patientUuid={patientUuid} />
+                        </Suspense>
+                        <Suspense fallback={<MedicalProblemsCardSkeleton />}>
+                            <MedicalProblemsCard patientUuid={patientUuid} />
+                        </Suspense>
+                        <Suspense fallback={<MedicationsCardSkeleton />}>
+                            <MedicationsCard patientUuid={patientUuid} />
+                        </Suspense>
                     </div>
+
+                    <Suspense fallback={<PrescriptionsCardSkeleton />}>
+                        <PrescriptionsCard patientUuid={patientUuid} />
+                    </Suspense>
 
                     <Suspense fallback={<CareTeamCardSkeleton />}>
                         <CareTeamCard patientUuid={patientUuid} />
+                    </Suspense>
+
+                    <Suspense fallback={<VitalsCardSkeleton />}>
+                        <VitalsCard patientUuid={patientUuid} />
                     </Suspense>
                 </>
             ) : (
