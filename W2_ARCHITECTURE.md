@@ -384,6 +384,18 @@ A worker that dies mid-graph leaves a stub row in `processing` indefinitely. The
 | `GET /document/{id}/preview` | both | Stream PDF bytes for `pdf.js` viewer |
 | `POST /document/{id}/reclassify` | both | Manual override of classifier verdict; logs correction; triggers re-extraction |
 
+### 4.8 Synthetic locator grammar (multimodal expansion)
+
+*TBD — Phase 9 Slice 9.10 lands this body. Skeleton placeholder so cross-references in Phase 9 slices resolve.*
+
+Three formats join the citation surface in Phase 9 (DOCX, HL7 v2, XLSX). All three round-trip through `documents` and present as `source_type="document"`; the discriminator is in `Citation.field_or_chunk_id` per the synthetic locator grammar drafted by the Ingestion Architect:
+
+- HL7: `SEG-FIELD[.COMPONENT][.SUBCOMPONENT][|seg=N]` — e.g. `OBX-5|seg=4`, `PID-3.1`.
+- XLSX: `sheet=NAME|row=N|col=KEY` (header text or A1 letter).
+- DOCX: `para={N}` or `para={N}|run={M}` (1-based, document-order).
+
+Fidelity check (§8.4) extends to `normalize(quote_or_value)` substring of `normalize(structured_layout[locator].raw_value)`. OCR-confidence-degradation (§8.7) collapses for HL7 + XLSX (deterministic parse — sentinel `ocr_confidence_range=(1.0, 1.0)`); DOCX retains real OCR-style confidence only when the prose extractor yields one.
+
 ---
 
 ## 5. Pillar 2 — Multi-Agent Graph
@@ -608,6 +620,14 @@ Finalize emits SSE frames in the same format as the existing handoff streamer: `
 ### 5.10 LangGraph state
 
 State carries `{patient_id, request_id, file_bytes_ref, ocr_layout, classifier_verdict, extraction, demographic_check, retrieval, conflict_pass, critic_decision, errors[]}`. Persisted via the existing Redis checkpointer — supports turn replay (which the manual reclassify endpoint depends on) and is already test-covered.
+
+### 5.11 Cross-source conflict pass (multimodal expansion)
+
+*TBD — Phase 9 Slice 9.7 lands this body. Skeleton placeholder so cross-references in Phase 9 slices resolve.*
+
+Three sources can derive Observations for the same fact: HL7 ORU OBX, XLSX `Labs_Trend` cell, DOCX prose-extracted lab. After intra-doc conflict (§5.7) and after structured staging (§5.5), a `cross_source_conflict` graph node runs over the union of staged `LabValue`s and the patient's already-written Observations. Tier-1 collapse uses the §7.5 dedup key — agreeing rows merge into one canonical fact with `citations: list[Citation]` union. Tier-2 conflict uses the wider key `(normalized_test_name, collection_date, normalized_unit)` — disagreement at this tier produces a soft-warn rendered in the brief as both/all values, ordered by source trust (HL7 ORU > FHIR Observation > DOCX > XLSX) then recency.
+
+The pass runs **post-stage, pre-write**: the earlier-approved row is never re-staged; only the later-arriving disagreeing source is held as a pending soft-warn row. This is the third application of the surface-never-silently-resolve principle alongside intra-doc conflict (§5.7) and retrieval-vs-record contradiction (§6.6) — three instances of one principle, not three one-offs (cf. §6.6 closing sentence).
 
 ---
 
