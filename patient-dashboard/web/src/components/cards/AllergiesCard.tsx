@@ -138,11 +138,23 @@ export function AllergiesCardView({
             const allergen = allergyDisplay(allergy);
             const reaction = reactionText(allergy);
             const severity = severityLabel(allergy);
+            // Clinical-safety highlight: original twig surfaces severe / life-
+            // threatening / fatal allergies on a warning row. Mirror that here.
+            // Source signal: AllergyIntolerance.criticality ('high') OR
+            // reaction[0].severity ('severe'). Either triggers the highlight.
+            const isHighRisk =
+              allergy.criticality === "high" ||
+              allergy.reaction?.[0]?.severity === "severe";
             return (
               <li
                 key={allergy.id}
-                className="flex flex-wrap items-baseline gap-2"
+                className={`flex flex-wrap items-baseline gap-2 rounded px-2 py-1 ${
+                  isHighRisk
+                    ? "bg-amber-50 dark:bg-amber-950/30"
+                    : ""
+                }`}
                 data-testid="allergy-row"
+                data-high-risk={isHighRisk ? "true" : undefined}
                 title={reaction ?? undefined}
               >
                 <span className="font-medium" data-testid="allergy-name">
@@ -158,7 +170,11 @@ export function AllergiesCardView({
                 ) : null}
                 {severity ? (
                   <span
-                    className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground"
+                    className={`rounded border px-1.5 py-0.5 text-xs ${
+                      isHighRisk
+                        ? "border-amber-500 text-amber-700 dark:text-amber-300"
+                        : "text-muted-foreground"
+                    }`}
                     data-testid="allergy-severity"
                   >
                     {severity}

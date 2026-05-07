@@ -141,6 +141,42 @@ export function CareTeamCardView({
         </button>
       </CardHeader>
       <CardContent>
+        {/* Team-level header: name + status. Original
+            manage_care_team.html.twig:175-180 renders the team name as an
+            <h5> with a status badge to the right. Mirror that here using
+            the first non-empty CareTeam.name we saw, and that team's
+            CareTeam.status (e.g., "active", "inactive", "suspended"). */}
+        {(() => {
+            const firstNamedTeam = careTeams.find(
+                (t) => (t.name && t.name.trim().length > 0) || t.status,
+            );
+            const teamName = firstNamedTeam?.name?.trim();
+            const teamStatus = firstNamedTeam?.status;
+            if (!teamName && !teamStatus) return null;
+            return (
+                <div
+                    className="mb-2 flex items-center gap-2"
+                    data-testid="care-team-header"
+                >
+                    {teamName ? (
+                        <h5
+                            className="text-sm font-semibold"
+                            data-testid="care-team-name"
+                        >
+                            {teamName}
+                        </h5>
+                    ) : null}
+                    {teamStatus ? (
+                        <span
+                            className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground"
+                            data-testid="care-team-status"
+                        >
+                            {teamStatus}
+                        </span>
+                    ) : null}
+                </div>
+            );
+        })()}
         {/* Inventory note: per-row "Status" and "Note" columns have no
             FHIR equivalent (api-map: "FHIR has no per-participant status"
             and "Note ... NOT FOUND on participant in FHIR R4"). We render

@@ -60,6 +60,33 @@ const PANEL_LOINC_VITAL_SIGNS = "85353-1";
 const LOINC_BP_PANEL = "85354-9";
 const LOINC_BP_SYSTOLIC = "8480-6";
 const LOINC_BP_DIASTOLIC = "8462-4";
+// Body temperature LOINC. Original screenshot 16 renders both Fahrenheit
+// and Celsius ("37 F (2.78 C)" — actually "98.6 F (37 C)" semantics).
+// Our FHIR projection emits a single valueQuantity, so we synthesize the
+// counterpart unit at render time.
+const LOINC_TEMPERATURE = "8310-5";
+
+/** Convert °F → °C with one decimal. */
+export function fahrenheitToCelsius(f: number): number {
+    return Math.round(((f - 32) * 5) / 9 * 10) / 10;
+}
+
+/** Convert °C → °F with one decimal. */
+export function celsiusToFahrenheit(c: number): number {
+    return Math.round(((c * 9) / 5 + 32) * 10) / 10;
+}
+
+/** Detect Fahrenheit vs Celsius from a FHIR Quantity unit string. */
+export function isFahrenheitUnit(unit?: string): boolean {
+    if (!unit) return false;
+    const u = unit.replace(/\s+/g, "").toLowerCase();
+    return u === "f" || u === "°f" || u === "[degf]" || u.endsWith("f");
+}
+export function isCelsiusUnit(unit?: string): boolean {
+    if (!unit) return false;
+    const u = unit.replace(/\s+/g, "").toLowerCase();
+    return u === "c" || u === "°c" || u === "cel" || u === "[degc]" || u.endsWith("c");
+}
 
 interface VitalsCardProps {
   patientUuid: string;
@@ -149,6 +176,17 @@ export function formatObservationValue(obs: FhirObservation): string | null {
 
   const q = obs.valueQuantity;
   if (q?.value != null) {
+    // Temperature: render both units. Source unit + value first, then
+    // converted counterpart in parentheses. Mirrors original screenshot 16
+    // ("98.6 F (37 C)").
+    if (loincOf(obs) === LOINC_TEMPERATURE && q.unit) {
+        if (isFahrenheitUnit(q.unit)) {
+            return `${q.value} ${q.unit} (${fahrenheitToCelsius(q.value)} C)`;
+        }
+        if (isCelsiusUnit(q.unit)) {
+            return `${q.value} ${q.unit} (${celsiusToFahrenheit(q.value)} F)`;
+        }
+    }
     return q.unit ? `${q.value} ${q.unit}` : `${q.value}`;
   }
 
