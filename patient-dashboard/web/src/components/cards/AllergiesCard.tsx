@@ -131,10 +131,14 @@ export function AllergiesCardView({
             const allergen = allergyDisplay(allergy);
             const reaction = reactionText(allergy);
             const severity = severityLabel(allergy);
-            // Clinical-safety highlight: original twig surfaces severe / life-
-            // threatening / fatal allergies on a warning row. Mirror that here.
-            // Source signal: AllergyIntolerance.criticality ('high') OR
-            // reaction[0].severity ('severe'). Either triggers the highlight.
+            // Clinical-safety highlight. Original twig
+            // (`templates/patient/card/allergies.html.twig:38-49`) applies
+            // Bootstrap `bg-warning font-weight-bold` for severe /
+            // life_threatening / fatal allergies — bold black text on a
+            // bold yellow row (#ffc107). Mirror that loudness here; this
+            // is a clinical-safety affordance, not a styling preference.
+            // Source signals: `AllergyIntolerance.criticality === "high"`
+            // OR `reaction[0].severity === "severe"`. Either triggers it.
             const isHighRisk =
               allergy.criticality === "high" ||
               allergy.reaction?.[0]?.severity === "severe";
@@ -143,19 +147,19 @@ export function AllergiesCardView({
                 key={allergy.id}
                 className={`flex flex-wrap items-baseline gap-2 rounded px-2 py-1 ${
                   isHighRisk
-                    ? "bg-amber-50 dark:bg-amber-950/30"
+                    ? "bg-yellow-300 font-bold text-black dark:bg-yellow-400 dark:text-black"
                     : ""
                 }`}
                 data-testid="allergy-row"
                 data-high-risk={isHighRisk ? "true" : undefined}
                 title={reaction ?? undefined}
               >
-                <span className="font-medium" data-testid="allergy-name">
+                <span data-testid="allergy-name" className={isHighRisk ? "font-bold" : "font-medium"}>
                   {allergen} ({severity ?? ""})
                 </span>
                 {reaction ? (
                   <span
-                    className="text-xs text-muted-foreground"
+                    className={`text-xs ${isHighRisk ? "text-black" : "text-muted-foreground"}`}
                     data-testid="allergy-reaction"
                   >
                     {reaction}
@@ -165,7 +169,7 @@ export function AllergiesCardView({
                   <span
                     className={`rounded border px-1.5 py-0.5 text-xs ${
                       isHighRisk
-                        ? "border-amber-500 text-amber-700 dark:text-amber-300"
+                        ? "border-black bg-yellow-400 text-black"
                         : "text-muted-foreground"
                     }`}
                     data-testid="allergy-severity"
