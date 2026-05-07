@@ -312,7 +312,17 @@ export function VitalsCardSkeleton(): React.ReactElement {
 export function VitalsCardView({
   observations,
 }: VitalsCardViewProps): React.ReactElement {
-  const rows = mostRecentByLoinc(observations);
+  const grouped = mostRecentByLoinc(observations);
+
+  // Drop rows that have no renderable value. The original PHP
+  // `vitals_report()` skips empty / "0.0" / structural columns at
+  // `interface/forms/vitals/report.php:46-53`; the FHIR projection
+  // surfaces the same emptiness as a missing `valueQuantity` /
+  // `valueString` / BP-panel components. Filtering here brings the
+  // port in line with the spec rule "render every non-empty
+  // form_vitals column" — without it the card pads with em-dash
+  // placeholder rows, which is a port-side invention.
+  const rows = grouped.filter((obs) => formatObservationValue(obs) !== null);
 
   if (rows.length === 0) {
     return <EmptyCard title={CARD_TITLE} message="No vitals recorded" />;

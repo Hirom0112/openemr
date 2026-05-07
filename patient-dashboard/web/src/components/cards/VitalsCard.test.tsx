@@ -185,10 +185,12 @@ describe("VitalsCardView (render)", () => {
     expect(value.textContent).toBe("96 /min");
   });
 
-  it("renders gracefully when an observation has no valueQuantity", () => {
-    // componentOnlyMystery: component[] but no top-level valueQuantity.
-    // stringOnly: valueString only. Neither should crash; the formatter
-    // surfaces "—" for the mystery row and the string for stringOnly.
+  it("filters out observations with no renderable value (R1.2)", () => {
+    // componentOnlyMystery: component[] but no top-level valueQuantity
+    // and not the BP panel — formatObservationValue returns null, so
+    // the row is filtered out (mirrors `vitals_report()`'s skip of
+    // empty form_vitals columns).
+    // stringOnly: valueString only — keeps rendering.
     expect(() =>
       render(
         <VitalsCardView observations={[componentOnlyMystery, stringOnly]} />,
@@ -197,7 +199,8 @@ describe("VitalsCardView (render)", () => {
 
     const values = screen.getAllByTestId("vital-value").map((n) => n.textContent);
     expect(values).toContain("Within normal limits");
-    expect(values).toContain("—"); // em-dash placeholder
+    // The mystery row is dropped; no em-dash placeholder appears.
+    expect(values).not.toContain("—");
   });
 
   it("exposes the read-only edit pencil with the correct aria-label", () => {
