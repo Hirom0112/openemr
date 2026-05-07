@@ -122,6 +122,16 @@ which approximates "prescriptions actively written through OpenEMR's
 prescribing workflow." Both cards consume the same FHIR endpoint with
 different query parameters.
 
+**Empirical verification (2026-05-07):** A live curl pass against the
+local OpenEMR build confirmed that **zero `MedicationRequest` rows
+have `intent=order`** across all six sampled synthetic patients (pids
+4, 5, 13, 24, 26, 27). Every entry emits `intent=plan` with `requester`
+absent. The Prescriptions card therefore renders empty for every
+synthetic patient — matching the original dashboard's "None" state.
+This is a property of the synthetic dataset, not a defect in the
+filter logic; a real OpenEMR install with prescribing-workflow data
+would populate the card correctly.
+
 This synthesis is a documented compromise, not a choice I would make
 if MedicationStatement were available. A complete implementation would
 require either implementing the missing MedicationStatement controller

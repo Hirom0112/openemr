@@ -301,3 +301,55 @@ filter to the seven displayed LOINCs client-side.
 8. **`_sort` / `_count` support on `/Observation`.** The Vitals card shows the
    most-recent row only; confirm OpenEMR honours `_sort=-date&_count=1`
    rather than the port having to fetch the whole bundle and sort client-side.
+
+---
+
+## 1.5 verification results (2026-05-07)
+
+Verified live against `https://localhost:9300/apis/default/fhir` using a
+password-grant access token (`auth-notes.md` captures the flow). Patient
+under test: Gloria Tran, pid=4, uuid `a1af78de-c153-42e7-89b2-55749a3da9ca`.
+
+### Resolved questions
+
+- **Q1 — pid→uuid resolution:** `GET /Patient?identifier={pid}` returns a
+  bundle of one with `entry[0].resource.id` = the FHIR uuid. Use this once
+  at session start; no SMART launch parameter needed for direct dashboard
+  navigation.
+- **Q2 — `MedicationRequest.intent`:** ⚠ **Confirmed empirical gap.** Zero
+  `MedicationRequest` rows across pids `{4, 5, 13, 24, 26, 27}` have
+  `intent=order`. Every entry on this OpenEMR build emits `intent=plan`
+  with `requester` absent. **The Prescriptions card's synthesis rule
+  (`intent=order` AND `requester` recorded) returns empty for every
+  synthetic patient.** This matches the original dashboard's behavior —
+  Gloria's reference screenshot shows "None" — and is consistent with the
+  inventory's hypothesis. Documenting as a known limitation in the
+  migration doc, not a bug.
+- **Q4 — CareTeam:** `GET /CareTeam?patient={uuid}` returns `total=0` for
+  Gloria. Consistent with `care_teams`/`care_team_member` MySQL tables
+  being empty across the synthetic dataset.
+
+### Verified resource shapes
+
+- **AllergyIntolerance:** `clinicalStatus.coding[0].code` and
+  `verificationStatus.coding[0].code` populate. `criticality` is absent
+  on Gloria's Sulfonamide record. **Allergen name lives in `text.div`**
+  when `code.coding[0].code = unknown` (data-absent-reason), not in
+  `code.text`. Port must fall back: prefer `code.coding[].display` if
+  not "Unknown", else parse `text.div`. `category=["medication"]` works.
+- **Condition (problem-list-item):** Heart failure for Gloria; `code.text`,
+  `clinicalStatus.coding[0].code`, `onsetDateTime` all populate as the
+  inventory expects.
+- **Observation (vital-signs):** 15 entries for Gloria. LOINC codes
+  populate as expected (`85353-1` panel, `9279-1` respiratory rate,
+  `8867-4` heart rate). `valueQuantity.value` + `valueQuantity.unit`
+  populate. `effectiveDateTime` populated.
+
+### Still outstanding
+
+- Q3 (Patient.photo for avatar) — not exercised in 1.5
+- Q5 (dosageInstruction shape) — deferred to when a real prescription
+  exists
+- Q6 (Temp Method / Waist Circumference) — not in vital-signs bundle
+- Q7 (empty-state touched-vs-untouched) — no FHIR flag exists
+- Q8 (`_sort` / `_count` on Observation) — not exercised in 1.5

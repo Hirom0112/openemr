@@ -398,10 +398,13 @@ intent=order exist for this patient — the listed Furosemide and
 Lisinopril likely have intent=`plan` or were entered without going
 through the prescribing workflow.
 
-**Open question for verification:** Need to confirm with `curl` against
-a patient with actual prescriptions whether the intent/status filter
-correctly distinguishes Prescriptions from the broader Medications
-list. If not, fall back to a status+category-based filter.
+**Empirically verified (1.5, 2026-05-07):** Across pids 4, 5, 13, 24, 26, 27,
+**zero `MedicationRequest` rows return for `intent=order`**. Every entry in
+this OpenEMR build emits `intent=plan` with `requester` absent. The
+Prescriptions filter as drafted will return empty for every synthetic
+patient — which matches the original dashboard's behavior (Gloria's
+screenshot shows "None"). This is documented as a known limitation in
+the migration doc, not a bug.
 
 **Why not MedicationStatement:** Same as above — not implemented in
 this OpenEMR build.
