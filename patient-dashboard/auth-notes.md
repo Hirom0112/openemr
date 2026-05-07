@@ -61,6 +61,32 @@ rule; verified with `git check-ignore`).
   `is_enabled=0` on insert. The SQL flip is the documented escape
   hatch; production deployments will go through Admin → API Clients.
 
+## Production posture
+
+Password grant is enabled in local dev (`oauth_password_grant=3`) for
+headless verification. Production OpenEMR (Railway) must have
+`oauth_password_grant=0` — the dashboard uses authorization code flow
+exclusively. Verify before deploy.
+
+**Why it matters:** password grant lets a client exchange a raw
+username+password for a token. That is a credential leak surface
+that has no business being enabled in production.
+
+**Verification gap:** the 1.5 curl pass exercised password grant
+because that's what's headless-friendly. **Auth.js wires the
+authorization-code flow** in Phase 3.2 — a different OpenEMR code
+path. Any auth-code-specific OpenEMR quirks (consent screen, PKCE
+behavior, redirect-URI strictness, refresh-token rotation) will
+surface there, not in 1.5. Treat 1.5 as having reduced uncertainty
+about FHIR resource shapes, not about the production auth flow.
+
+**Phase 5.3 deploy checklist:**
+- [ ] Confirm `oauth_password_grant=0` in Railway OpenEMR's `globals` table
+- [ ] Re-register the OAuth client against the deployed OpenEMR with
+      the Railway callback URL
+- [ ] Verify the Auth.js authorization-code round trip end-to-end
+      against the deployed instance before marking the dashboard live
+
 ## TODO during 1.3 (curl OAuth flow)
 
 - [ ] Capture access-token response shape — token type, expires_in,
