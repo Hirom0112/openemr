@@ -263,11 +263,39 @@ column mapping at lines 684–703.
 (`USCDI_PROFILE_VITAL_SIGNS` at service line 82). Without it the bundle would
 include labs and survey observations.
 
-**Card display vs underlying form:** the dashboard card shows only seven rows
-(BP, Temp, Temp Method, Pulse, Respiration, O2, Last Updated) per inventory.
-Weight, Height, Head/Waist Circ, BMI, etc. live on `form_vitals` but are not
-rendered on the card. Port should request all `vital-signs` Observations and
-filter to the seven displayed LOINCs client-side.
+**Card display rule (corrected 2026-05-08):** the original card is **not**
+a curated 7-LOINC subset. `interface/forms/vitals/report.php:46–53`
+iterates every column on the most-recent `form_vitals` row and renders
+each non-empty column in a fixed presentation order. The seven rows on
+Gloria's screenshot reflect which columns happen to be populated for her;
+a different patient with `weight` / `height` / `BMI` populated would
+render those rows on the same card.
+
+**Port rule:**
+
+1. Request all `vital-signs` Observations: `GET /Observation?patient={uuid}&category=vital-signs`.
+2. Group entries by LOINC code, keeping the most recent observation per LOINC by `effectiveDateTime`.
+3. Render rows in this fixed display order, skipping any LOINC for which no observation is present:
+   1. Blood Pressure (`85354-9` panel; if absent, fall back to component synthesis from `8480-6` + `8462-4`)
+   2. Temperature (`8310-5`)
+   3. Pulse (`8867-4`)
+   4. Respiration (`9279-1`)
+   5. Oxygen Saturation (`2708-6` or `59408-5`)
+   6. Height (`8302-2`)
+   7. Weight (`29463-7`)
+   8. BMI (`39156-5`)
+   9. Head Circumference (`9843-4`)
+   10. Waist Circumference (if surfaced as `8280-0` — see TODO 1.5; otherwise drop)
+4. Prepend a header line: **"Most recent vitals from: {effectiveDateTime}"** sourced from the most recent observation across the bundle.
+5. Append the trailing link: **"Click here to view and graph all vitals."**
+6. Append a "Last Updated" footer row sourced from the most recent `meta.lastUpdated` across the rendered observations.
+
+**Explicit cuts vs the original PHP card:**
+- **Temp Method** (`form_vitals.temp_method`, e.g. "Oral") — has no LOINC mapping in `FhirObservationVitalsService` and is not exposed via the FHIR vital-signs endpoint. The port omits this row. Documented in `PATIENT_DASHBOARD_MIGRATION.md`.
+
+The earlier "filter to seven LOINCs client-side" recommendation was an
+invention by the api-map; it has no basis in the original PHP source.
+Removed.
 
 ## Open questions for 1.5 verification
 

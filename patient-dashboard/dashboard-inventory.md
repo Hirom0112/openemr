@@ -452,11 +452,17 @@ Above the table the card also exposes:
 ### States
 
 - **Empty:** `reference-screenshots/15-card-careteam-empty.png` —
-  table header rendered with no rows below it. No "Nothing
-  Recorded" placeholder; the empty body simply shows the column
-  headings (Type, Member, Role, Facility, Since, Status, Note,
-  Remove). This is the state for every patient in the synthetic
-  dataset (see "Synthetic dataset gaps").
+  the table header is rendered with all eight column headings
+  (Type, Member, Role, Facility, Since, Status, Note, Remove)
+  followed by an empty `<tbody>` containing a single empty row
+  (the faint horizontal divider visible below the thead in the
+  screenshot is the row's bottom border). **There is no "Nothing
+  Recorded" / "None" / `EmptyCard` placeholder.** The port MUST
+  render the headers + empty body in the empty state and MUST NOT
+  short-circuit to a generic empty-card primitive — this is a
+  parity requirement, not a styling preference. This is the state
+  for every patient in the synthetic dataset (see "Synthetic
+  dataset gaps").
 - **Loaded:** TODO: confirm — no synthetic patient has Care Team
   members. Loaded row shape inferred from
   `CareTeamViewCard::getTemplateVariables()` (rows hydrated via the
@@ -498,42 +504,65 @@ the same template (`toggleEditMode()`,
 
 ### Position
 
-Right column (`col-md-4`, `demographics.php:1573`). Rendered into
-the secondary column near the bottom, below Labs and above
-LBF-charted forms (`demographics.php:1503–1526`). Card chrome is
-created by `patient/card/loader.html.twig` and the body is loaded
-via AJAX after page render.
+Left column (`col-md-8`, `demographics.php:1503–1526`). Lives in
+the third row of the dashboard body (the `col-md-8` / `col-md-4`
+two-column split that opens at `demographics.php:1327` and whose
+right column opens at `:1573`). Sits below Labs and above
+LBF-charted forms within the left column. Card chrome is created by
+`patient/card/loader.html.twig` and the body is loaded via AJAX
+after page render.
+
+(Earlier inventory revisions said `col-md-4` / `:1573` — that's
+incorrect. Line 1573 opens the right column; Vitals' render block at
+:1503–1526 is inside the left column, before the closing `</div>`
+at :1572. Corrected per `parity-investigation-2026-05-08.md` §B3.)
 
 ### Fields
 
 Body content is produced by the legacy `vitals_report()` function
 (`forms/vitals/report.php`, included from `vitals_fragment.php:41`).
-Visible labelled fields per the screenshot:
+**The card is data-driven, not curation-driven**: `vitals_report()`
+iterates every column on the most-recent `form_vitals` row, skips
+columns that are empty / `0.0` / structural metadata
+(`forms/vitals/report.php:46–53`), and renders the rest with
+per-key formatting. There is no curated allow-list of fields. The
+seven rows visible on Gloria's screenshot are a property of which
+columns happen to be populated for her, not a hard-coded subset.
 
-| Field             | Source (`form_vitals.*` columns where identifiable) |
-|-------------------|------------------------------------------------------|
-| Most recent vitals from | `form_vitals.date` (timestamp) |
-| Blood Pressure    | `form_vitals.bps` / `bpd` (rendered as `bps/bpd`) |
-| Temperature       | `form_vitals.temperature` (F shown, C in parens) |
-| Temp Method       | `form_vitals.temp_method` (e.g. "Oral") |
-| Pulse             | `form_vitals.pulse` ("per min" suffix) |
-| Respiration       | `form_vitals.respiration` ("per min" suffix) |
-| Oxygen Saturation | `form_vitals.oxygen_saturation` ("%" suffix) |
-| Last Updated      | `form_vitals.last_updated` (or `forms.date` of last edit; TODO: confirm — both candidates exist on the table) |
+**Display order is presentation-driven** (case branches in
+`vitals_report()`, lines 79–180): a row is rendered when its source
+column is non-empty, in this fixed sequence:
 
-Additional fields the underlying `form_vitals` row carries — but
-which the dashboard card itself does **not** display in either
-captured screenshot: Weight, Height/Length, Head Circumference,
-Waist Circumference, BMI, BMI Status, Inhaled Oxygen Concentration,
-Oxygen Flow Rate, Temp Location, Other Notes. These appear on the
-expanded "Vitals" form view (`reference-screenshots/45-edit-vitals.png.png`)
-but the dashboard card body shows only the seven rows above.
-TODO: confirm whether `vitals_report()` filters the displayed set or
-whether the captured screenshot reflects nullable fields collapsing.
+| # | Field             | `form_vitals.*` column(s) | Notes |
+|---|-------------------|---------------------------|-------|
+| 1 | Blood Pressure    | `bps` + `bpd`             | rendered as `bps/bpd` |
+| 2 | Temperature       | `temperature`             | F shown, C in parens |
+| 3 | Temp Method       | `temp_method`             | e.g. "Oral" — no LOINC mapping |
+| 4 | Pulse             | `pulse`                   | "per min" suffix |
+| 5 | Respiration       | `respiration`             | "per min" suffix |
+| 6 | Oxygen Saturation | `oxygen_saturation`       | "%" suffix |
+| 7 | Height            | `height`                  | (not on Gloria) |
+| 8 | Weight            | `weight`                  | (not on Gloria) |
+| 9 | BMI               | `BMI`                     | (not on Gloria) |
+| 10 | Head Circumference | `head_circ`              | (not on Gloria) |
+| 11 | Waist Circumference | `waist_circumference`   | (not on Gloria) |
+| 12 | Last Updated     | `forms.date` of last edit | always rendered |
 
-Trailing link: "Click here to view and graph all vitals." →
-`/interface/encounter/trend_form.php?formname=vitals`
+Above the table the card prepends a `<b>` line:
+**"Most recent vitals from: {form_vitals.date}"**
+(`vitals_fragment.php:36–38`).
+
+Trailing link below the body: **"Click here to view and graph all
+vitals."** → `/interface/encounter/trend_form.php?formname=vitals`
 (`vitals_fragment.php:45`).
+
+**Port deviation — Temp Method dropped.** `form_vitals.temp_method`
+has no LOINC code in `FhirObservationVitalsService` (line 248 of
+`dashboard-api-map.md` confirms). The FHIR vital-signs endpoint
+does not surface this column in any documented field. Until/unless
+OpenEMR projects it through `Observation.method.text`, the port
+must drop this row. Documented in `PATIENT_DASHBOARD_MIGRATION.md`
+as an explicit cut.
 
 ### States
 
