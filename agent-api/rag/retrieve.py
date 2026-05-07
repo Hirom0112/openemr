@@ -164,8 +164,18 @@ async def search(
     async def _dense() -> list[tuple[str, float]]:
         if not qvec_literal:
             return []
+        # `SET LOCAL ivfflat.probes` must run inside an explicit transaction
+        # (LOCAL = transaction-scoped). This is defence-in-depth: the value
+        # was previously applied via a one-shot `ALTER DATABASE ... SET
+        # ivfflat.probes = 100` at startup, which doesn't survive
+        # `docker compose down`. Setting it per-query guarantees the
+        # configured probe count regardless of database-level defaults.
+        # 100 mirrors the prior runtime ALTER and pairs with `lists = 100`
+        # codified in audit/schema.sql for the ivfflat index.
         async with pool.acquire() as conn:
-            rows = await conn.fetch(_DENSE_SQL, qvec_literal)
+            async with conn.transaction():
+                await conn.execute("SET LOCAL ivfflat.probes = 100")
+                rows = await conn.fetch(_DENSE_SQL, qvec_literal)
         return [(str(r["chunk_id"]), float(r["score"])) for r in rows]
 
     sparse_hits, dense_hits = await asyncio.gather(_sparse(), _dense())

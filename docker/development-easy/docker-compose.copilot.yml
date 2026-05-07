@@ -82,7 +82,13 @@ services:
   # Host port 5433 is intentional — keeps it clear of any other Postgres a
   # developer might already have on 5432.
   copilot-audit-postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector:pg16 = official Postgres 16 + pgvector preinstalled.
+    # Required so `CREATE EXTENSION vector;` in
+    # ../../agent-api/audit/schema.sql succeeds at init time and survives
+    # `docker compose down` / volume recreate. Previously this was
+    # postgres:16-alpine with pgvector hand-compiled into a running
+    # container, which evaporated on container recreate.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     ports:
       - "${COPILOT_AUDIT_PG_PORT:-5433}:5432"
