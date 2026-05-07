@@ -83,15 +83,22 @@ $iframeSrc = $misconfigured
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Patient Dashboard (Port)</title>
+    <title>Dashboard (Modern)</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { height: 100%; overflow: hidden; }
-        iframe { display: block; width: 100%; height: 100%; border: 0; }
+        .frame-wrap { position: relative; width: 100%; height: 100%; }
+        .frame-loading {
+            position: absolute; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-family: system-ui, sans-serif; font-size: 0.95rem; color: #555;
+            background: #fafafa;
+        }
+        iframe { position: relative; display: block; width: 100%; height: 100%; border: 0; background: transparent; }
     </style>
 </head>
 <body>
-    <span class="title" style="display:none;">Patient Dashboard (Port)</span>
+    <span class="title" style="display:none;">Dashboard (Modern)</span>
 <?php if ($misconfigured) { ?>
     <div role="alert" style="margin:1rem;padding:1rem;border:1px solid #b00020;background:#fff3f3;color:#7a0014;font-family:system-ui,sans-serif;border-radius:4px;">
         <strong>Patient Dashboard is not configured.</strong>
@@ -99,11 +106,16 @@ $iframeSrc = $misconfigured
         Ask an administrator to set it to the public URL of the Next.js dashboard service.
     </div>
 <?php } else { ?>
-    <iframe
-        src="<?php echo htmlspecialchars($iframeSrc, ENT_QUOTES, 'UTF-8'); ?>"
-        title="Patient Dashboard"
-        allow="clipboard-read; clipboard-write"
-    ></iframe>
+    <div class="frame-wrap">
+        <div class="frame-loading" aria-hidden="true">Loading patient dashboard…</div>
+        <iframe
+            src="<?php echo htmlspecialchars($iframeSrc, ENT_QUOTES, 'UTF-8'); ?>"
+            title="Patient Dashboard"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            referrerpolicy="no-referrer-when-downgrade"
+            allow="clipboard-read; clipboard-write"
+        ></iframe>
+    </div>
 <?php } ?>
 </body>
 </html>

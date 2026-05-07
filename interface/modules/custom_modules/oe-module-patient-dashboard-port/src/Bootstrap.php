@@ -56,7 +56,7 @@ class Bootstrap
         $menu = $event->getMenu();
 
         $item              = new \stdClass();
-        $item->label       = xlt('Dashboard (Port)');
+        $item->label       = xlt('Dashboard (Modern)');
         $item->menu_id     = 'pdp0';
         $item->target      = 'pdp';
         $item->url         = $this->moduleUrl();

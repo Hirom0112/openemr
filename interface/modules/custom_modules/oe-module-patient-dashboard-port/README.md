@@ -11,8 +11,13 @@ dashboard inside OpenEMR's chrome.
    no active patient is set, so the tab is always demonstrable.
 3. Renders a full-bleed iframe pointing at the Next.js dashboard's
    `/patient/{pid}` route.
-4. Adds a "Dashboard (Port)" entry to the OpenEMR top navigation via
-   `MenuEvent::MENU_UPDATE`.
+4. Adds a "Dashboard (Modern)" entry to the OpenEMR top navigation
+   via `MenuEvent::MENU_UPDATE`.
+
+The iframe is sandboxed (`allow-scripts allow-same-origin
+allow-forms allow-popups`) — the Next.js app needs `same-origin`
+to read its own auth cookies and `forms` for the OAuth callback
+post; the rest stay locked down.
 
 The module owns no data fetching and no business logic — the Next.js
 app handles its own OAuth round trip with OpenEMR for FHIR access.
