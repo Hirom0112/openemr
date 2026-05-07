@@ -159,7 +159,8 @@ describe("VitalsCardView (render)", () => {
     // "Respiratory rate" → "Respiration".
     expect(labels).toEqual(expect.arrayContaining(["Pulse", "Respiration"]));
     expect(labels).not.toContain("Vital signs panel");
-    expect(values).toEqual(expect.arrayContaining(["96 /min", "18 /min"]));
+    // R1.3: "/min" → "per min" unit-label translation.
+    expect(values).toEqual(expect.arrayContaining(["96 per min", "18 per min"]));
 
     // "Most recent vitals from" header is present and formatted YYYY-MM-DD HH:mm.
     const header = screen.getByTestId("vitals-most-recent");
@@ -184,8 +185,8 @@ describe("VitalsCardView (render)", () => {
     expect(rows[0].textContent).toBe("Pulse");
 
     const value = screen.getByTestId("vital-value");
-    // 96/min wins (effectiveDateTime 2026-04-29 > 2025-12-01).
-    expect(value.textContent).toBe("96 /min");
+    // 96 per min wins (effectiveDateTime 2026-04-29 > 2025-12-01).
+    expect(value.textContent).toBe("96 per min");
   });
 
   it("filters out observations with no renderable value (R1.2)", () => {
@@ -247,8 +248,8 @@ describe("mostRecentByLoinc", () => {
 });
 
 describe("formatObservationValue", () => {
-  it("renders 'value unit' for a standard valueQuantity", () => {
-    expect(formatObservationValue(heartRate96)).toBe("96 /min");
+  it("renders 'value unit' for a standard valueQuantity (with R1.3 unit translation)", () => {
+    expect(formatObservationValue(heartRate96)).toBe("96 per min");
   });
 
   it("falls back to valueString when valueQuantity is absent", () => {
@@ -279,7 +280,9 @@ describe("formatObservationValue", () => {
         },
       ],
     };
-    expect(formatObservationValue(bpPanel)).toBe("156/94 mmHg");
+    // R1.3: BP renders bare `systolic/diastolic` with no unit
+    // suffix, matching the original `forms/vitals/report.php` BP branch.
+    expect(formatObservationValue(bpPanel)).toBe("156/94");
   });
 });
 

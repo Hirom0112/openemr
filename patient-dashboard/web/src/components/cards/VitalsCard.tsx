@@ -214,13 +214,15 @@ function isMoreRecent(a: FhirObservation, b: FhirObservation): boolean {
  *      card never crashes on a malformed entry.
  */
 export function formatObservationValue(obs: FhirObservation): string | null {
-  // BP panel: synthesise from components.
-  if (loincOf(obs) === LOINC_BP_PANEL) {
+  const code = loincOf(obs);
+
+  // BP panel: synthesise from components. Original card renders bare
+  // `bps/bpd` with no unit suffix (`forms/vitals/report.php` BP branch).
+  if (code === LOINC_BP_PANEL) {
     const sys = findComponentValue(obs, LOINC_BP_SYSTOLIC);
     const dia = findComponentValue(obs, LOINC_BP_DIASTOLIC);
     if (sys?.value != null && dia?.value != null) {
-      const unit = sys.unit ?? dia.unit ?? "";
-      return unit ? `${sys.value}/${dia.value} ${unit}` : `${sys.value}/${dia.value}`;
+      return `${sys.value}/${dia.value}`;
     }
   }
 
@@ -228,16 +230,16 @@ export function formatObservationValue(obs: FhirObservation): string | null {
   if (q?.value != null) {
     // Temperature: render both units. Source unit + value first, then
     // converted counterpart in parentheses. Mirrors original screenshot 16
-    // ("98.6 F (37 C)").
-    if (loincOf(obs) === LOINC_TEMPERATURE && q.unit) {
+    // ("37 F (2.78 C)" semantics — Fahrenheit displayed, Celsius in parens).
+    if (code === LOINC_TEMPERATURE && q.unit) {
         if (isFahrenheitUnit(q.unit)) {
-            return `${q.value} ${q.unit} (${fahrenheitToCelsius(q.value)} C)`;
+            return `${q.value} F (${fahrenheitToCelsius(q.value)} C)`;
         }
         if (isCelsiusUnit(q.unit)) {
-            return `${q.value} ${q.unit} (${celsiusToFahrenheit(q.value)} F)`;
+            return `${q.value} C (${celsiusToFahrenheit(q.value)} F)`;
         }
     }
-    return q.unit ? `${q.value} ${q.unit}` : `${q.value}`;
+    return q.unit ? `${q.value} ${formatUnitLabel(q.unit)}` : `${q.value}`;
   }
 
   if (obs.valueString && obs.valueString.trim().length > 0) {
@@ -245,6 +247,19 @@ export function formatObservationValue(obs: FhirObservation): string | null {
   }
 
   return null;
+}
+
+/**
+ * Translate a UCUM-style unit string into the human label the original
+ * OpenEMR card renders. UCUM `/min` reads as "per min" on the original
+ * card; `mm[Hg]` reads as "mmHg" (when shown). Falls through unchanged
+ * for any other unit so unrecognised quantities are still surfaced.
+ */
+export function formatUnitLabel(unit: string): string {
+    const u = unit.trim();
+    if (u === "/min") return "per min";
+    if (u === "mm[Hg]") return "mmHg";
+    return u;
 }
 
 function findComponentValue(
