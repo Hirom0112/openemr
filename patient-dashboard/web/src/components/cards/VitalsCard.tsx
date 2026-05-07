@@ -114,7 +114,10 @@ const VITALS_FRIENDLY_LABELS: Readonly<Record<string, string>> = {
     "8280-0": "Waist Circumference",
 };
 
-const TRENDS_HREF = "/interface/encounter/trend_form.php?formname=vitals";
+// Original PHP card's trend-form target: `/interface/encounter/trend_form.php?formname=vitals`.
+// Not reachable from this port's origin and not in scope; the trend link
+// renders inert below (read-only). Kept as a comment so the future "wire
+// the trend graph" task knows where it would have pointed.
 
 /** Convert °F → °C with one decimal. */
 export function fahrenheitToCelsius(f: number): number {
@@ -434,13 +437,21 @@ export function VitalsCardView({
             </React.Fragment>
           ) : null}
         </dl>
-        <a
-          href={TRENDS_HREF}
-          className="mt-3 inline-block text-sm text-primary hover:underline"
-          data-testid="vitals-trend-link"
+        {/* Trend link — present for parity (`vitals_fragment.php:45`)
+            but inert in this port. Same disabled-with-tooltip pattern
+            as `EditPencilButton`. The TRENDS_HREF target points into
+            OpenEMR's legacy `trend_form.php`, which is not reachable
+            from the Next.js origin. Marking it inert is more honest
+            than letting it 404. */}
+        <span
+            data-testid="vitals-trend-link"
+            data-readonly="true"
+            aria-disabled="true"
+            title="Vitals trend graph not implemented in this port — out of scope per brief"
+            className="mt-3 inline-block cursor-not-allowed text-sm text-muted-foreground/60 opacity-60"
         >
           Click here to view and graph all vitals.
-        </a>
+        </span>
       </CardContent>
     </Card>
   );
