@@ -362,3 +362,13 @@ agent_resolver_duration_seconds = Histogram(
 # in this module would invert that boundary. The marker stays so a single
 # ``grep agent_hl7_parse`` surfaces the catalog entry. Slice 9.10's §5.5
 # metric-table update in ARCHITECTURE.md cross-references the same names.
+
+# ── Phase 9 Slice 9.3 — staging (pending-write) ─────────────────────────────
+# Metrics ``agent_staging_transitions_total``, ``agent_staging_endpoint_total``,
+# ``agent_staging_endpoint_duration_seconds``, ``agent_staging_writer_total``,
+# ``agent_staging_watchdog_runs_total``, ``agent_staging_watchdog_rows_total``,
+# and ``agent_staging_watchdog_duration_seconds`` are registered in
+# ``staging/_metrics.py`` rather than here. The importlinter contract
+# ``staging-isolated`` forbids ``staging -> agent``; centralising in this
+# module would invert the boundary. Mirrors the HL7 carve-out above so a
+# single ``grep agent_staging_`` surfaces the catalog entry.

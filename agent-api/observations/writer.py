@@ -74,6 +74,14 @@ _LOINC_TABLE: dict[str, tuple[str, str]] = {
     "hba1c": ("4548-4", "Hemoglobin A1c/Hemoglobin.total in Blood"),
     "inr": ("6301-6", "INR in Platelet poor plasma by Coagulation assay"),
     "troponin": ("6598-7", "Troponin T.cardiac [Mass/volume] in Serum or Plasma"),
+    # Phase 9 Slice 9.3 — widen for HL7 v2 fixtures (deferred from Slice 9.4).
+    "bnp": ("30934-4", "Natriuretic peptide.B [Mass/volume] in Serum or Plasma"),
+    "nt_probnp": ("33762-6", "Natriuretic peptide.B prohormone N-Terminal [Mass/volume] in Serum or Plasma"),
+    "egfr": ("33914-3", "Glomerular filtration rate/1.73 sq M.predicted [Volume Rate/Area]"),
+    "hco3": ("1963-8", "Bicarbonate [Moles/volume] in Serum or Plasma"),
+    "bicarbonate": ("1963-8", "Bicarbonate [Moles/volume] in Serum or Plasma"),
+    "co2": ("2028-9", "Carbon dioxide [Moles/volume] in Serum or Plasma"),
+    "chloride": ("2075-0", "Chloride [Moles/volume] in Serum or Plasma"),
 }
 
 _LOINC_FALLBACK: tuple[str, str] = ("LP-UNKNOWN", "Unknown laboratory analyte")
@@ -278,8 +286,301 @@ async def write_observation(
     return payload
 
 
+# ─────────────────── Phase 9 Slice 9.3 — Pending-write siblings ──────────────
+#
+# All derived writes from Phase 9 forward stage by default. The pre-existing
+# W2 PDF/PNG ingest path keeps using ``write_observation`` directly for
+# back-compat — see ``main.py:1763`` (do not migrate that call site).
+#
+# 7-error taxonomy for ``approved → written`` failures (Slice 9.3):
+#
+#   php_5xx                     — Observation endpoint returned 5xx
+#   php_4xx                     — Observation endpoint returned 4xx
+#   network_timeout             — httpx.TimeoutException (read/connect)
+#   network_unreachable         — httpx.ConnectError / DNS failures
+#   jwt_mint_failed             — _mint_copilot_jwt returned None / raised
+#   task_writer_unavailable     — target_resource_type='Task' (no PHP writer)
+#   allergy_writer_unavailable  — target_resource_type='AllergyIntolerance'
+#                                  (no PHP writer)
+#   payload_invalid             — body shape failed local validation
+#
+# The PHP ObservationController accepts ONLY ``resourceType='Observation'``
+# (ObservationController.php:85). Tasks and AllergyIntolerance stage
+# successfully but transition straight to ``failed`` with the matching
+# write_error string when the watchdog or approve endpoint dispatches them.
+
+from typing import Literal as _Literal
+
+WriteOutcome = _Literal["written", "failed"]
+
+
+async def _perform_write(row: dict[str, Any]) -> tuple[WriteOutcome, str | None]:
+    """Shared writer used by approve endpoint + stuck-approved watchdog reaper.
+
+    Walks the 7-error taxonomy. Returns ``("written", None)`` on success
+    and ``("failed", write_error)`` on every taxonomised failure. The
+    caller decides whether to record the result via
+    ``staging.store.mark_written`` / ``mark_failed``.
+
+    The function never raises — taxonomy gaps fall through to
+    ``"payload_invalid"`` so the caller always has a stable string.
+    """
+    target_type = str(row.get("target_resource_type") or "")
+    if target_type == "Task":
+        return "failed", "task_writer_unavailable"
+    if target_type == "AllergyIntolerance":
+        return "failed", "allergy_writer_unavailable"
+    if target_type != "Observation":
+        return "failed", "payload_invalid"
+
+    payload = row.get("payload")
+    if not isinstance(payload, dict):
+        return "failed", "payload_invalid"
+
+    body = dict(payload)
+    body.setdefault("resourceType", "Observation")
+    obs_id = str(row.get("target_resource_id") or "")
+    if not obs_id or _ID_PATTERN.match(obs_id) is None:
+        return "failed", "payload_invalid"
+    body["id"] = obs_id
+
+    try:
+        token = _mint_copilot_jwt()
+    except Exception as exc:
+        _logger.warning(
+            "observation_write_jwt_mint_raised",
+            extra={"observation_id": obs_id, "error_type": type(exc).__name__},
+        )
+        return "failed", "jwt_mint_failed"
+    if token is None:
+        return "failed", "jwt_mint_failed"
+
+    url = _custom_observation_url()
+    t0 = _dt.datetime.now(_dt.timezone.utc)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                url,
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/fhir+json",
+                    "Accept": "application/json",
+                },
+            )
+    except httpx.TimeoutException:
+        return "failed", "network_timeout"
+    except httpx.ConnectError:
+        return "failed", "network_unreachable"
+    except httpx.HTTPError as exc:
+        _logger.warning(
+            "observation_write_http_error",
+            extra={"observation_id": obs_id, "error_type": type(exc).__name__},
+        )
+        return "failed", "network_unreachable"
+    except Exception as exc:
+        _logger.warning(
+            "observation_write_unexpected",
+            extra={"observation_id": obs_id, "error_type": type(exc).__name__},
+        )
+        return "failed", "payload_invalid"
+
+    duration_ms = int(
+        (_dt.datetime.now(_dt.timezone.utc) - t0).total_seconds() * 1000
+    )
+
+    if 400 <= response.status_code < 500:
+        _logger.warning(
+            "observation_write_4xx",
+            extra={
+                "observation_id": obs_id,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+            },
+        )
+        return "failed", "php_4xx"
+    if response.status_code >= 500:
+        _logger.warning(
+            "observation_write_5xx",
+            extra={
+                "observation_id": obs_id,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+            },
+        )
+        return "failed", "php_5xx"
+
+    _logger.info(
+        "observation_write_ok_via_staging",
+        extra={
+            "observation_id": obs_id,
+            "duration_ms": duration_ms,
+        },
+    )
+    return "written", None
+
+
+async def stage_observation(
+    *,
+    document_id: str,
+    patient_id: str,
+    lab_value: LabValue,
+    file_batch_id: str,
+    document_reference_id: str,
+    locator: str | None = None,
+    source_format: str = "pdf",
+    observation_id: str | None = None,
+    request_id: str | None = None,
+    provider_id: str | None = None,
+) -> int:
+    """Stage one FHIR Observation derived from a ``LabValue``.
+
+    Builds the same body ``write_observation`` would POST, but inserts a
+    ``state='pending'`` row in ``copilot_pending_extractions`` instead of
+    firing the HTTP write. Returns the integer ``pending_id``.
+    """
+    from staging import store as _staging_store  # local — keep cycle-free
+
+    code, display = lookup_loinc(lab_value.normalized_test_name)
+    if observation_id is None:
+        observation_id = deterministic_observation_id(document_id, code)
+    if _ID_PATTERN.match(observation_id) is None:
+        raise ValueError("observation_id failed copilot id pattern")
+
+    body = _build_observation(
+        document_id=document_id,
+        patient_id=patient_id,
+        lab_value=lab_value,
+        observation_id=observation_id,
+        loinc=(code, display),
+    )
+    return await _staging_store.stage_pending(
+        document_reference_id=document_reference_id,
+        file_batch_id=file_batch_id,
+        patient_id=patient_id,
+        source_format=source_format,
+        target_resource_type="Observation",
+        target_resource_id=observation_id,
+        payload=body,
+        locator=locator,
+        confidence=None,
+        request_id=request_id,
+        provider_id=provider_id,
+    )
+
+
+async def stage_task(
+    *,
+    document_id: str,
+    patient_id: str,
+    file_batch_id: str,
+    document_reference_id: str,
+    measure: str,
+    status: str,
+    description: str | None = None,
+    locator: str | None = None,
+    source_format: str = "xlsx",
+    request_id: str | None = None,
+    provider_id: str | None = None,
+) -> int:
+    """Stage a FHIR Task derived from an XLSX Care_Gaps row.
+
+    NOTE — the v1 PHP ObservationController accepts ONLY
+    ``resourceType='Observation'`` (see ObservationController.php:85). On
+    ``approved → written`` dispatch this row transitions to ``failed``
+    with ``write_error='task_writer_unavailable'``. The schema still
+    carries the payload from day one so a v1.5 Task writer can land
+    without a re-stage round-trip.
+    """
+    from staging import store as _staging_store
+
+    sanitised = re.sub(r"[^\w.-]+", "-", measure.strip()) or "task"
+    target_id = f"copilot-{document_id}-{sanitised}"
+    body: dict[str, Any] = {
+        "id": target_id,
+        "resourceType": "Task",
+        "status": "requested",
+        "intent": "order",
+        "for": {"reference": f"Patient/{patient_id}"},
+        "focus": {"reference": f"DocumentReference/copilot-{document_id}"},
+        "code": {"text": measure},
+        "businessStatus": {"text": status},
+    }
+    if description:
+        body["description"] = description
+
+    return await _staging_store.stage_pending(
+        document_reference_id=document_reference_id,
+        file_batch_id=file_batch_id,
+        patient_id=patient_id,
+        source_format=source_format,
+        target_resource_type="Task",
+        target_resource_id=target_id,
+        payload=body,
+        locator=locator,
+        confidence=None,
+        request_id=request_id,
+        provider_id=provider_id,
+    )
+
+
+async def stage_allergy(
+    *,
+    document_id: str,
+    patient_id: str,
+    file_batch_id: str,
+    document_reference_id: str,
+    substance: str,
+    reaction: str | None = None,
+    locator: str | None = None,
+    source_format: str = "xlsx",
+    request_id: str | None = None,
+    provider_id: str | None = None,
+) -> int:
+    """Stage a FHIR AllergyIntolerance from an XLSX Patient sheet row.
+
+    NOTE — the v1 PHP ObservationController accepts ONLY
+    ``resourceType='Observation'`` (see ObservationController.php:85). On
+    ``approved → written`` dispatch this row transitions to ``failed``
+    with ``write_error='allergy_writer_unavailable'``. The schema still
+    carries the payload so a v1.5 AllergyIntolerance writer can land
+    without a re-stage.
+    """
+    from staging import store as _staging_store
+
+    sanitised = re.sub(r"[^\w.-]+", "-", substance.strip()) or "allergy"
+    target_id = f"copilot-{document_id}-allergy-{sanitised}"
+    body: dict[str, Any] = {
+        "id": target_id,
+        "resourceType": "AllergyIntolerance",
+        "clinicalStatus": {"text": "active"},
+        "verificationStatus": {"text": "unconfirmed"},
+        "patient": {"reference": f"Patient/{patient_id}"},
+        "code": {"text": substance},
+    }
+    if reaction:
+        body["reaction"] = [{"manifestation": [{"text": reaction}]}]
+
+    return await _staging_store.stage_pending(
+        document_reference_id=document_reference_id,
+        file_batch_id=file_batch_id,
+        patient_id=patient_id,
+        source_format=source_format,
+        target_resource_type="AllergyIntolerance",
+        target_resource_id=target_id,
+        payload=body,
+        locator=locator,
+        confidence=None,
+        request_id=request_id,
+        provider_id=provider_id,
+    )
+
+
 __all__ = [
     "deterministic_observation_id",
     "lookup_loinc",
+    "stage_allergy",
+    "stage_observation",
+    "stage_task",
     "write_observation",
 ]

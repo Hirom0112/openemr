@@ -1820,6 +1820,12 @@ async def document_ingest(
                 "request_id": rid,
                 "size_bytes": size_bytes,
                 "page_count": page_count,
+                # Phase 9 Slice 9.3 — staging + parse_summary additions.
+                # Cached PDF/PNG path stays on direct write_observation
+                # (per spec: do NOT migrate W2 callers to staging), so
+                # both fields stay None on this branch.
+                "staging": None,
+                "parse_summary": None,
             },
         }
 
@@ -2053,6 +2059,13 @@ async def document_ingest(
             "size_bytes": size_bytes,
             "page_count": page_count,
             "observation_ids": observation_ids,
+            # Phase 9 Slice 9.3 — staging + parse_summary additions.
+            # PDF/PNG ingest path stays on direct write_observation per
+            # the slice's "do NOT migrate W2 callers" rule, so both
+            # fields stay None on this branch. Multimodal lanes
+            # (HL7/XLSX/DOCX/TIFF) populate these via Slice 9.4–9.6.
+            "staging": None,
+            "parse_summary": None,
         },
     }
 
@@ -3043,3 +3056,53 @@ async def reject_quarantine(
         "quarantine_id": result.quarantine_id,
         "state": result.state,
     }
+
+
+# ─────────────────── Phase 9 Slice 9.3 — Pending-write ──────────────────
+# Pending-extractions queue + per-record approve/reject/retry. Each route
+# emits one Prometheus counter, one histogram observation, one structured
+# log line, and one audit row per CLAUDE.md "Observability — verifiable
+# latency claims" rule. Authorization is role-gated for mutating
+# endpoints; reads are patient-scoped (caller passes patient_id).
+#
+# State machine and asyncpg CRUD live in ``staging/store.py``; this block
+# only mounts the FastAPI router and wires the watchdog into startup /
+# shutdown. The watchdog runs two background loops (stuck-approved reaper
+# + stale-pending notifier); see ``staging/watchdog.py`` docstring for
+# the APScheduler-vs-asyncio swap rationale.
+
+from staging.router import router as _staging_router
+from staging import watchdog as _staging_watchdog
+from staging import migrations as _staging_migrations
+
+app.include_router(_staging_router)
+
+
+@app.on_event("startup")
+async def _staging_startup() -> None:
+    """Verify the pending-extractions schema and start the watchdog loops."""
+    try:
+        ok = await _staging_migrations.verify_schema()
+    except Exception:  # pragma: no cover — defensive
+        ok = False
+    if not ok:
+        logger.warning(
+            "staging_schema_unavailable",
+            extra={"hint": "audit_db_url unset or copilot_pending_extractions missing"},
+        )
+        return
+    try:
+        _staging_watchdog.start_watchdog()
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.warning(
+            "staging_watchdog_start_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+
+
+@app.on_event("shutdown")
+async def _staging_shutdown() -> None:
+    try:
+        await _staging_watchdog.stop_watchdog()
+    except Exception:  # pragma: no cover — best-effort
+        pass
