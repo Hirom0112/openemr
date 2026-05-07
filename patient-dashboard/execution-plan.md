@@ -218,35 +218,50 @@ FHIR client tested and spot-checked, no UI built yet.
       colored span vs original link styling)
 - [x] Commit (pattern locked for siblings)
 
-### 4.2 — Allergies card (~30 min)
-- [ ] Build per inventory + screenshot, same pattern as header
-- [ ] Loading / loaded / empty / error states
-- [ ] Side-by-side comparison
-- [ ] Commit
+### 4.2 — Allergies card (~30 min) ✅
+- [x] Built per inventory; uses `allergyDisplay()` fallback for the
+      Gloria text.div case from 1.5
+- [x] Loaded / empty (None) / error states
+- [ ] Side-by-side visual comparison (PENDING — human pass)
+- [x] Committed in Wave 4 batch
 
-### 4.3 — Medical Problems card (~30 min)
-- [ ] Same pattern; commit per card
+### 4.3 — Medical Problems card (~30 min) ✅
+- [x] Same pattern; filters resolved out (matches inventory's
+      filterActiveIssues). Sub-agent flagged a parity deviation —
+      original card shows only the title; this port adds onset date +
+      status badge per the brief. Documented for follow-up.
+- [x] Committed in Wave 4 batch
 
-### 4.4 — Medications card (~30 min)
-- [ ] Apply MedicationRequest filter per migration doc decision
-- [ ] Same pattern; commit per card
+### 4.4 — Medications card (~30 min) ✅
+- [x] Uses `filterMedications` synthesis helper (status in active /
+      on-hold / completed)
+- [x] Committed in Wave 4 batch
 
-### 4.5 — Prescriptions card (~30 min)
-- [ ] Apply Prescriptions-specific MedicationRequest filter
-- [ ] Same pattern; commit per card
+### 4.5 — Prescriptions card (~30 min) ✅
+- [x] Uses `filterPrescriptions` (intent=order + status=active +
+      requester recorded). Empty state is the **realistic default**
+      for every synthetic patient per 1.5 — treated as successful load.
+- [x] Committed in Wave 4 batch
 
-### 4.6 — Care Team card (~30 min)
-- [ ] Same pattern; commit per card
+### 4.6 — Care Team card (~30 min) ✅
+- [x] Empty for every synthetic patient (1.5). Loaded shape inferred;
+      test marks the inferred row as such.
+- [x] Committed in Wave 4 batch
 
-### 4.7 — Vitals card (~45 min)
-- [ ] Slightly more interesting because of multiple values
-- [ ] Same pattern; commit per card
+### 4.7 — Vitals card (~45 min) ✅
+- [x] Most-recent-per-LOINC grouping; panel LOINC 85353-1 dropped;
+      blood-pressure panel 85354-9 synthesizes systolic/diastolic
+      from `component[]`. Server-side `_sort`/`_count` not attempted
+      (open Q8 still); client-side sort is fine for ~15-row bundles.
+- [x] Committed in Wave 4 batch
 
-### 4.8 — Mount edit pencil stubs (~30 min)
-- [ ] Add edit pencil icons to each card per inventory
-- [ ] Stub with TODO comments — no mutation logic this week
-- [ ] Document in migration doc as "interactions present, mutations
-      out of scope per brief"
+### 4.8 — Mount edit pencil stubs (~30 min) ✅
+- [x] Each of the 6 sibling cards ships a Lucide `Pencil` button with
+      `aria-label`, a `console.log("TODO: ...")` onClick, and a code
+      comment pointing to the inventory's "Edit affordance" subsection.
+      No mutation logic — read-only by design (covered in migration
+      doc → "Read-only by design" Day-1 draft + polished defense).
+- [x] Committed in Wave 4 batch
 
 **Phase 4 done when:** All seven cards render live data, side-by-side
 parity confirmed against original for each.
