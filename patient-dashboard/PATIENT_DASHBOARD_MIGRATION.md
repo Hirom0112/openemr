@@ -70,9 +70,12 @@ selection below traces back to an audit finding documented in
 **Server Components solve problems #1 and #4.** A Server Component runs
 only on the server. Its code is never bundled to the browser. The FHIR
 access token is read server-side, used to fetch FHIR data, and only the
-rendered HTML reaches the user. The token cannot leak into client
-bundles by construction. This is enforced by the framework, not
-developer discipline.
+rendered HTML reaches the user. The mechanism: every card is an `async`
+Server Component (no `"use client"` directive in the fetch path). The
+typed FHIR client is imported only by Server Components, so a `"use
+client"` regression on a card would surface as a Next.js build error
+("Importing a Server-only module into a Client Component") rather than
+a silent token leak.
 
 **One uniform card pattern solves problem #3.** All seven cards extend a
 single `<Card>` component (scaffolded from shadcn/ui) with consistent
@@ -84,7 +87,9 @@ selection — the data layer, auth, and component model are all uniform.
 **TypeScript solves problem #5.** The MedicationRequest synthesis logic
 filters by `intent` and `status` to derive both Medications and
 Prescriptions cards from the same FHIR resource. TypeScript verifies
-the filter logic against the FHIR R4 type definitions at compile time.
+the filter logic against the narrow FHIR R4 type slices we hand-maintain
+in `web/src/lib/fhir/types.ts` (literal-union enums for `status` /
+`intent` / category) at compile time.
 Wrong field name, missing case in an enum exhaustiveness check, or
 mismatched shape between the synthesis output and the component prop —
 all caught before runtime. The original architecture's PHP+SQL layer
@@ -97,14 +102,17 @@ OAuth Provider pattern that handles arbitrary OAuth2/OIDC servers.
 OpenEMR is not a pre-built provider like Google or GitHub, so the
 library's flexibility matters. The library handles authorization code
 flow, token storage in encrypted server-side sessions (token off the
-browser, again), automatic refresh on 401, and callback URL handling
-that works identically in dev and production with one environment
-variable change.
+browser, again), and automatic refresh on 401. The Auth.js side of the
+flow needs only `NEXTAUTH_URL` and the OAuth client credentials to move
+between dev and production; the OpenEMR side requires re-registering
+the client and disabling the password grant (see
+`auth-notes.md` → "Production posture").
 
-When the OAuth flow breaks at deployment — and OAuth flows commonly
-break at deployment — Auth.js has the largest debugging precedent of
-any JS auth library. The session+CSRF model in the original is replaced
-by industry-standard OAuth2/OIDC with SMART scopes for FHIR access.
+When the OAuth flow breaks at deployment — redirect-URI scheme mismatch,
+cookie SameSite under HTTPS, PKCE on a server that didn't expect it —
+Auth.js's Generic OIDC provider has well-trodden recipes for each.
+The session+CSRF model in the original is replaced by standard
+OAuth2/OIDC with SMART scopes for FHIR access.
 
 ### Why shadcn/ui and Tailwind for the UI
 
@@ -194,8 +202,9 @@ and within scope. No backend changes ship with this project.
 
 - **OpenEMR's FHIR R4 server.** All six in-scope cards consume existing
   controllers under `src/RestControllers/FHIR/`. Verification 1.5
-  confirmed live responses for Patient, AllergyIntolerance, Condition,
-  MedicationRequest, CareTeam, and Observation against the running
+  confirmed all six endpoints reachable and well-shaped (CareTeam
+  reached but `total=0` for every synthetic patient; loaded shape
+  inferred only) against the running
   OpenEMR build — the resources the port needs are present and
   responsive. The single confirmed gap (MedicationStatement) is
   documented separately and handled by synthesis, not by patching the
@@ -338,7 +347,7 @@ concerns instead of side effects of the rendering pipeline.
 This port replaces session+CSRF authentication with OAuth2/OpenID
 Connect against OpenEMR's existing OAuth server, using SMART scopes
 for FHIR resource access. The full flow — authorize, callback, token
-exchange, refresh, logout — is implemented through `[AUTH_LIBRARY]`
+exchange, refresh, logout — is implemented through Auth.js
 configured against OpenEMR's `/oauth2/default/*` endpoints. Access
 tokens are stored server-side in encrypted session cookies; the
 browser never holds a raw FHIR token. Token expiry triggers an
@@ -433,50 +442,6 @@ A complete editable port would be a meaningfully larger project. The
 brief deliberately scopes around it so the framework migration can
 be evaluated on its own merits without the additional surface area
 of mutation handling.
-
----
-
-## Draft 4 — Why this finding matters for the framework defense
-
-The framework choice is graded on whether it addresses the problems
-with the current architecture, not on whether it is fashionable. The
-architecture audit surfaced three concrete problems with the existing
-dashboard:
-
-First, a hybrid card-loading model. Nine cards AJAX-load HTML
-fragments; four cards render inline as Twig. There is no uniform
-pattern for adding a new card or modifying an existing one — every
-change requires deciding which of the two patterns to follow, and the
-two patterns share no infrastructure.
-
-Second, direct database access from presentation files. Every card,
-in both rendering models, calls `sqlQuery()` or a service class
-directly from the file that emits its HTML. There is no data-layer
-abstraction. Caching, request batching, type safety, and error
-handling have to be implemented per-card or skipped. The original
-skips them.
-
-Third, session+CSRF auth that does not work for a decoupled
-frontend. The auth model is correct for the original architecture
-and incompatible with any modern client.
-
-The chosen framework, `[FRAMEWORK]`, addresses each of these directly.
-A single uniform card pattern handles loading, empty, and error states
-identically across all six cards in this port — the pattern is
-established once in `components/cards/PatientHeader.tsx` and reused
-verbatim by every card that follows. The typed FHIR client in
-`lib/fhir/` decouples presentation from data fetching: cards never
-see the FHIR wire format, only the parsed and typed resources their
-renderers expect. `[AUTH_LIBRARY]` handles OAuth2/SMART out of the
-box, including the token refresh and server-side session storage that
-the original architecture cannot support.
-
-Each of these is a specific finding mapped to a specific framework
-capability. The framework defense is not "modern is better." The
-framework defense is "the brief required a specific set of
-architectural improvements, the audit identified the specific things
-that needed improving, and the chosen framework makes each improvement
-natural rather than forced."
 
 ---
 

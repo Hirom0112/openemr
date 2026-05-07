@@ -139,11 +139,20 @@ Phase 4 starts.
       (will be revised after Phase 4)
 - [x] Commit
 
-### 2.4 — Have Claude Code critique the defense (~30 min)
-- [ ] Send the critique prompt
-- [ ] Claude Code outputs a numbered issue list
-- [ ] You fix issues yourself (don't let Claude Code rewrite)
-- [ ] Commit
+### 2.4 — Have Claude Code critique the defense (~30 min) ✅
+- [x] Cold-read sub-agent produced a 20-issue list
+- [x] Top "load-bearing" issues fixed: literal placeholders
+      ([FRAMEWORK]/[AUTH_LIBRARY]) replaced; Day 1 Draft 4 removed
+      (superseded by polished Framework choice section);
+      Medications filter rule reconciled across migration doc /
+      inventory / api-map (canonical: status-only, no intent
+      filter — matches code); "largest debugging precedent" claim
+      replaced with concrete failure modes; "FHIR R4 type definitions"
+      → "narrow R4 type slices we hand-maintain"; "endpoint reachable"
+      framing for CareTeam; auth-side "one env-var" claim qualified.
+- [x] Cosmetic / tone issues left for human polish.
+- [x] Commit (with audit-fix commit `d0d6997e1` covering 5.1
+      "Fix before submit" items)
 
 **Phase 2 done when:** Framework picked, defense doc reads cleanly,
 no marketing copy survives, every claim backed by reasoning.
@@ -272,19 +281,41 @@ parity confirmed against original for each.
 
 **Goal:** Final ship.
 
-### 5.1 — Parity audit (~30 min)
-- [ ] Have Claude Code audit parity against inventory
-- [ ] Output: `parity-audit.md` with field-by-field gap report
-- [ ] Triage gaps: fix or document as explicit cuts
+### 5.1 — Parity audit (~30 min) ✅
+- [x] parity-audit.md written: 7 card tables, status counts
+      20 parity / 9 deviation / 4 port-only / 4 missing / 13
+      out-of-scope / 9 caveat
+- [x] Top 3 "Fix before submit" items addressed in commit `d0d6997e1`:
+      Allergies high-risk highlight, Vitals temperature dual-unit,
+      Care Team team-name + status header
+- [x] Remaining deviations documented in Known limitations
 
-### 5.2 — Update migration doc with limitations (~30 min)
-- [ ] Have Claude Code fill in Known limitations section
-- [ ] Have Claude Code fill in Future work section
-- [ ] Don't let it touch the framework defense — those sections
-      are yours
-- [ ] Final cold read
+### 5.2 — Update migration doc with limitations (~30 min) ✅
+- [x] Known limitations: 11 cited bullets covering MedicationStatement
+      gap, intent=plan empirical finding, AllergyIntolerance text.div
+      fallback, inferred Care Team shape, Patient.photo unverified,
+      _sort/_count unverified, vital-signs Temp Method / Waist
+      Circumference, auth-code untested, password-grant production
+      posture, encounter stubs, Medical Problems onset/status
+- [x] Future work: 7 ranked bullets
+- [x] Owned sections (Why we're porting, Framework choice, What we
+      kept/changed) untouched
+- [x] Final cold read done in 2.4
 
-### 5.3 — Deploy (~60-90 min)
+### 5.3 — Deploy (~60-90 min) ⏸ DEFERRED
+**Per user instruction: do not deploy. Verify locally first.**
+
+Pre-deploy checklist (when ready):
+- [ ] Re-register OAuth client against the deployed OpenEMR
+      (Railway URL as redirect URI), not the local-dev one
+- [ ] Set `oauth_password_grant=0` in Railway OpenEMR's `globals`
+      table (auth-notes.md → Production posture)
+- [ ] Set Auth.js / OPENEMR_* env vars in the dashboard service
+- [ ] Auth-code round trip: human click against the deployed
+      instance — first time this code path is exercised
+- [ ] Confirm every card renders against the deployed instance
+- [ ] Original deploy steps (Vercel-or-Railway, README) below
+      preserved as starting material:
 - [ ] Have Claude Code prep deployment config + README
 - [ ] Deploy yourself (Vercel or Railway)
 - [ ] Register new OAuth client pointing at deployed redirect URI
@@ -293,22 +324,27 @@ parity confirmed against original for each.
 - [ ] Fix what breaks (will be redirect URI or CORS)
 - [ ] Confirm every card renders against deployed instance
 
-### 5.4 — Final cold read of migration doc (~30 min)
-- [ ] Have Claude Code critique the final doc
-- [ ] You fix issues yourself
-- [ ] Read out loud one more time, alone
+### 5.4 — Final cold read of migration doc (~30 min) ✅ (load-bearing fixes applied)
+- [x] Cold-read sub-agent produced a 20-issue critique
+- [x] Substantive issues fixed (placeholders, filter-rule
+      contradiction, unsupported superlatives, type-system claim
+      precision, endpoint-reachable framing, env-var qualification,
+      duplicate Day-1 Draft 4 removed)
+- [ ] "Read out loud once more" — left for the human pass
 
-### 5.5 — Final ship checklist (~30 min)
-- [ ] All seven cards with real data in production
-- [ ] OAuth login + logout + refresh work in production
+### 5.5 — Final ship checklist (~30 min) — pending local verification
+- [ ] All seven cards with real data **locally** (Gloria pid 4 is
+      the canonical fixture; Alejandro pid 24 has richer labs)
+- [ ] OAuth login + logout work locally end-to-end
 - [ ] Loading / empty / error states work
-- [ ] Side-by-side parity confirmed for every section
-- [ ] Migration doc reads clean cold
-- [ ] README enables clone-and-run
-- [ ] Public URL works in incognito
+- [ ] Side-by-side parity confirmed for every card
+- [x] Migration doc reads clean cold (5.4 critique, load-bearing
+      issues fixed)
+- [x] README inside `web/` enables clone-and-run (Phase 3.1)
+- [ ] (deferred) Public URL works in incognito
 
-### 5.6 — Submit (~5 min)
-- [ ] Submit per assignment instructions
-- [ ] Don't sit on it past deadline polishing
+### 5.6 — Submit (~5 min) ⏸ DEFERRED
+Local verification first, deploy second, submit third — per user
+instruction. Do not act on this checkbox.
 
 **Phase 5 done when:** Submitted.

@@ -137,7 +137,9 @@ filter **client-side** on the bundle (rather than via query parameters) so we
 can fall back gracefully if intent/status are not populated in synthetic data:
 
 - `status` in {`active`, `on-hold`, `completed`}
-- `intent` in {`order`, `instance-order`, `plan`}  — intentionally broader than Prescriptions
+- `intent` is **not filtered** — see `dashboard-inventory.md` →
+  `## Medications` → "Synthesis rule" for why. Implementation:
+  `filterMedications()` in `web/src/lib/fhir/synthesis.ts`.
 
 | Inventory field | FHIR path                                            | Notes |
 |-----------------|------------------------------------------------------|-------|

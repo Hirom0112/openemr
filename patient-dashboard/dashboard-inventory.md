@@ -294,7 +294,13 @@ listed as Active).
 currently taking. Filter MedicationRequest results where:
 - `status` is in [`active`, `on-hold`, `completed`] (excluding stopped,
   cancelled, entered-in-error)
-- `intent` is `order` or `instance-order`
+- `intent` is **not filtered** — the card shows everything currently
+  in effect regardless of how it was entered. (Earlier draft proposed
+  filtering on `intent in {order, instance-order}`; that was relaxed
+  after 1.5 confirmed every synthetic record arrives with
+  `intent=plan`. Filtering on intent at this layer would empty the
+  Medications card too.) Implementation: `filterMedications()` in
+  `web/src/lib/fhir/synthesis.ts`.
 
 The "active medication list" view of the original dashboard (Furosemide
 80mg IV, Lisinopril 10mg PO for Gloria) is reproduced from this
