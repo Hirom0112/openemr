@@ -627,6 +627,35 @@ export default function ChatSurface({
       };
     }
     forceScrollOnNextMessage.current = true;
+    // Forward the extraction citations + bbox layout + pdf source onto this
+    // message's metadata so the synthesis-citation click handler can resolve
+    // fact:obs:{row_id} tokens to the right citation entry without reaching
+    // back into docChatContextRef. `extraction` is typed as `unknown` on the
+    // ref, so narrow defensively before forwarding.
+    const liveExt = docChatContextRef.current?.extraction;
+    const extForMeta: ExtractionPayload | null = (() => {
+      if (!liveExt || typeof liveExt !== 'object') return null;
+      const le = liveExt as {
+        citations?: unknown;
+        ocr_layout?: unknown;
+        pdf_url?: unknown;
+        pdf_bytes?: unknown;
+      };
+      const out: ExtractionPayload = {};
+      if (Array.isArray(le.citations)) {
+        out.citations = le.citations as W2Citation[];
+      }
+      if (Array.isArray(le.ocr_layout)) {
+        out.ocr_layout = le.ocr_layout as BboxLayoutBlock[];
+      }
+      if (typeof le.pdf_url === 'string') {
+        out.pdf_url = le.pdf_url;
+      }
+      if (le.pdf_bytes instanceof ArrayBuffer) {
+        out.pdf_bytes = le.pdf_bytes;
+      }
+      return out;
+    })();
     setMessages((prev) => [
       ...prev,
       {
@@ -643,6 +672,13 @@ export default function ChatSurface({
               query_used: ctx.query_used,
               guidelines: ctx.guidelines,
             },
+            // When non-null, `readExtraction()` picks this up so fact:obs
+            // chip clicks resolve against the same citation list the
+            // pre-approval message used. The existing W2 chip block above
+            // filters to source_type === 'document', so observation
+            // citations stay invisible there — fact:obs only surfaces via
+            // the synthesis chip.
+            ...(extForMeta ? { extraction: extForMeta } : {}),
           },
         },
       },
