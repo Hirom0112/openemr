@@ -1018,6 +1018,7 @@ def main(argv: list[str] | None = None) -> int:
         "provenance_chain",
         "synthesis_grounded",
         "icd10_grounded",
+        "condition_writeback_succeeded",
         "critic_false_positive_rate",
         "keyword_match_in_citation",
     )

@@ -1175,6 +1175,75 @@ def _layout_source_text(outcome: RunOutcome) -> str:
     return "\n".join(parts)
 
 
+def condition_writeback_succeeded(outcome: RunOutcome, *, case: Any = None) -> bool:
+    """Soft / 1.00 — every grounded-ICD-10 problem_list row that the
+    extractor produced should result in a Condition write at approval.
+
+    The eval runner today doesn't wire the dispatcher's approve flow
+    for the 156-case suite (cases run extraction + rubric scoring,
+    not approval), so this rubric is *informational* in the same way
+    the multimodal-9.9 rubrics are: it returns True when the runner
+    hasn't populated ``outcome.written_condition_ids``, and FAILs only
+    when the runner did populate the field but a grounded-ICD-10 row
+    is missing from the written set.
+
+    Concretely:
+
+      * extraction.problem_list has N items where icd10_code is a
+        non-empty string (post-Phase-1 guardrail).
+      * outcome.written_condition_ids is the list of
+        ``deterministic_condition_id(doc, icd10)`` values that landed
+        in copilot_conditions.
+      * Pass iff N == len(intersection(expected_ids, written_ids))
+        OR outcome.written_condition_ids is None / not a list (runner
+        not wired).
+
+    Vacuous-True when:
+      - extraction is missing or not a dict
+      - kind != intake_form
+      - no problem_list entries
+      - no grounded ICD-10 codes at all
+      - runner hasn't populated written_condition_ids
+    """
+    extraction = outcome.extraction
+    if not isinstance(extraction, dict):
+        return True
+    if extraction.get("kind") != "intake_form":
+        return True
+    items = extraction.get("problem_list") or []
+    if not isinstance(items, list) or not items:
+        return True
+    grounded_codes: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("icd10_code")
+        if isinstance(code, str) and code.strip():
+            grounded_codes.append(code.strip())
+    if not grounded_codes:
+        return True
+    written = getattr(outcome, "written_condition_ids", None)
+    if not isinstance(written, list):
+        # Runner not wired — vacuous-True. The Phase 5 attestation
+        # walks the live ingest → approve → FHIR-Condition chain by
+        # hand; the rubric here is the eval-suite sentinel for the
+        # day the runner instruments approve dispatch.
+        return True
+    written_set = {str(w) for w in written if isinstance(w, str)}
+    # Each grounded code should produce a Condition id of the form
+    # copilot-{document_id}-{sanitised_code}. We don't know the
+    # document_id from the rubric's perspective, so we use suffix
+    # matching: every grounded code's sanitised form must appear at
+    # the end of some written id.
+    import re as _re
+    for code in grounded_codes:
+        sanitised = _re.sub(r"[^\w.-]+", "-", code)
+        matched = any(w.endswith(f"-{sanitised}") for w in written_set)
+        if not matched:
+            return False
+    return True
+
+
 def icd10_grounded(outcome: RunOutcome, *, case: Any = None) -> bool:
     """Hard / 1.00 — every ProblemListItem.icd10_code must appear
     literally in the OCR source text.
@@ -1239,6 +1308,8 @@ RUBRIC_REGISTRY: dict[str, Any] = {
     "synthesis_grounded": synthesis_grounded,
     # 2026-05-08 problem_list build — ICD-10 hallucination guardrail.
     "icd10_grounded": icd10_grounded,
+    # 2026-05-08 problem_list build — Phase 4 FHIR Condition write-through.
+    "condition_writeback_succeeded": condition_writeback_succeeded,
 }
 
 
@@ -1264,5 +1335,6 @@ __all__ = [
     "synthesis_grounded_reason",
     # 2026-05-08 problem_list build.
     "icd10_grounded",
+    "condition_writeback_succeeded",
     "RUBRIC_REGISTRY",
 ]

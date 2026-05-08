@@ -18,6 +18,7 @@
   "synthetic_marker_not_extracted": {"pass_rate": 1.00, "min_threshold": 1.00},
   "synthesis_grounded":             {"pass_rate": 1.00, "min_threshold": 1.00},
   "icd10_grounded":                 {"pass_rate": 1.00, "min_threshold": 1.00},
+  "condition_writeback_succeeded":  {"pass_rate": 1.00, "min_threshold": 1.00},
   "per_modality": {
     "intake_form": {
       "n_cases": 26,
