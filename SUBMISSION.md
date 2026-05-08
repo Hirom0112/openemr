@@ -50,7 +50,7 @@ The 156-case W2 eval suite is wired into GitHub Actions and hard-fails on regres
 VERIFY: PASS
 ```
 
-**Gate mechanics:** 156 cases × 7 boolean rubrics → per-rubric pass rates compared against `evals/baseline.json`. `evals/diff_baseline.py` enforces the per-rubric floor. CI workflow: `.github/workflows/copilot-eval.yml` (job `w2-eval`). The seventh rubric — `provenance_chain` — asserts that every extracted LabValue produces a FHIR-shaped `Observation` row with a non-empty `derivedFrom` array referencing the source `DocumentReference`, and that every citation's `bbox_id` resolves into the extraction's OCR layout. See `EVAL.md` for the full rubric set.
+**Gate mechanics:** 156 cases × 14 boolean rubrics combined (11 mechanical + 3 LLM-graded), with 18 keys in `evals/baseline.json` after the per-modality breakdown introduced in the Phase 9.9 multimodal expansion. This count reflects shipped state at submission lock; it has grown across phases and may grow further. Per-rubric pass rates are compared against `evals/baseline.json`; `evals/diff_baseline.py` enforces the per-rubric floor. CI workflow: `.github/workflows/copilot-eval.yml` (job `w2-eval`). One of the rubrics — `provenance_chain` — asserts that every extracted LabValue produces a FHIR-shaped `Observation` row with a non-empty `derivedFrom` array referencing the source `DocumentReference`, and that every citation's `bbox_id` resolves into the extraction's OCR layout. See `agent-api/evals/README.md` for the full enumerated rubric set.
 
 ---
 
@@ -75,7 +75,7 @@ VERIFY: PASS
 | Pillar 1 — Document Ingestion (§4) | FHIR Binary POST → legacy REST upload → custom upload → local disk | **Live.** Tier 1 + 2 unavailable on deployed OpenEMR build (404 / 401). Tier 3 (custom JWT-protected `oe-module-clinical-copilot/public/upload.php`) is the active path. Documented as architectural deviation in §4.2.1. |
 | Pillar 2 — Multi-Agent Graph (§5) | Supervisor + extractor + retriever + critic over LangGraph, SSE-streamed | **Live** at `POST /agent/w2/dispatch` with SSE. Streams supervisor → workers → critic frames. |
 | Pillar 3 — Hybrid RAG (§6) | Sparse (tsvector) + dense (Voyage embeddings) merged, reranked with Cohere Rerank 3 | **Live** at `POST /evidence/search`. Indexing pipeline built; corpus loaded. |
-| Pillar 4 — Eval Gate (§11) | 156 cases, 6 boolean rubrics, baseline + diff, CI hard-fail | **Live.** `evals/baseline.json` + `evals/diff_baseline.py` + `.github/workflows/copilot-eval.yml` job `w2-eval`. Verified by PR #1. |
+| Pillar 4 — Eval Gate (§11) | 156 cases, 14 boolean rubrics combined (11 mechanical + 3 LLM-graded; 18 keys in `baseline.json` incl. per-modality), baseline + diff, CI hard-fail | **Live.** `evals/baseline.json` + `evals/diff_baseline.py` + `.github/workflows/copilot-eval.yml` job `w2-eval`. Verified by PR #1. |
 | Citation contract (§8) | 5-field shape with bbox-grounded fidelity check | Live; per-value fidelity check runs in critic. |
 | Observability (§10, W1_ARCHITECTURE.md §5.5) | Per-event structured logs + Prometheus metrics, no PHI | Live; `agent_w2_*` metric family populated, audit dual-target preserved (§9.4 / §4.2.2). |
 

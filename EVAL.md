@@ -66,7 +66,7 @@ AGENT_API_URL=https://your-agent-url OPENEMR_BASE_URL=https://your-openemr-url b
 
 ## Provenance chain rubric (seventh rubric)
 
-The architecture's prior framing of "the system is gated by 50 cases scored against five boolean rubrics" is out of date — the gate is now scored against **seven** boolean rubrics (the original five from `W2_ARCHITECTURE.md §11.2` plus `factually_consistent` plus the new `provenance_chain`), over the 156-case suite shipped at submission lock. Rubric-count harmonization across all docs is tracked separately; see `W2_ARCHITECTURE.md §11.2` for the canonical rubric set.
+The architecture's earliest framing of "50 cases scored against five boolean rubrics" is out of date. The gate is now scored against **14 boolean rubrics combined** (11 mechanical + 3 LLM-graded), with 18 keys in `evals/baseline.json` after the Phase 9.9 per-modality breakdown, over the 156-case suite shipped at submission lock. The rubric set has grown across phases and may grow further. See `agent-api/evals/README.md` for the full enumerated rubric set and `W2_ARCHITECTURE.md §11.2` for the gate-design discussion.
 
 `provenance_chain` is a mechanical (non-LLM) boolean check, run per case, that asserts the full chain `LabValue → copilot_observations row → derivedFrom → DocumentReference/copilot-{doc_id} → documents.id` is traversable end-to-end on the deployed pilot. Concretely:
 
