@@ -15,6 +15,7 @@ import FileDropZone from './FileDropZone';
 import ApprovalModal from './ApprovalModal';
 import QuarantineCard from './QuarantineCard';
 import DuplicateDocumentCard from './DuplicateDocumentCard';
+import PendingExtractionsSidebar from './PendingExtractionsSidebar';
 import { laneFromFilename } from './LaneChip';
 import type { DuplicateIngestPayload, IngestResponse, QuarantineIngestPayload, StagingMetadata } from '../api';
 import type { Lane } from '../styles/tokens';
@@ -582,6 +583,13 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   const [pendingApproval, setPendingApproval] = useState<{ staging: StagingMetadata; lane: Lane | null } | null>(null);
   const [pendingQuarantine, setPendingQuarantine] = useState<{ payload: QuarantineIngestPayload; lane: Lane | null } | null>(null);
   const [pendingDuplicate, setPendingDuplicate] = useState<{ payload: DuplicateIngestPayload; lane: Lane | null } | null>(null);
+
+  // Persistent inbox — same setPendingApproval entry point as the post-upload
+  // modal, just reachable from a fixed-position rail at any time. The
+  // sidebar's own polling + per-action refetch keep its rows fresh; no
+  // additional refresh-key plumbing needed.
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
 
   const handleStaged = useCallback((staging: StagingMetadata, _resp: IngestResponse, file: File): void => {
     setPendingApproval({ staging, lane: laneFromFilename(file.name) });
@@ -1841,6 +1849,53 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           lane={pendingApproval.lane}
           onClose={() => setPendingApproval(null)}
         />
+      )}
+      {/* Persistent inbox — pending HITL extractions for the current patient.
+          The sidebar component is always mounted (so polling keeps the badge
+          count fresh); ``open`` controls panel visibility. */}
+      <PendingExtractionsSidebar
+        baseUrl={ingestBaseUrl}
+        patientId={ingestPatientId}
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        onReview={(staging, lane) => setPendingApproval({ staging, lane })}
+        onCountChange={setPendingCount}
+      />
+      {/* Toggle tab — small fixed-position handle on the right edge that
+          opens the inbox. Hidden while the panel is open. */}
+      {!sidebarOpen && ingestPatientId && (
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(true)}
+          aria-label={`Open pending extractions inbox (${pendingCount} pending)`}
+          style={{
+            position: 'fixed',
+            right: 0,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            zIndex: 1070,
+            background: pendingCount > 0 ? BRAND.base : SURFACE.bg,
+            color: pendingCount > 0 ? BRAND.onBrand : SURFACE.fg,
+            border: `1px solid ${pendingCount > 0 ? BRAND.base : SURFACE.borderStrong}`,
+            borderRight: 'none',
+            borderTopLeftRadius: 6,
+            borderBottomLeftRadius: 6,
+            padding: '10px 8px',
+            fontSize: 11,
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: '-2px 2px 8px rgba(15,23,42,0.10)',
+            fontFamily: 'inherit',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 4,
+            writingMode: 'vertical-rl' as const,
+            textOrientation: 'mixed' as const,
+          }}
+        >
+          <span>Pending {pendingCount > 0 ? `· ${pendingCount}` : ''}</span>
+        </button>
       )}
       {/* Slice 9.8 — quarantine card, mounted at root as a sticky bottom-right
           panel-style notice. Distinct from PostIngestContextCard. */}
