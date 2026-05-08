@@ -327,6 +327,9 @@ If the verification layer catches a violation, it either rewrites the specific c
 | `query_patient_records` | UC-3 follow-up question | Query-determined subset; extended FHIR window if "search all records" is requested | Direct answer context with source citations and search window statement |
 | `get_medication_safety` | UC-4 medication query or auto-flag | AllergyIntolerance, Condition, Observation (electrolytes, renal, hepatic), MedicationRequest | Chart-data-only safety surface context |
 | `generate_handoff` | UC-5 "give me handoff" trigger | All 7 resource types across all census patients | Per-patient handoff paragraph context, assembled in parallel |
+| `get_triage_rationale` | UC-1 census-row click | Direct-call (excluded from dispatcher's `TOOL_REGISTRY`) | Per-patient triage rationale narration |
+
+The first five tools are the conversational-loop set, registered in `agent/tool_registry.py:24-30 TOOL_REGISTRY` and dispatched via `tools=[...]` on the Anthropic API. `get_triage_rationale` is a direct-call tool registered in `agent/tool_registry.py:34 DIRECT_TOOL_REGISTRY` — it bypasses the dispatcher loop because the 2-second click-to-expand latency target cannot be met through tool selection + execution + final response. Both surfaces resolve to the same content contract; only the invocation path differs.
 
 ### 4.6 HTTP Routes
 
@@ -706,7 +709,7 @@ The case for LangGraph was evaluated seriously. The checkpointer abstraction (sw
 
 The counterargument that won:
 
-- **This is a single-agent, five-tool problem.** LangGraph's multi-agent coordination primitives — supervisor patterns, agent handoffs, parallel sub-graphs — are not needed when there is one agent with five statically-defined tools and deterministic routing. Conditional edges in a StateGraph are the right abstraction for dynamic multi-agent routing, not for "if the physician asks about a medication, call `get_medication_safety`."
+- **This is a W1 single-agent, six-tool problem (5 dispatcher tools + 1 direct-call tool).** LangGraph's multi-agent coordination primitives — supervisor patterns, agent handoffs, parallel sub-graphs — are not needed when there is one agent with five statically-defined dispatcher tools, one direct-call tool (`get_triage_rationale`), and deterministic routing. Conditional edges in a StateGraph are the right abstraction for dynamic multi-agent routing, not for "if the physician asks about a medication, call `get_medication_safety`." (W2 ships a multi-agent supervisor + workers + critic on LangGraph; see `W2_ARCHITECTURE.md §5` and §8.1 of this doc for the W1/W2 split.)
 - **Clinical auditability requires transparency.** Every step between a physician's question and a clinical response must be explicitly traceable. LangGraph abstractions that obscure what the agent is doing between nodes are a liability in this domain, not a convenience. A clear Python call stack beats a framework graph trace when the question is "why did the agent surface potassium as normal when it was not?"
 - **Scaling to more users is an infrastructure problem.** Going from 3 attendings to 10,000 users requires Redis cluster, load-balanced agent-api, and FHIR proxy scaling (§7.3). None of that is solved by changing the orchestration framework. User volume does not change the orchestration requirements.
 - **The migration cost is bounded if v1 is designed correctly.** The `Checkpointer` abstraction below is interface-compatible with LangGraph's `BaseCheckpointSaver`. When LangGraph is adopted, the persistence layer swaps cleanly without rewriting the agent loop.
