@@ -656,17 +656,59 @@ export default function ChatSurface({
       }
       return out;
     })();
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `assistant-post-approval-${refKey}-${Date.now()}`,
-        role: 'assistant',
+    // Gate: only emit the chip-recap message when there are document-scoped
+    // citations to render. Otherwise the chip block returns null and we'd
+    // be inserting an empty assistant bubble.
+    const hasUsefulCitations = !!extForMeta
+      && Array.isArray(extForMeta.citations)
+      && extForMeta.citations.some((c) => c.source_type === 'document');
+    setMessages((prev) => {
+      // Find the prior post-ingest message for this refKey so we can copy
+      // its staging metadata (file_batch_id + pending_extraction_ids) onto
+      // the new chip-recap message — that's what the chip click handler
+      // needs to route to the read-only DocumentReviewPanel.
+      let stagingMeta: { file_batch_id?: string; pending_extraction_ids?: number[] } | undefined;
+      if (hasUsefulCitations) {
+        for (let i = prev.length - 1; i >= 0; i--) {
+          const m = prev[i];
+          const data = m.response?.data as { document_reference_id?: string } | undefined;
+          if (data?.document_reference_id === refKey) {
+            const meta = m.response?.metadata as { staging?: { file_batch_id?: string; pending_extraction_ids?: number[] } } | undefined;
+            if (meta?.staging?.pending_extraction_ids?.length) {
+              stagingMeta = meta.staging;
+              break;
+            }
+          }
+        }
+      }
+      const now = Date.now();
+      const msgA = hasUsefulCitations
+        ? {
+            id: `assistant-post-approval-chips-${refKey}-${now}`,
+            role: 'assistant' as const,
+            response: {
+              type: 'text' as const,
+              data: { document_reference_id: refKey },
+              narrative: '',
+              citations: [],
+              metadata: {
+                no_auto_collapse: true,
+                ...(extForMeta ? { extraction: extForMeta } : {}),
+                ...(stagingMeta ? { staging: stagingMeta } : {}),
+              },
+            },
+          }
+        : null;
+      const msgB = {
+        id: `assistant-post-approval-${refKey}-${now + 1}`,
+        role: 'assistant' as const,
         response: {
-          type: 'text',
+          type: 'text' as const,
           data: null,
           narrative: '',
           citations: [],
           metadata: {
+            no_auto_collapse: true,
             post_ingest_context: {
               summary: ctx.summary,
               query_used: ctx.query_used,
@@ -685,8 +727,9 @@ export default function ChatSurface({
             ...(extForMeta ? { extraction: extForMeta } : {}),
           },
         },
-      },
-    ]);
+      };
+      return [...prev, ...(msgA ? [msgA] : []), msgB];
+    });
   }, [postApprovalGuidelines]);
 
   // ── Document ingest target resolution ─────────────────────────────────────
@@ -744,9 +787,20 @@ export default function ChatSurface({
       for (let i = 0; i < assistantMsgs.length - 1; i++) {
         const m = assistantMsgs[i];
         if (m.response?.type === 'census') continue;
+        if ((m.response?.metadata as { no_auto_collapse?: boolean } | undefined)?.no_auto_collapse === true) continue;
         next.add(m.id);
       }
       next.delete(latest.id);
+      // Walk backwards from latest and keep any contiguous tail of
+      // no_auto_collapse-tagged messages expanded too. This is what lets
+      // the chip-recap + synthesis pair both render expanded together
+      // when both are appended in the same setMessages call.
+      for (let i = assistantMsgs.length - 2; i >= 0; i--) {
+        const m = assistantMsgs[i];
+        const tagged = (m.response?.metadata as { no_auto_collapse?: boolean } | undefined)?.no_auto_collapse === true;
+        if (!tagged) break;
+        next.delete(m.id);
+      }
       return next;
     });
   }, [messages]);
