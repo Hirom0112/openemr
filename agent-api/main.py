@@ -600,6 +600,51 @@ async def _persist_button_action(
         logger.warning("Button-action persistence failed", extra={"session_id": session_id, "error": str(exc)})
 
 
+async def _persist_ingest_turn(
+    session_id: str | None,
+    patient_id: str | None,
+    file_name: str,
+    n_rows: int,
+    detected_format: str,
+) -> None:
+    """Mirror the briefing-button persistence pattern for /document/ingest.
+
+    Without this turn, the dispatcher's session memory has no record that
+    the operator just uploaded a document for a specific patient — so
+    "who are we talking about?" can't resolve when the iframe is in a
+    multi-patient (census) view. We resolve the patient's display name
+    from FHIR best-effort; on any failure we fall back to the raw
+    patient_id and never raise.
+    """
+    if not session_id or not patient_id:
+        return
+    name = patient_id
+    try:
+        patient_obj = await fhir_client.get_patient(patient_id)
+        # FHIR Patient.name is a list of HumanName; take the first.
+        names = patient_obj.get("name") or []
+        if names:
+            n0 = names[0]
+            given = n0.get("given") or []
+            family = n0.get("family") or ""
+            joined = " ".join([*given, family]).strip()
+            if joined:
+                name = joined
+    except Exception:  # pragma: no cover — best-effort
+        pass
+    rows_phrase = (
+        f"{n_rows} field{'s' if n_rows != 1 else ''} extracted, awaiting review."
+        if n_rows
+        else "Document staged."
+    )
+    await _persist_button_action(
+        session_id,
+        f"[uploaded {file_name} for {name}]",
+        f"Acknowledged. Patient context is now {name} (id {patient_id}). "
+        f"{rows_phrase}",
+    )
+
+
 @app.post("/briefing/{patient_id}", response_model=BriefingResponse)
 async def briefing(patient_id: str, body: BriefingRequest | None = None) -> BriefingResponse:
     _t0 = time.perf_counter()
@@ -2249,6 +2294,7 @@ async def document_ingest(
     patient_id: str | None = Form(None),
     doc_type_hint: str | None = Form(None),
     format_hint: str | None = Form(None),
+    session_id: str | None = Form(None),
 ) -> Any:
     """Path B: inline upload of a clinical PDF (W2 §4.2 / §4.5 / §4.7).
 
@@ -2601,7 +2647,7 @@ async def document_ingest(
                 extra={"request_id": rid, "error": str(exc)},
             )
             bbox_layout_payload = []
-        return {
+        _cached_response = {
             "document_reference_id": write_result.document_reference_id,
             "extraction_id": claim.extraction_id,
             "extraction": cached,
@@ -2624,6 +2670,11 @@ async def document_ingest(
                 "parse_summary": None,
             },
         }
+        await _persist_ingest_turn(
+            session_id, patient_id, file.filename or "document",
+            0, detected_format,
+        )
+        return _cached_response
 
     # 4b) Another worker holds the claim — return 202.
     if not claim.owns_claim:
@@ -3019,7 +3070,7 @@ async def document_ingest(
     # UI can paint bbox overlays without a follow-up fetch. _layout_blocks may
     # be empty for image-only / unparseable inputs — pass through as-is.
     bbox_layout_payload = [b.to_dict() for b in (_layout_blocks or [])]
-    return {
+    _fresh_response = {
         "document_reference_id": write_result.document_reference_id,
         "extraction_id": claim.extraction_id,
         "extraction": extraction.model_dump(mode="json"),
@@ -3046,6 +3097,11 @@ async def document_ingest(
             "parse_summary": None,
         },
     }
+    await _persist_ingest_turn(
+        session_id, patient_id, file.filename or "document",
+        len(pending_extraction_ids), detected_format,
+    )
+    return _fresh_response
 
 
 # ── Evidence search (W2 Slice 4.4) ───────────────────────────────────────────

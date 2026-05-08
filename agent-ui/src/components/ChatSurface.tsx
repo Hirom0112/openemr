@@ -1945,6 +1945,7 @@ export default function ChatSurface({
           <FileDropZone
             baseUrl={ingestBaseUrl}
             patientId={ingestPatientId}
+            sessionId={sessionId}
             onExtraction={handleIngestExtraction}
             onStaged={handleStaged}
             onQuarantined={handleQuarantined}

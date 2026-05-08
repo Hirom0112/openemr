@@ -90,6 +90,9 @@ export interface FileDropZoneProps {
   onDuplicate?: (payload: DuplicateIngestPayload, file: File) => void;
   disabled?: boolean;
   docTypeHint?: string;
+  /** Pass through so /document/ingest can persist a synthetic chat turn
+   *  binding the upload to the dispatcher's conversation memory. */
+  sessionId?: string;
 }
 
 interface ValidationOutcome {
@@ -179,7 +182,7 @@ function _copyForError(err: unknown): string {
 }
 
 export default function FileDropZone(props: FileDropZoneProps): ReactElement {
-  const { baseUrl, patientId, onExtraction, onStaged, onQuarantined, onDuplicate, disabled, docTypeHint } = props;
+  const { baseUrl, patientId, onExtraction, onStaged, onQuarantined, onDuplicate, disabled, docTypeHint, sessionId } = props;
   const [isDragOver, setIsDragOver] = useState(false);
   const [state, setState] = useState<DropzoneState>('idle');
   const [stateNote, setStateNote] = useState<string | null>(null);
@@ -238,6 +241,7 @@ export default function FileDropZone(props: FileDropZoneProps): ReactElement {
         file,
         patientId ?? null,
         docTypeHint,
+        sessionId,
       );
       stillUploading = false;
       window.clearTimeout(t30);
@@ -295,7 +299,7 @@ export default function FileDropZone(props: FileDropZoneProps): ReactElement {
         reason_code: err instanceof IngestStructuredError ? (err.subCode ?? `http_${err.status}`) : 'exception',
       });
     }
-  }, [baseUrl, patientId, docTypeHint, onExtraction, onStaged, onQuarantined, onDuplicate]);
+  }, [baseUrl, patientId, docTypeHint, sessionId, onExtraction, onStaged, onQuarantined, onDuplicate]);
 
   // Document-level dragover/drop listeners so the overlay catches drops
   // anywhere inside the chat surface (not just on the small pill). Without

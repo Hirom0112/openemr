@@ -961,11 +961,13 @@ export async function ingestDocumentWithResult(
   file: File,
   patientId: string | null,
   docTypeHint?: string,
+  sessionId?: string,
 ): Promise<IngestResult> {
   const form = new FormData();
   form.append('file', file);
   if (patientId) form.append('patient_id', patientId);
   if (docTypeHint) form.append('doc_type_hint', docTypeHint);
+  if (sessionId) form.append('session_id', sessionId);
 
   const headers: Record<string, string> = {};
   const jwt = getAuthToken();
