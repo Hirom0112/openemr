@@ -236,6 +236,36 @@ class CodeStatus(BaseModel):
     needs_review: bool = False
 
 
+class ProblemListItem(BaseModel):
+    """One PMH / problem-list entry from an intake or referral document.
+
+    Mirrors the FamilyHistoryItem shape (relation/condition + optional
+    contextual fields) but tuned for problem-list rows. ``icd10_code`` and
+    ``snomed_code`` are optional because real intake forms frequently
+    carry only the problem text; when codes ARE present the extractor
+    must literal-substring-ground them in the source (see
+    ``extractors.intake.validate_icd10_grounded`` for the runtime check
+    that drops hallucinated codes pre-staging).
+
+    ``onset_date`` is a string (not a date) because real source
+    documents carry imprecise values like ``"~2018"``, ``"adolescence"``,
+    ``"unknown"`` that don't survive ``date.fromisoformat()``.
+
+    ``status`` is the FHIR-aligned clinical status, mapped from the
+    document's STATUS column when present.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    condition: str
+    icd10_code: Optional[str] = None
+    snomed_code: Optional[str] = None
+    onset_date: Optional[str] = None
+    status: Optional[Literal["active", "resolved", "inactive"]] = None
+    citations: List[Citation] = Field(default_factory=list)
+    needs_review: bool = False
+
+
 class IntakeForm(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
@@ -257,6 +287,12 @@ class IntakeForm(BaseModel):
     # NOT as ``Observation`` rows like the LabReport flow. Optional and
     # additive — older payloads without this field still validate.
     pertinent_labs: List[LabValue] = Field(default_factory=list)
+    # PMH / problem list — surfaced when the document has a Problem List
+    # / Past Medical History section. Each item carries condition + optional
+    # ICD-10 / SNOMED codes; ICD-10 codes pass through the literal-grounding
+    # guardrail in ``extractors.intake`` before staging so hallucinated codes
+    # are dropped (problem still surfaces, code goes None).
+    problem_list: List[ProblemListItem] = Field(default_factory=list)
     classifier_confidence: float
     ocr_confidence_range: Tuple[float, float]
     extracted_at: datetime

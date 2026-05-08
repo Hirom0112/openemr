@@ -28,7 +28,10 @@ from typing import Any, List, Optional, Tuple
 import anthropic
 import pymupdf
 
-from agent.metrics import agent_citation_repoint_total
+from agent.metrics import (
+    agent_citation_repoint_total,
+    agent_icd10_guardrail_rejections_total,
+)
 from documents.docx_loader import (
     DocxParagraph,
     extract_docx_paragraphs,
@@ -168,6 +171,153 @@ def _normalize_for_match(s: str) -> str:
     """Strip non-word chars and uppercase. Lets us treat '06/08/1971' and
     '06081971' as the same token."""
     return _NORMALIZE_RE.sub("", s or "").upper()
+
+
+# ── ICD-10 hallucination guardrail ────────────────────────────────────────
+#
+# ProblemListItem.icd10_code MUST appear literally in the source text.
+# When the LLM produces a code that doesn't, we drop the code (set to
+# None) but keep the row — the problem still surfaces, just without a
+# fabricated code. Mirrors the discipline established for citations:
+# "every clinical claim must be groundable in the source."
+#
+# ICD-10-CM format is a letter (A–Z, except U) + 2 digits + an optional
+# decimal point + 1-4 alphanumeric characters. We accept either with or
+# without the dot ("I48.91" and "I4891" should both validate when either
+# form appears in the source). The guardrail does NOT enforce the format
+# itself — that's the schema's job — only the literal-grounding check.
+
+_ICD10_DOT_RE = re.compile(r"\.")
+
+
+def validate_icd10_grounded(
+    icd10_code: str,
+    source_text: str,
+) -> bool:
+    """Return True iff ``icd10_code`` appears literally in ``source_text``.
+
+    Case-insensitive; whitespace-tolerant; dot-optional. Specifically:
+
+    * The check normalizes both sides to uppercase + collapsed whitespace
+      so "i48.91" matches "I48.91" or "I48.91 " or "I48.91\\n".
+    * Either form (with or without the embedded period) of the code is
+      accepted: ``I48.91`` and ``I4891`` are treated as equivalent.
+      Source documents print one form or the other; the LLM can extract
+      either; we accept either.
+    * Returns ``False`` for empty / non-string input rather than raising.
+
+    Used pre-staging by :func:`apply_icd10_guardrail` to drop fabricated
+    codes from the extraction's ``problem_list``.
+    """
+    if not isinstance(icd10_code, str) or not isinstance(source_text, str):
+        return False
+    code = icd10_code.strip().upper()
+    if not code:
+        return False
+    haystack_upper = source_text.upper()
+    # Whitespace-tolerant: collapse runs in the haystack so we don't miss
+    # a code split across a line break.
+    haystack_collapsed = re.sub(r"\s+", " ", haystack_upper)
+    if code in haystack_collapsed:
+        return True
+    # Dot-optional: also accept when both sides agree after stripping the
+    # decimal points so "I4891" matches "I48.91" (and vice versa).
+    code_alt = _ICD10_DOT_RE.sub("", code)
+    haystack_alt = _ICD10_DOT_RE.sub("", haystack_collapsed)
+    return code_alt in haystack_alt
+
+
+def _icd10_appears_malformed(icd10_code: str) -> bool:
+    """Heuristic — flag obvious schema-violating shapes for the
+    ``malformed`` reason label without rejecting borderline cases.
+
+    ICD-10-CM canonical: 1 letter (A-Z) + 2 digits + optional ``.`` +
+    1-4 alphanumerics. We accept I48, I48.91, I4891, M62.81; we reject
+    obviously broken values (empty, all-letters, all-digits, contains
+    spaces). Used only for metric attribution — the literal-grounding
+    check is the actual gate.
+    """
+    if not isinstance(icd10_code, str):
+        return True
+    code = icd10_code.strip()
+    if not code:
+        return True
+    # ICD-10 is always letter-prefixed; pure-digit "9999" is malformed.
+    if code[0].isdigit():
+        return True
+    # Spaces / multi-token strings can't be a single ICD-10 code.
+    if " " in code or "\t" in code:
+        return True
+    return False
+
+
+def apply_icd10_guardrail(
+    problem_list_items: List[Any],
+    source_text: str,
+    *,
+    document_reference_id: str | None = None,
+    request_id: str | None = None,
+) -> List[Any]:
+    """Walk ``problem_list_items``; drop fabricated ICD-10 codes in place.
+
+    For each item with a non-null ``icd10_code``:
+
+    * If the code grounds via :func:`validate_icd10_grounded`, leave it.
+    * Otherwise null the field, increment
+      ``agent_icd10_guardrail_rejections_total{reason}``, and emit one
+      structured ``icd10_guardrail_rejected`` log line. Reason is
+      ``malformed`` for shape-violating codes; ``not_in_source`` for
+      shape-OK-but-hallucinated codes; ``other`` for the residual case
+      (we never use this label today, but keep the dimension stable
+      for future taxonomy expansion).
+
+    Returns the (mutated) ``problem_list_items`` list. The condition,
+    onset_date, status, and citations are preserved — only the code
+    field is touched.
+    """
+    if not problem_list_items:
+        return problem_list_items
+    for item in problem_list_items:
+        code = getattr(item, "icd10_code", None)
+        if code is None:
+            continue
+        if not isinstance(code, str) or not code.strip():
+            continue
+        if validate_icd10_grounded(code, source_text or ""):
+            continue
+        reason = "malformed" if _icd10_appears_malformed(code) else "not_in_source"
+        try:
+            agent_icd10_guardrail_rejections_total.labels(reason=reason).inc()
+        except Exception:  # pragma: no cover — metrics are best-effort
+            pass
+        condition_preview = (getattr(item, "condition", "") or "")[:48]
+        logger.warning(
+            "icd10_guardrail_rejected",
+            extra={
+                "request_id": request_id,
+                "document_reference_id": document_reference_id,
+                "rejected_code": code,
+                "condition_preview": condition_preview,
+                "reason": reason,
+            },
+        )
+        # Pydantic model_copy keeps the rest of the fields intact and
+        # produces a new instance; assign back so the caller's list
+        # carries the mutated row.
+        try:
+            mutated = item.model_copy(update={"icd10_code": None})
+        except Exception:
+            # Defensive: if model_copy fails (non-pydantic shape), fall
+            # back to attribute assignment. ProblemListItem is pydantic
+            # so this branch is theoretical.
+            try:
+                item.icd10_code = None  # type: ignore[attr-defined]
+                continue
+            except Exception:
+                continue
+        idx = problem_list_items.index(item)
+        problem_list_items[idx] = mutated
+    return problem_list_items
 
 
 def _value_in_block(value: str, block_text: str) -> bool:

@@ -220,6 +220,17 @@ agent_citation_repoint_total = Counter(
     ["field", "outcome"],
 )
 
+# ── ICD-10 hallucination guardrail (problem_list) ────────────────────────────
+# Incremented once per rejected ICD-10 code on a ProblemListItem. The
+# guardrail drops the code field (sets to None) but keeps the problem
+# row so the operator still sees it. ``reason`` ∈ {"not_in_source",
+# "malformed", "other"}.
+agent_icd10_guardrail_rejections_total = Counter(
+    "agent_icd10_guardrail_rejections_total",
+    "ICD-10 codes rejected by the problem_list literal-grounding guardrail",
+    ["reason"],
+)
+
 # ── OCR engine dispatcher (Wave 2A) ──────────────────────────────────────────
 # Recorded once per ``documents.ocr_engine.dispatch_extract_image`` call.
 # ``engine`` ∈ {"tesseract", "paddleocr"}; ``outcome`` ∈ {"success", "error"}.
