@@ -134,7 +134,7 @@ jobs:
   w2-eval:
     name: W2 Eval Suite
     runs-on: ubuntu-latest
-    # This job calls Anthropic + Voyage + Cohere APIs on 124 cases; gated to PRs and manual
+    # This job calls Anthropic + Voyage + Cohere APIs on 156 cases; gated to PRs and manual
     # dispatch to control spend. W1 eval suite (no LLM calls) continues running on every push.
     # W2 runs independently. The W1 suite has unrelated pre-existing
     # failures (triage / verification / synthetic-patient fixtures) that

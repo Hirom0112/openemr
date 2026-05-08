@@ -1,21 +1,23 @@
-# Clinical Co-Pilot — Setup Guide
+# Clinical Co-Pilot
 
-## Submission
+> **Grading this submission?** Start at [`SUBMISSION.md`](./SUBMISSION.md). It's a single page with live URLs, eval-gate evidence, deployed-vs-spec table, and the honest deferral list.
 
-This branch is the W2 deliverable. The single-page submission summary lives in [`SUBMISSION.md`](./SUBMISSION.md) — live URLs, eval-gate evidence (regression PR #1 hard-failing the 156-case suite), the deployed-vs-spec table, and the honest deferral list. The reproducible 4-minute demo walkthrough lives in [`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md). Demo video: `[VIDEO_LINK_HERE]`. The architecture single-source-of-truth is [`W2_ARCHITECTURE.md`](./W2_ARCHITECTURE.md) (W2) plus [`W1_ARCHITECTURE.md`](./W1_ARCHITECTURE.md) (W1 dispatcher); the deployed-build deviation is called out in W2_ARCHITECTURE §4.2.1 and its security tradeoff in §4.2.2 / [`docs/SECURITY_TRADEOFFS.md`](./docs/SECURITY_TRADEOFFS.md).
+## Quick links for graders
 
-### Submission documents (one-stop index)
-
-| Doc | Purpose |
+| What you want | Where to find it |
 | --- | --- |
-| [`SUBMISSION.md`](./SUBMISSION.md) | Single-page summary, live URLs, deployed-vs-spec, deferrals |
-| [`W2_ARCHITECTURE.md`](./W2_ARCHITECTURE.md) | Architecture single-source-of-truth (supervisor, workers, RAG, observability) |
-| [`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md) | Reproducible 4-minute demo walkthrough |
-| [`docs/latency_cost_report.md`](./docs/latency_cost_report.md) | Live `/metrics` scrape — p50/p95 latency, cost per 100 turns, ≥95% prompt-cache hit rate per latest scrape |
-| [`agent-api/evals/README.md`](./agent-api/evals/README.md) | 156-case golden set at submission lock, 14 boolean rubrics combined (11 mechanical + 3 LLM-graded), CI gate + pre-push hook docs |
-| [`W1_ARCHITECTURE.md`](./W1_ARCHITECTURE.md) | W1 dispatcher architecture (raw Anthropic SDK + custom Checkpointer, 5+1 tools, marker-gated pytest suite) |
-| [`docs/SECURITY_TRADEOFFS.md`](./docs/SECURITY_TRADEOFFS.md) | FHIR Binary write deviation + secret handling + four-gate REST investigation |
-| Deployed agent-api | <https://copilot-agent-api-production.up.railway.app/health> |
+| **Single-page summary** | [`SUBMISSION.md`](./SUBMISSION.md) |
+| **Live deployed app (OpenEMR)** | <https://clinical-copilot-openemr-production.up.railway.app> — login `admin` / `pass` |
+| **Live deployed agent-api** | <https://copilot-agent-api-production.up.railway.app/health> |
+| **Eval-gate evidence (regression PR fails the 156-case suite)** | <https://github.com/Hirom0112/openemr/pull/1> |
+| **Architecture (W2)** | [`W2_ARCHITECTURE.md`](./W2_ARCHITECTURE.md) — supervisor, workers, RAG, observability |
+| **Architecture (W1)** | [`W1_ARCHITECTURE.md`](./W1_ARCHITECTURE.md) — dispatcher, tools, verification |
+| **Cost & latency report** | [`COST_LATENCY_REPORT.md`](./COST_LATENCY_REPORT.md) |
+| **Eval suite docs** | [`agent-api/evals/README.md`](./agent-api/evals/README.md) — 156 cases, 14 rubrics, CI gate |
+| **Security tradeoffs** | [`docs/SECURITY_TRADEOFFS.md`](./docs/SECURITY_TRADEOFFS.md) — FHIR Binary deviation + four-gate investigation |
+| **Local setup** | [Setup section below](#setup) |
+
+The deployed-build deviation (custom JWT-protected upload because the upstream OpenEMR build returns `404` on FHIR `Binary` POST and `401` on legacy REST upload) is documented in [`W2_ARCHITECTURE.md` §4.2.1 / §4.2.2](./W2_ARCHITECTURE.md) and [`docs/SECURITY_TRADEOFFS.md`](./docs/SECURITY_TRADEOFFS.md). It is reversible.
 
 ---
 

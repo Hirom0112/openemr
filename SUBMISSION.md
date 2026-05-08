@@ -13,10 +13,9 @@
 | Agent API (health) | https://copilot-agent-api-production.up.railway.app/health |
 | Agent API (metrics) | https://copilot-agent-api-production.up.railway.app/metrics |
 | OpenEMR (chart system of record) | https://clinical-copilot-openemr-production.up.railway.app |
-| Demo video | `[VIDEO_LINK_HERE]` |
 | Code (W2 branch) | https://github.com/Hirom0112/openemr/tree/clinical-copilot |
 
-Reproduce the demo end-to-end from `docs/DEMO_SCRIPT.md`.
+Demo video is submitted directly with the deliverable.
 
 ---
 
@@ -28,9 +27,13 @@ The 156-case W2 eval suite is wired into GitHub Actions and hard-fails on regres
 |---|---|
 | Regression PR | https://github.com/Hirom0112/openemr/pull/1 |
 | What the PR does | Strips the `citations` field from the extractor's output (one-line regression that mimics a careless refactor). |
-| W2 Eval Suite job result | **FAIL** — `citation_present` rubric dropped 100% → 74% (−26 pts), `GATE: FAIL`, exit 1. |
-| Other rubrics on same PR | held at baseline — the gate isolates which property regressed. |
-| Failure screenshot / artifact | `[SCREENSHOT_HERE]` |
+| W2 Eval Suite job result | **FAIL** — `citation_present` rubric dropped 100% → 70% (−30 pts), below the 98% floor; `GATE: FAIL`, exit 1. |
+| Other rubrics on same PR | `correct_critic_decision` 96% → 50%, `safe_refusal` 96% → 50%, `factually_consistent` → 0% — stripping citations cascades through downstream rubrics that depend on grounded evidence, exactly as designed. |
+| Failure screenshot / artifact | [`docs/eval-evidence/regression-2026-05-08-rubric-drop.png`](./docs/eval-evidence/regression-2026-05-08-rubric-drop.png) |
+
+![W2 Eval Suite hard-failing on PR #1](./docs/eval-evidence/regression-2026-05-08-rubric-drop.png)
+
+*W2 Eval Suite, "Diff against baseline" step on PR #1. The rubric table shows `citation_present` 100% → 70% (below the 0.98 floor), with cascade drops on `correct_critic_decision` (96% → 50%), `factually_consistent` (→ 0%), and `safe_refusal` (96% → 50%). Final line: `GATE: FAIL`, exit 1. (The "50-case" wording in the script docstring shown earlier in the log is a stale comment from an earlier phase — the suite runs 156 cases at submission lock, sourced from `tests.fixtures.w2_eval_cases.CASES`.)*
 
 **Test counts (clean, post-fix):**
 
@@ -50,7 +53,9 @@ The 156-case W2 eval suite is wired into GitHub Actions and hard-fails on regres
 VERIFY: PASS
 ```
 
-**Gate mechanics:** 156 cases × 14 boolean rubrics combined (11 mechanical + 3 LLM-graded), with 18 keys in `evals/baseline.json` after the per-modality breakdown introduced in the Phase 9.9 multimodal expansion. This count reflects shipped state at submission lock; it has grown across phases and may grow further. Per-rubric pass rates are compared against `evals/baseline.json`; `evals/diff_baseline.py` enforces the per-rubric floor. CI workflow: `.github/workflows/copilot-eval.yml` (job `w2-eval`). One of the rubrics — `provenance_chain` — asserts that every extracted LabValue produces a FHIR-shaped `Observation` row with a non-empty `derivedFrom` array referencing the source `DocumentReference`, and that every citation's `bbox_id` resolves into the extraction's OCR layout. See `agent-api/evals/README.md` for the full enumerated rubric set.
+**Gate mechanics:** 156 cases × 14 boolean rubrics combined (11 mechanical + 3 LLM-graded), with 18 keys in `evals/baseline.json` after the per-modality breakdown introduced in the Phase 9.9 multimodal expansion. This count reflects shipped state at submission lock; it has grown across phases and may grow further.
+
+> **Why two numbers (156 vs 124) appear in the codebase.** The runtime suite is 156 cases (`len(CASES)` in `agent-api/tests/fixtures/w2_eval_cases.py`). A separate constant `BUCKET_CONTRACT_TOTAL = 124` represents the frozen original W2 baseline accounting (88 cases across 11 buckets) plus the Wave 2C bbox_gt expansion (+36 synthetic typed_pdf / table_heavy / photo_capture cases). Phase 9.9 added 32 multimodal cases (HL7v2 / XLSX / DOCX / TIFF) appended after the bucket-validation step by design, so the frozen baseline stays detectable for drift testing. Both numbers are correct for what they measure; the suite that runs is 156. Per-rubric pass rates are compared against `evals/baseline.json`; `evals/diff_baseline.py` enforces the per-rubric floor. CI workflow: `.github/workflows/copilot-eval.yml` (job `w2-eval`). One of the rubrics — `provenance_chain` — asserts that every extracted LabValue produces a FHIR-shaped `Observation` row with a non-empty `derivedFrom` array referencing the source `DocumentReference`, and that every citation's `bbox_id` resolves into the extraction's OCR layout. See `agent-api/evals/README.md` for the full enumerated rubric set.
 
 ---
 
@@ -61,10 +66,9 @@ VERIFY: PASS
 | `W2_ARCHITECTURE.md` | Single-source-of-truth design doc (~1,500 lines; verify with `wc -l W2_ARCHITECTURE.md`). |
 | `W2_ARCHITECTURE.md` §4.2.1 / §4.2.2 | Custom-upload deployment deviation and security tradeoff. |
 | `docs/SECURITY_TRADEOFFS.md` | Full analysis of the shared-HMAC tradeoff and reversibility plan. |
-| `docs/latency_cost_report.md` | Live `/metrics` scrape — p50/p95 latency, cost per 100 turns, ≥95% prompt-cache hit rate per the latest scrape (see the report for live numbers). |
+| `COST_LATENCY_REPORT.md` | Live `/metrics` scrape — p50/p95 latency, cost per 100 turns, ≥95% prompt-cache hit rate per the latest scrape (see the report for live numbers). |
 | `W1_ARCHITECTURE.md` §5.5 | Observability metric and event-type catalog (W1 + W2 entries). |
 | `EVAL.md` | W1 + W2 eval suite description. |
-| `docs/DEMO_SCRIPT.md` | Reproducible 4-minute demo script. |
 
 ---
 
@@ -123,4 +127,4 @@ Two items recorded for the reviewer rather than buried.
 
 ---
 
-[^1]: The brief required a 50-case golden set as the floor; the shipped suite includes 156 cases across 12 buckets and 12 modalities, including the Phase 9.9 multimodal expansion (HL7v2, XLSX, DOCX referrals, TIFF faxes, photo capture). The hard-gate logic was demonstrated on PR #1, where stripping citations from responses caused the `citation_present` rubric to drop from 100% to 74% and the CI gate failed as designed.
+[^1]: The brief required a 50-case golden set as the floor; the shipped suite includes 156 cases across 12 buckets and 12 modalities, including the Phase 9.9 multimodal expansion (HL7v2, XLSX, DOCX referrals, TIFF faxes, photo capture). The hard-gate logic was demonstrated on PR #1, where stripping citations from responses caused the `citation_present` rubric to drop from 100% to 70% and the CI gate failed as designed.

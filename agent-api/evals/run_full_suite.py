@@ -1,4 +1,4 @@
-"""Run the full W2 50-case eval suite and emit JSON + Markdown results.
+"""Run the full W2 eval suite (156 cases at submission lock) and emit JSON + Markdown results.
 
 Outputs:
   --output  : JSON file consumable by diff_baseline.py
