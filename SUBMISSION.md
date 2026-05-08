@@ -61,7 +61,7 @@ VERIFY: PASS
 | `W2_ARCHITECTURE.md` | Single-source-of-truth design doc (~1,500 lines; verify with `wc -l W2_ARCHITECTURE.md`). |
 | `W2_ARCHITECTURE.md` §4.2.1 / §4.2.2 | Custom-upload deployment deviation and security tradeoff. |
 | `docs/SECURITY_TRADEOFFS.md` | Full analysis of the shared-HMAC tradeoff and reversibility plan. |
-| `docs/latency_cost_report.md` | Live `/metrics` scrape — p50/p95 latency, cost per 100 turns, 98% prompt-cache hit rate. |
+| `docs/latency_cost_report.md` | Live `/metrics` scrape — p50/p95 latency, cost per 100 turns, ≥95% prompt-cache hit rate per the latest scrape (see the report for live numbers). |
 | `W1_ARCHITECTURE.md` §5.5 | Observability metric and event-type catalog (W1 + W2 entries). |
 | `EVAL.md` | W1 + W2 eval suite description. |
 | `docs/DEMO_SCRIPT.md` | Reproducible 4-minute demo script. |
