@@ -13,3 +13,9 @@
 !interface/**
 !templates/
 !templates/**
+# composer.json + lock are needed by the autoload-regen step in the
+# Dockerfile (see comment on the COPY composer.* line). Without these
+# whitelist entries, the * blocklist excludes them from the build
+# context and the COPY fails with "composer.lock: not found".
+!composer.json
+!composer.lock
