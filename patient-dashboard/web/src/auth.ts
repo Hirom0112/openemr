@@ -41,14 +41,22 @@ async function refreshAccessToken(refreshToken: string): Promise<{
 // SameSite=None — Railway's edge terminates TLS so this is always true
 // in prod. Local-dev (http://localhost) callers fall through to the
 // Auth.js defaults via the env guard below.
+// `partitioned: true` is required for Chrome 118+ Privacy Sandbox / CHIPS:
+// SameSite=None+Secure alone is NOT sufficient when this app runs in a
+// third-party iframe. Without partitioning, the OAuth state and pkce
+// cookies are dropped on the inbound callback → Auth.js fails with
+// 'InvalidCheck: state value could not be parsed' → user sees the
+// generic 'Server error / problem with server configuration' UI.
+// Safari/older Firefox may not honor `partitioned`; for those a
+// pop-out OAuth flow or new-tab-from-OE menu is the fallback.
 const crossSiteCookies = process.env.NEXTAUTH_URL?.startsWith("https://")
   ? {
-      sessionToken: { options: { sameSite: "none" as const, secure: true } },
-      callbackUrl: { options: { sameSite: "none" as const, secure: true } },
-      csrfToken: { options: { sameSite: "none" as const, secure: true } },
-      pkceCodeVerifier: { options: { sameSite: "none" as const, secure: true } },
-      state: { options: { sameSite: "none" as const, secure: true } },
-      nonce: { options: { sameSite: "none" as const, secure: true } },
+      sessionToken: { options: { sameSite: "none" as const, secure: true, partitioned: true } },
+      callbackUrl: { options: { sameSite: "none" as const, secure: true, partitioned: true } },
+      csrfToken: { options: { sameSite: "none" as const, secure: true, partitioned: true } },
+      pkceCodeVerifier: { options: { sameSite: "none" as const, secure: true, partitioned: true } },
+      state: { options: { sameSite: "none" as const, secure: true, partitioned: true } },
+      nonce: { options: { sameSite: "none" as const, secure: true, partitioned: true } },
     }
   : undefined;
 
