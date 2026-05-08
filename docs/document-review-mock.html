@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Document Review — Clinical Co-Pilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fafaf7;
+    --surface: #ffffff;
+    --surface-tint: #f6f5f1;
+    --border: #e6e4dd;
+    --border-strong: #d4d1c7;
+    --ink: #1a1a17;
+    --ink-soft: #4a4a44;
+    --ink-muted: #8a8a82;
+    --accent: #1c3d2e;
+    --accent-soft: #e8efe9;
+    --danger: #8b2615;
+    --danger-soft: #faeae6;
+    --success: #1c3d2e;
+    --warn: #8c6914;
+    --warn-soft: #fbf3df;
+
+    --font-display: 'Fraunces', 'Times New Roman', serif;
+    --font-body: 'Inter Tight', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 10px;
+
+    --shadow-sm: 0 1px 2px rgba(28, 27, 24, 0.04);
+    --shadow-md: 0 1px 3px rgba(28, 27, 24, 0.06), 0 4px 12px rgba(28, 27, 24, 0.04);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--font-body);
+    background: var(--bg);
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Top bar */
+  .topbar {
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    padding: 14px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .topbar-left { display: flex; align-items: center; gap: 16px; }
+
+  .breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink-muted);
+    font-size: 13px;
+  }
+
+  .breadcrumb a {
+    color: var(--ink-muted);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+
+  .breadcrumb a:hover { color: var(--ink); }
+
+  .breadcrumb svg { width: 14px; height: 14px; opacity: 0.5; }
+
+  .doc-title {
+    font-family: var(--font-display);
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+
+  .doc-meta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-muted);
+    padding: 4px 8px;
+    background: var(--surface-tint);
+    border-radius: var(--radius-sm);
+    letter-spacing: 0.02em;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .status-pill::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  .topbar-right { display: flex; align-items: center; gap: 8px; }
+
+  .btn {
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 16px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .btn:hover {
+    background: var(--surface-tint);
+    border-color: var(--ink-muted);
+  }
+
+  .btn-icon {
+    padding: 8px;
+  }
+
+  .btn-icon svg { width: 16px; height: 16px; }
+
+  .btn-primary {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+
+  .btn-primary:hover {
+    background: #15302a;
+    border-color: #15302a;
+  }
+
+  .btn-danger {
+    color: var(--danger);
+    border-color: var(--danger-soft);
+    background: var(--surface);
+  }
+
+  .btn-danger:hover {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+  }
+
+  .btn-ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--ink-soft);
+  }
+
+  .btn-ghost:hover {
+    background: var(--surface-tint);
+    color: var(--ink);
+  }
+
+  /* Main layout */
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 480px;
+    height: calc(100vh - 120px);
+  }
+
+  /* Document viewer */
+  .doc-viewer {
+    background: var(--surface-tint);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .doc-controls {
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--ink-muted);
+  }
+
+  .doc-controls-nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .page-info {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--ink-soft);
+  }
+
+  .doc-stage {
+    flex: 1;
+    overflow: auto;
+    padding: 32px;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+  }
+
+  .doc-page {
+    background: white;
+    box-shadow: var(--shadow-md);
+    border: 1px solid var(--border);
+    width: 100%;
+    max-width: 680px;
+    aspect-ratio: 8.5 / 11;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Mock document content */
+  .mock-doc {
+    padding: 48px 56px;
+    font-family: 'Times New Roman', serif;
+    color: #1a1a17;
+    font-size: 11px;
+    line-height: 1.4;
+    height: 100%;
+  }
+
+  .mock-doc-header {
+    border-bottom: 2px solid #1a1a17;
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+  }
+
+  .mock-doc-title {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .mock-doc-subtitle {
+    font-size: 10px;
+    color: #4a4a44;
+  }
+
+  .mock-section {
+    margin-bottom: 14px;
+  }
+
+  .mock-section-title {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    background: #f0eee7;
+    padding: 4px 8px;
+    border-left: 3px solid #1c3d2e;
+    margin-bottom: 6px;
+  }
+
+  .mock-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10px;
+  }
+
+  .mock-table th {
+    background: #1c3d2e;
+    color: white;
+    padding: 4px 6px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .mock-table td {
+    padding: 4px 6px;
+    border-bottom: 1px solid #e6e4dd;
+  }
+
+  .mock-row-highlight {
+    position: relative;
+  }
+
+  /* Citation overlays — these match the actual extracted field positions */
+  .citation-box {
+    position: absolute;
+    border: 2px solid var(--accent);
+    background: rgba(28, 61, 46, 0.08);
+    border-radius: 2px;
+    pointer-events: none;
+    transition: all 0.2s;
+  }
+
+  .citation-box.active {
+    border-color: var(--warn);
+    background: rgba(140, 105, 20, 0.12);
+    border-width: 2.5px;
+    box-shadow: 0 0 0 4px rgba(140, 105, 20, 0.1);
+  }
+
+  .citation-label {
+    position: absolute;
+    top: -22px;
+    left: -2px;
+    background: var(--accent);
+    color: white;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 500;
+    padding: 2px 6px;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+
+  .citation-box.active .citation-label {
+    background: var(--warn);
+  }
+
+  /* Right rail — fields */
+  .review-rail {
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .rail-header {
+    padding: 16px 24px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .rail-title {
+    font-family: var(--font-display);
+    font-size: 16px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    margin-bottom: 4px;
+  }
+
+  .rail-subtitle {
+    font-size: 12px;
+    color: var(--ink-muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .rail-subtitle .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-muted); }
+
+  .field-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px 24px;
+  }
+
+  .field-group {
+    margin-bottom: 24px;
+  }
+
+  .field-group-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--ink-muted);
+    margin-bottom: 10px;
+    padding-left: 4px;
+  }
+
+  .field {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    transition: all 0.15s;
+    cursor: pointer;
+    position: relative;
+  }
+
+  .field:hover {
+    border-color: var(--border-strong);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .field.active {
+    border-color: var(--warn);
+    background: var(--warn-soft);
+    box-shadow: 0 0 0 3px rgba(140, 105, 20, 0.08);
+  }
+
+  .field.approved {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    opacity: 0.7;
+  }
+
+  .field.rejected {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+    opacity: 0.6;
+  }
+
+  .field-row-1 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .field-label {
+    font-size: 11px;
+    color: var(--ink-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 500;
+  }
+
+  .field-citation {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--ink-muted);
+    background: var(--surface-tint);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+  }
+
+  .field-input {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    font-family: var(--font-body);
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--surface);
+    transition: border-color 0.15s;
+  }
+
+  .field-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .field-input.compound {
+    margin-bottom: 6px;
+  }
+
+  .field-input-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .field-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+
+  .field-confidence {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--ink-muted);
+  }
+
+  .conf-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+  }
+
+  .conf-high { background: var(--success); }
+  .conf-med { background: var(--warn); }
+  .conf-low { background: var(--danger); }
+
+  .field-buttons {
+    display: flex;
+    gap: 4px;
+  }
+
+  .btn-tiny {
+    font-size: 11px;
+    padding: 4px 10px;
+    font-weight: 500;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink-soft);
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+
+  .btn-tiny:hover {
+    border-color: var(--ink-muted);
+    color: var(--ink);
+  }
+
+  .btn-tiny-reject:hover {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+
+  .btn-tiny-approve {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+
+  .btn-tiny-approve:hover {
+    background: #15302a;
+  }
+
+  /* Bottom action bar */
+  .action-bar {
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 -4px 20px rgba(28, 27, 24, 0.04);
+  }
+
+  .progress {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .progress-text {
+    font-size: 12px;
+    color: var(--ink-soft);
+  }
+
+  .progress-text strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  .progress-bar {
+    width: 100px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    width: 25%;
+    transition: width 0.3s;
+  }
+
+  .action-buttons {
+    display: flex;
+    gap: 8px;
+  }
+
+  .btn-action-reject {
+    color: var(--danger);
+    border-color: var(--danger);
+  }
+
+  .btn-action-reject:hover {
+    background: var(--danger-soft);
+  }
+
+  .btn-action-approve {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+    padding: 10px 22px;
+    font-weight: 600;
+  }
+
+  .btn-action-approve:hover {
+    background: #15302a;
+  }
+
+  .btn-action-approve .count {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-left: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  /* Tooltip helper */
+  .conf-tooltip {
+    position: relative;
+  }
+
+  /* Subtle scrollbar */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--ink-muted); }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<header class="topbar">
+  <div class="topbar-left">
+    <nav class="breadcrumb">
+      <a href="#">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 12H5m7 7l-7-7 7-7"/>
+        </svg>
+      </a>
+      <a href="#">Document Inbox</a>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M9 18l6-6-6-6"/>
+      </svg>
+      <span style="color: var(--ink);">Margaret L. Chen</span>
+    </nav>
+    <div class="doc-meta">copilot:425 · p2/12</div>
+  </div>
+
+  <div class="topbar-right">
+    <span class="status-pill">Ready for Review</span>
+    <button class="btn btn-icon" title="Open in document tab">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+        <polyline points="15 3 21 3 21 9"/>
+        <line x1="10" y1="14" x2="21" y2="3"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<!-- Main 2-column layout -->
+<div class="layout">
+
+  <!-- Document viewer -->
+  <section class="doc-viewer">
+    <div class="doc-controls">
+      <div class="doc-controls-nav">
+        <button class="btn btn-ghost btn-icon" title="Previous page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+        </button>
+        <span class="page-info">PAGE 2 OF 12</span>
+        <button class="btn btn-ghost btn-icon" title="Next page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </button>
+      </div>
+      <div class="doc-controls-nav">
+        <button class="btn btn-ghost btn-icon" title="Zoom out">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            <line x1="8" y1="11" x2="14" y2="11"/>
+          </svg>
+        </button>
+        <span class="page-info">100%</span>
+        <button class="btn btn-ghost btn-icon" title="Zoom in">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            <line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="doc-stage">
+      <div class="doc-page">
+        <div class="mock-doc">
+          <div class="mock-doc-header">
+            <div class="mock-doc-title">Patient Intake — Annual Visit</div>
+            <div class="mock-doc-subtitle">CHEN, MARGARET L. · DOB 1967-08-14 · MRN-2026-04481 · Form completed 2026-04-22</div>
+          </div>
+
+          <div class="mock-section">
+            <div class="mock-section-title">Allergies & Intolerances</div>
+            <table class="mock-table">
+              <thead>
+                <tr>
+                  <th style="width:25%">Substance</th>
+                  <th style="width:30%">Reaction</th>
+                  <th style="width:15%">Severity</th>
+                  <th style="width:12%">Onset</th>
+                  <th style="width:18%">SNOMED</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td>Penicillin</td><td>Hives all over body</td><td>Moderate</td><td>~1999</td><td>91936005</td></tr>
+                <tr><td>Sulfa drugs</td><td>Rash</td><td>Mild</td><td>2010</td><td>763875007</td></tr>
+                <tr style="background: #fbf3df;"><td>shellfish?? maybe iodine</td><td>itchy?</td><td>Unsure</td><td>Unknown</td><td>(no code)</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mock-section">
+            <div class="mock-section-title">Family Health History</div>
+            <table class="mock-table">
+              <thead>
+                <tr>
+                  <th style="width:18%">Relation</th>
+                  <th style="width:38%">Condition</th>
+                  <th style="width:15%">Age at onset</th>
+                  <th style="width:14%">Living?</th>
+                  <th style="width:15%">SNOMED</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td>Father</td><td>Myocardial infarction</td><td>61</td><td>No (age 72)</td><td>22298006</td></tr>
+                <tr><td>Mother</td><td>Type 2 diabetes mellitus</td><td>55</td><td>Yes (age 84)</td><td>44054006</td></tr>
+                <tr><td>Brother</td><td>Essential hypertension</td><td>50</td><td>Yes</td><td>59621000</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mock-section">
+            <div class="mock-section-title">Current Medications</div>
+            <p style="font-size:10px; line-height:1.6; padding:4px 0;">
+              Lisinopril 10 mg PO daily (AM) · started 2018<br>
+              Metformin 500 mg PO twice daily · 2019 — for diabetes<br>
+              Atorvastatin 20 mg PO at bedtime · 2 years<br>
+              Aspirin (baby) 81 mg PO daily, with food
+            </p>
+          </div>
+        </div>
+
+        <!-- Citation overlays positioned to actual data locations -->
+        <div class="citation-box" style="top: 33.5%; left: 12%; width: 14%; height: 2.4%;">
+          <span class="citation-label">#296 demographics</span>
+        </div>
+        <div class="citation-box" style="top: 36.6%; left: 12%; width: 18%; height: 2.4%;">
+          <span class="citation-label">#302 reaction</span>
+        </div>
+        <div class="citation-box active" style="top: 39.6%; left: 12%; width: 22%; height: 2.4%;">
+          <span class="citation-label">#298 medication</span>
+        </div>
+        <div class="citation-box" style="top: 70%; left: 12%; width: 30%; height: 2.4%;">
+          <span class="citation-label">#298 lisinopril</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Right rail — fields -->
+  <aside class="review-rail">
+    <div class="rail-header">
+      <div class="rail-title">Extracted Fields</div>
+      <div class="rail-subtitle">
+        <span>12 rows</span>
+        <span class="dot"></span>
+        <span>Margaret L. Chen</span>
+        <span class="dot"></span>
+        <span>Intake Form</span>
+      </div>
+    </div>
+
+    <div class="field-list">
+
+      <div class="field-group">
+        <div class="field-group-title">Demographics</div>
+
+        <div class="field">
+          <div class="field-row-1">
+            <span class="field-label">Date of Birth</span>
+            <span class="field-citation">p1 · #296</span>
+          </div>
+          <input class="field-input" type="text" value="1967-08-14">
+          <div class="field-actions">
+            <div class="field-confidence">
+              <span class="conf-dot conf-high"></span>
+              <span>High confidence</span>
+            </div>
+            <div class="field-buttons">
+              <button class="btn-tiny btn-tiny-reject">Reject</button>
+              <button class="btn-tiny btn-tiny-approve">Approve</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <div class="field-group-title">Chief Concern</div>
+
+        <div class="field">
+          <div class="field-row-1">
+            <span class="field-label">Reason for Visit</span>
+            <span class="field-citation">p1 · #297</span>
+          </div>
+          <textarea class="field-input" rows="2">Tired during the day, mild chest tightness when walking uphill the past 3 weeks. Worried about heart.</textarea>
+          <div class="field-actions">
+            <div class="field-confidence">
+              <span class="conf-dot conf-high"></span>
+              <span>High confidence</span>
+            </div>
+            <div class="field-buttons">
+              <button class="btn-tiny btn-tiny-reject">Reject</button>
+              <button class="btn-tiny btn-tiny-approve">Approve</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <div class="field-group-title">Current Medications</div>
+
+        <div class="field active">
+          <div class="field-row-1">
+            <span class="field-label">Medication · Active</span>
+            <span class="field-citation">p2 · #298</span>
+          </div>
+          <input class="field-input compound" type="text" value="Lisinopril">
+          <div class="field-input-row">
+            <input class="field-input" type="text" value="10 mg" placeholder="Dose">
+            <input class="field-input" type="text" value="PO daily AM" placeholder="Route/freq">
+          </div>
+          <div class="field-actions">
+            <div class="field-confidence">
+              <span class="conf-dot conf-high"></span>
+              <span>High confidence</span>
+            </div>
+            <div class="field-buttons">
+              <button class="btn-tiny btn-tiny-reject">Reject</button>
+              <button class="btn-tiny btn-tiny-approve">Approve</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-row-1">
+            <span class="field-label">Medication · Active</span>
+            <span class="field-citation">p2 · #299</span>
+          </div>
+          <input class="field-input compound" type="text" value="Metformin">
+          <div class="field-input-row">
+            <input class="field-input" type="text" value="500 mg" placeholder="Dose">
+            <input class="field-input" type="text" value="PO BID" placeholder="Route/freq">
+          </div>
+          <div class="field-actions">
+            <div class="field-confidence">
+              <span class="conf-dot conf-high"></span>
+              <span>High confidence</span>
+            </div>
+            <div class="field-buttons">
+              <button class="btn-tiny btn-tiny-reject">Reject</button>
+              <button class="btn-tiny btn-tiny-approve">Approve</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-row-1">
+            <span class="field-label">Medication · Active</span>
+            <span class="field-citation">p2 · #300</span>
+          </div>
+          <input class="field-input compound" type="text" value="Atorvastatin">
+          <div class="field-input-row">
+            <input class="field-input" type="text" value="20 mg" placeholder="Dose">
+            <input class="field-input" type="text" value="PO HS" placeholder="Route/freq">
+          </div>
+          <div class="field-actions">
+            <div class="field-confidence">
+              <span class="conf-dot conf-high"></span>
+              <span>High confidence</span>
+            </div>
+            <div class="field-buttons">
+              <button class="btn-tiny btn-tiny-reject">Reject</button>
+              <button class="btn-tiny btn-tiny-approve">Approve</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <div class="field-group-title">Allergies</div>
+
+        <div class="field">
+          <div class="field-row-1">
+            <span class="field-label">Drug Allergy</span>
+            <span class="field-citation">p2 · #302</span>
+          </div>
+          <input class="field-input compound" type="text" value="Penicillin">
+          <input class="field-input" type="text" value="Hives all over body — Moderate" placeholder="Reaction">
+          <div class="field-actions">
+            <div class="field-confidence">
+              <span class="conf-dot conf-high"></span>
+              <span>High confidence · SNOMED 247472004</span>
+            </div>
+            <div class="field-buttons">
+              <button class="btn-tiny btn-tiny-reject">Reject</button>
+              <button class="btn-tiny btn-tiny-approve">Approve</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-row-1">
+            <span class="field-label">Drug Allergy</span>
+            <span class="field-citation">p2 · #303</span>
+          </div>
+          <input class="field-input compound" type="text" value="Sulfa drugs">
+          <input class="field-input" type="text" value="Rash — Mild" placeholder="Reaction">
+          <div class="field-actions">
+            <div class="field-confidence">
+              <span class="conf-dot conf-high"></span>
+              <span>High confidence</span>
+            </div>
+            <div class="field-buttons">
+              <button class="btn-tiny btn-tiny-reject">Reject</button>
+              <button class="btn-tiny btn-tiny-approve">Approve</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field" style="border-color: var(--warn); background: var(--warn-soft);">
+          <div class="field-row-1">
+            <span class="field-label">Drug Allergy · Ambiguous</span>
+            <span class="field-citation">p2 · #304</span>
+          </div>
+          <input class="field-input compound" type="text" value="Shellfish or iodine" placeholder="Substance">
+          <input class="field-input" type="text" value="Itchy" placeholder="Reaction (clinician to clarify)">
+          <div class="field-actions">
+            <div class="field-confidence">
+              <span class="conf-dot conf-low"></span>
+              <span>Low confidence — patient was unsure</span>
+            </div>
+            <div class="field-buttons">
+              <button class="btn-tiny btn-tiny-reject">Reject</button>
+              <button class="btn-tiny btn-tiny-approve">Approve</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="field-group">
+        <div class="field-group-title">Family History</div>
+
+        <div class="field">
+          <div class="field-row-1">
+            <span class="field-label">Father</span>
+            <span class="field-citation">p2 · #305</span>
+          </div>
+          <input class="field-input" type="text" value="Myocardial infarction at age 61, deceased age 72">
+          <div class="field-actions">
+            <div class="field-confidence">
+              <span class="conf-dot conf-high"></span>
+              <span>SNOMED 22298006</span>
+            </div>
+            <div class="field-buttons">
+              <button class="btn-tiny btn-tiny-reject">Reject</button>
+              <button class="btn-tiny btn-tiny-approve">Approve</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-row-1">
+            <span class="field-label">Mother</span>
+            <span class="field-citation">p2 · #306</span>
+          </div>
+          <input class="field-input" type="text" value="Type 2 diabetes mellitus, age 55, living (84)">
+          <div class="field-actions">
+            <div class="field-confidence">
+              <span class="conf-dot conf-high"></span>
+              <span>SNOMED 44054006</span>
+            </div>
+            <div class="field-buttons">
+              <button class="btn-tiny btn-tiny-reject">Reject</button>
+              <button class="btn-tiny btn-tiny-approve">Approve</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- Bottom action bar -->
+    <div class="action-bar">
+      <div class="progress">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-text"><strong>3</strong> of 12 reviewed</div>
+      </div>
+      <div class="action-buttons">
+        <button class="btn btn-action-reject">Reject all</button>
+        <button class="btn btn-action-approve">
+          Approve all
+          <span class="count">12</span>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+<script>
+  // Toggle field active state to demonstrate citation linking
+  document.querySelectorAll('.field').forEach(field => {
+    field.addEventListener('click', (e) => {
+      if (e.target.closest('input, textarea, button')) return;
+      document.querySelectorAll('.field').forEach(f => f.classList.remove('active'));
+      document.querySelectorAll('.citation-box').forEach(c => c.classList.remove('active'));
+      field.classList.add('active');
+    });
+  });
+
+  // Approve/reject visual feedback
+  document.querySelectorAll('.btn-tiny-approve').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const field = btn.closest('.field');
+      field.classList.remove('active');
+      field.classList.add('approved');
+      updateProgress();
+    });
+  });
+
+  document.querySelectorAll('.btn-tiny-reject').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const field = btn.closest('.field');
+      field.classList.remove('active');
+      field.classList.add('rejected');
+      updateProgress();
+    });
+  });
+
+  function updateProgress() {
+    const total = document.querySelectorAll('.field').length;
+    const reviewed = document.querySelectorAll('.field.approved, .field.rejected').length;
+    const fill = document.querySelector('.progress-fill');
+    const text = document.querySelector('.progress-text');
+    fill.style.width = `${(reviewed / total) * 100}%`;
+    text.innerHTML = `<strong>${reviewed}</strong> of ${total} reviewed`;
+  }
+</script>
+
+</body>
+</html>
