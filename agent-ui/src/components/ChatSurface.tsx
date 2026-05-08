@@ -1810,12 +1810,130 @@ export default function ChatSurface({
                         && (c.guidelines as unknown[]).length === 0
                         && c.query_used.trim() === '';
                       if (isEmptyContext) return null;
+                      // Build a per-message citation-click handler. Closes
+                      // over this message's staging metadata + extraction so
+                      // fact:intake routes to the read-only review panel and
+                      // fact:obs routes to the legacy bbox viewer using THIS
+                      // message's citations (not whichever assistant message
+                      // happens to be most recent). guideline:* is a no-op
+                      // (chip already carries the chunk_id as a tooltip).
+                      const ext = readExtraction(msg.response);
+                      const respMeta = (msg.response?.metadata ?? {}) as {
+                        staging?: { pending_extraction_ids?: number[]; file_batch_id?: string };
+                      };
+                      const respData = (msg.response?.data ?? {}) as { document_reference_id?: string };
+                      const stagedRowIds: number[] = Array.isArray(respMeta.staging?.pending_extraction_ids)
+                        ? respMeta.staging!.pending_extraction_ids!
+                        : [];
+                      const stagedDocRef: string = typeof respData.document_reference_id === 'string'
+                        ? respData.document_reference_id
+                        : '';
+                      const stagedBatchId: string = typeof respMeta.staging?.file_batch_id === 'string'
+                        ? respMeta.staging!.file_batch_id!
+                        : '';
+                      const handleSynthesisCitationClick = (citationId: string): void => {
+                        const firstColon = citationId.indexOf(':');
+                        if (firstColon === -1) {
+                          console.warn(`[citation] unknown token: ${citationId}`);
+                          return;
+                        }
+                        const prefix = citationId.slice(0, firstColon);
+                        const remainder = citationId.slice(firstColon + 1);
+                        if (prefix === 'guideline') {
+                          // No-op; chip exposes the chunk_id via title.
+                          return;
+                        }
+                        if (prefix === 'fact') {
+                          const secondColon = remainder.indexOf(':');
+                          if (secondColon === -1) {
+                            console.warn(`[citation] malformed fact token: ${citationId}`);
+                            return;
+                          }
+                          const kind = remainder.slice(0, secondColon);
+                          const value = remainder.slice(secondColon + 1);
+                          if (kind === 'intake') {
+                            if (stagedDocRef.length > 0 && stagedRowIds.length > 0) {
+                              onTriggerRichReview(
+                                stagedDocRef,
+                                stagedBatchId,
+                                stagedRowIds,
+                                {
+                                  readOnly: true,
+                                  initialActiveCitationFieldId: value,
+                                },
+                              );
+                              return;
+                            }
+                            console.warn(
+                              `[citation] no staging metadata to open review panel for ${citationId}`,
+                            );
+                            return;
+                          }
+                          if (kind === 'obs') {
+                            // Pull citations + bbox/pdf metadata from this
+                            // message's extraction. If absent, fall back to
+                            // the live docChatContextRef stash (synthesis
+                            // message has no extraction in its own metadata
+                            // — see Piece 2).
+                            let citations = ext?.citations ?? [];
+                            let bboxLayout = ext?.ocr_layout ?? [];
+                            let pdfUrl: string | undefined = ext?.pdf_url;
+                            let pdfBytes: ArrayBuffer | undefined = ext?.pdf_bytes;
+                            if (citations.length === 0) {
+                              const liveExt = docChatContextRef.current?.extraction;
+                              if (liveExt && typeof liveExt === 'object') {
+                                const le = liveExt as {
+                                  citations?: unknown;
+                                  ocr_layout?: unknown;
+                                  pdf_url?: unknown;
+                                  pdf_bytes?: unknown;
+                                };
+                                if (Array.isArray(le.citations)) {
+                                  citations = le.citations as W2Citation[];
+                                }
+                                if (Array.isArray(le.ocr_layout)) {
+                                  bboxLayout = le.ocr_layout as BboxLayoutBlock[];
+                                }
+                                if (typeof le.pdf_url === 'string') {
+                                  pdfUrl = le.pdf_url;
+                                }
+                                if (le.pdf_bytes instanceof ArrayBuffer) {
+                                  pdfBytes = le.pdf_bytes;
+                                }
+                              }
+                            }
+                            const idx = citations.findIndex(
+                              (cc) =>
+                                cc.source_type === 'observation'
+                                && (cc.source_id === value || cc.field_or_chunk_id === value),
+                            );
+                            if (idx === -1) {
+                              console.warn(
+                                `[citation] no observation citation for row_id=${value}`,
+                              );
+                              return;
+                            }
+                            setViewerSource({
+                              citations,
+                              activeIndex: idx,
+                              bboxLayout,
+                              pdfUrl,
+                              pdfBytes,
+                            });
+                            return;
+                          }
+                          console.warn(`[citation] unknown fact kind: ${kind} (${citationId})`);
+                          return;
+                        }
+                        console.warn(`[citation] unknown token prefix: ${prefix} (${citationId})`);
+                      };
                       return (
                         <PostIngestContextCard
                           summary={c.summary}
                           guidelines={c.guidelines as GuidelineSnippet[]}
                           queryUsed={c.query_used}
                           synthesis={(c as { synthesis?: SynthesisOutput | null }).synthesis ?? null}
+                          onCitationClick={handleSynthesisCitationClick}
                         />
                       );
                     })()}

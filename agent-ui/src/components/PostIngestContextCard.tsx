@@ -1,6 +1,7 @@
 import { useState, type ReactElement, type ReactNode } from 'react';
 import type { GuidelineSnippet, SynthesisOutput } from '../api';
 import { BRAND, SURFACE } from '../styles/tokens';
+import SynthesisCitationChip from './SynthesisCitationChip';
 
 /**
  * Renders the post-ingest "clinical context" card surfaced after a
@@ -19,6 +20,10 @@ export interface PostIngestContextCardProps {
   /** When provided, the 4-section synthesis is rendered above the summary +
    *  guidelines. Null/undefined falls back to the deterministic-recap view. */
   synthesis?: SynthesisOutput | null;
+  /** When provided, citation chips become clickable buttons. The handler
+   *  receives the raw token id (e.g. "fact:obs:42", "guideline:abc"). When
+   *  absent, chips render as inert spans (legacy behavior). */
+  onCitationClick?: (citationId: string) => void;
 }
 
 const SNIPPET_PREVIEW_CHARS = 200;
@@ -39,16 +44,37 @@ const CITATION_CHIP_STYLE: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-function renderCitations(ids: string[]): ReactNode {
-  return ids.map((id) => (
-    <span key={id} style={CITATION_CHIP_STYLE}>
-      {id}
-    </span>
-  ));
+function renderCitations(
+  ids: string[],
+  onCitationClick?: (citationId: string) => void,
+): ReactNode {
+  return ids.map((id) => {
+    if (onCitationClick) {
+      const title = id.startsWith('guideline:')
+        ? id.slice('guideline:'.length)
+        : undefined;
+      return (
+        <SynthesisCitationChip
+          key={id}
+          citationId={id}
+          onClick={onCitationClick}
+          title={title}
+        />
+      );
+    }
+    return (
+      <span key={id} style={CITATION_CHIP_STYLE}>
+        {id}
+      </span>
+    );
+  });
 }
 
-function SynthesisSection(props: { synthesis: SynthesisOutput }): ReactElement {
-  const { synthesis } = props;
+function SynthesisSection(props: {
+  synthesis: SynthesisOutput;
+  onCitationClick?: (citationId: string) => void;
+}): ReactElement {
+  const { synthesis, onCitationClick } = props;
   return (
     <div style={{ marginBottom: 10 }}>
       {synthesis.approved_facts.trim() && (
@@ -74,7 +100,7 @@ function SynthesisSection(props: { synthesis: SynthesisOutput }): ReactElement {
             {synthesis.clinical_signals.map((s, i) => (
               <li key={i} style={{ padding: '4px 0', lineHeight: 1.45 }}>
                 {s.claim}
-                {renderCitations(s.citation_ids)}
+                {renderCitations(s.citation_ids, onCitationClick)}
               </li>
             ))}
           </ul>
@@ -98,7 +124,7 @@ function SynthesisSection(props: { synthesis: SynthesisOutput }): ReactElement {
             {synthesis.guideline_mappings.map((m, i) => (
               <li key={i} style={{ padding: '4px 0', lineHeight: 1.45 }}>
                 {m.claim}
-                {renderCitations([`guideline:${m.chunk_id}`])}
+                {renderCitations([`guideline:${m.chunk_id}`], onCitationClick)}
               </li>
             ))}
           </ul>
@@ -134,7 +160,7 @@ function SynthesisSection(props: { synthesis: SynthesisOutput }): ReactElement {
 export default function PostIngestContextCard(
   props: PostIngestContextCardProps,
 ): ReactElement {
-  const { summary, guidelines, queryUsed, synthesis } = props;
+  const { summary, guidelines, queryUsed, synthesis, onCitationClick } = props;
   const [expanded, setExpanded] = useState<boolean>(true);
   const hasGuidelines = guidelines.length > 0;
   const hasSynthesis =
@@ -168,7 +194,10 @@ export default function PostIngestContextCard(
       </div>
 
       {hasSynthesis ? (
-        <SynthesisSection synthesis={synthesis as SynthesisOutput} />
+        <SynthesisSection
+          synthesis={synthesis as SynthesisOutput}
+          onCitationClick={onCitationClick}
+        />
       ) : (
         <p style={{ margin: '0 0 10px 0', lineHeight: 1.45 }}>{summary}</p>
       )}
