@@ -1243,6 +1243,10 @@ Cases with `expected_critic_decision: "pass"` that come back `"hard_block"` are 
   no_phi_in_logs has no tolerance — any failure fails CI absolutely.
 ```
 
+#### What the gate proves and what it doesn't
+
+The threshold logic itself is verified by `tests/test_diff_baseline.py` (12 unit tests covering pass/fail boundaries, slack math, missing-key handling, and per-modality drift). The `citation_present` rubric is verified empirically by PR #1, where stripping citations from responses dropped the rubric from 100% → 74% and the gate hard-failed at exit 1 as designed. **Per-rubric mutation testing — verifying that each rubric catches a known regression, not just trips on threshold math — is tracked as future work; the brief's grading-time regression test (PR #1) is the canonical end-to-end verification today.**
+
 ### 11.6 Per-case auto-rerun on judge disagreement
 
 LLM judges have measurable noise. On `factually_consistent`, every failing case is automatically re-judged once. The case counts as failing only if both runs disagree with the expected outcome. Cost: factually_consistent judge cost roughly doubles only on the small fraction of cases that fail the first pass. An LLM judge that genuinely disagrees with itself across two runs on the same input is meaningfully unstable, not just noisy.
