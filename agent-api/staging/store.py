@@ -333,25 +333,62 @@ async def list_pending(
     return [_row_to_dict(r) for r in rows]
 
 
+_UPDATE_PAYLOAD_SQL = """
+    UPDATE copilot_pending_extractions
+       SET payload = $2::jsonb
+     WHERE id = $1
+       AND state = 'pending'
+    RETURNING id
+"""
+
+
 async def approve(
     pending_id: int,
     approver: str,
     *,
     request_id: str | None = None,
     provider_id: str | None = None,
+    override_payload: dict[str, Any] | None = None,
 ) -> ApproveResult:
-    """Atomic ``pending → approved`` transition. 409 if not pending."""
+    """Atomic ``pending → approved`` transition. 409 if not pending.
+
+    If ``override_payload`` is provided, the row's ``payload`` jsonb column
+    is replaced inside the same DB transaction as the state transition, so
+    the downstream writer sees the modified payload. Failures in either
+    step roll back the entire transaction — the row stays ``pending``.
+    """
     pool = await _require_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(_APPROVE_SQL, pending_id, str(approver))
-    if row is None:
-        existing = await get_pending(pending_id)
-        if existing is None:
-            raise StagingError("not_found", f"pending_id={pending_id} not found")
-        raise StagingError(
-            "conflict",
-            f"pending_id={pending_id} not in state 'pending' (state={existing['state']})",
-        )
+        async with conn.transaction():
+            if override_payload is not None:
+                upd = await conn.fetchrow(
+                    _UPDATE_PAYLOAD_SQL,
+                    pending_id,
+                    _coerce_jsonb(override_payload),
+                )
+                if upd is None:
+                    existing = await get_pending(pending_id)
+                    if existing is None:
+                        raise StagingError(
+                            "not_found", f"pending_id={pending_id} not found"
+                        )
+                    raise StagingError(
+                        "conflict",
+                        f"pending_id={pending_id} not in state 'pending' (state={existing['state']})",
+                    )
+            row = await conn.fetchrow(_APPROVE_SQL, pending_id, str(approver))
+            if row is None:
+                # Look up the current state inside the same connection so the
+                # raised error rolls back any payload-override write above.
+                existing_row = await conn.fetchrow(_SELECT_ONE_SQL, pending_id)
+                if existing_row is None:
+                    raise StagingError(
+                        "not_found", f"pending_id={pending_id} not found"
+                    )
+                raise StagingError(
+                    "conflict",
+                    f"pending_id={pending_id} not in state 'pending' (state={existing_row['state']})",
+                )
 
     result = ApproveResult(
         pending_id=int(row["id"]),

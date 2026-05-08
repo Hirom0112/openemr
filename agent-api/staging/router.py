@@ -28,6 +28,7 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
 from auth import request_principal_var
 from observability.json_logging import request_id_var
@@ -218,15 +219,46 @@ async def _dispatch_write(row: dict[str, Any]) -> tuple[str, str | None]:
     return "failed", err
 
 
+class ApproveRequest(BaseModel):
+    """Optional body for the approve endpoint.
+
+    ``override_payload`` (when present) replaces the staged row's ``payload``
+    jsonb in the same DB transaction as the ``pending → approved`` state
+    transition, so the downstream writer uses the edited payload. The
+    server does NOT validate the payload's FHIR shape — the editor on
+    the client side is responsible for structural correctness.
+    """
+
+    # Typed as ``Any`` so non-dict values reach the handler and produce a
+    # 400 (per acceptance criteria) rather than a 422 from pydantic.
+    override_payload: Any = None
+
+
 @router.post(
     "/pending-extractions/{pending_id}/approve",
     response_model=ApproveResponse,
 )
-async def approve_pending_extraction(pending_id: int) -> ApproveResponse:
-    """Synchronous approve → write → state-mark."""
+async def approve_pending_extraction(
+    pending_id: int,
+    body: ApproveRequest | None = None,
+) -> ApproveResponse:
+    """Synchronous approve → write → state-mark.
+
+    Backward compatible: callers may omit the body entirely. When a body
+    is supplied with ``override_payload`` set, the payload is replaced
+    before the approve flow runs.
+    """
     rid = request_id_var.get()
     provider_id, role = _require_mutating_role()
     t0 = time.perf_counter()
+
+    raw_override = body.override_payload if body is not None else None
+    if raw_override is not None and not isinstance(raw_override, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="override_payload must be a JSON object",
+        )
+    override_payload: dict[str, Any] | None = raw_override
 
     try:
         approved = await _store.approve(
@@ -234,6 +266,7 @@ async def approve_pending_extraction(pending_id: int) -> ApproveResponse:
             provider_id,
             request_id=rid,
             provider_id=provider_id,
+            override_payload=override_payload,
         )
     except _store.StagingError as exc:
         agent_staging_endpoint_total.labels(endpoint="approve", outcome="error").inc()
@@ -250,7 +283,12 @@ async def approve_pending_extraction(pending_id: int) -> ApproveResponse:
     ).inc()
     _logger.info(
         "staging_approve",
-        extra={"request_id": rid, "pending_id": pending_id, "approver": provider_id},
+        extra={
+            "request_id": rid,
+            "pending_id": pending_id,
+            "approver": provider_id,
+            "payload_overridden": override_payload is not None,
+        },
     )
 
     # Pull the full row + dispatch the writer.
