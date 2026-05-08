@@ -1146,10 +1146,30 @@ export interface GuidelineSnippet {
   relevance_score: number;
 }
 
+export interface SynthesisClinicalSignal {
+  claim: string;
+  citation_ids: string[];
+}
+
+export interface SynthesisGuidelineMapping {
+  chunk_id: string;
+  claim: string;
+}
+
+export interface SynthesisOutput {
+  approved_facts: string;
+  clinical_signals: SynthesisClinicalSignal[];
+  guideline_mappings: SynthesisGuidelineMapping[];
+  next_steps: string[];
+}
+
 export interface PostIngestContextResponse {
   summary: string;
   query_used: string;
   guidelines: GuidelineSnippet[];
+  /** Present on /post-approval-context when sonnet synthesis succeeded.
+   *  Null when synthesis fell back to the deterministic recap. */
+  synthesis?: SynthesisOutput | null;
   metadata: Record<string, unknown>;
 }
 

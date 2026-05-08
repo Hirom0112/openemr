@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, type ReactElement } from 'react';
 import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff, refreshCensus, fetchPostIngestContext, sendDocumentChatMessage } from '../api';
-import type { HandoffSummaryPayload, GuidelineSnippet, PostApprovalContext } from '../api';
+import type { HandoffSummaryPayload, GuidelineSnippet, PostApprovalContext, SynthesisOutput } from '../api';
 import PostIngestContextCard from './PostIngestContextCard';
 import type { AgentResponse, CensusPatient, ErrorClass, HandoffData, HandoffPatient } from '../types';
 import ResponseRenderer from './ResponseRenderer';
@@ -1815,6 +1815,7 @@ export default function ChatSurface({
                           summary={c.summary}
                           guidelines={c.guidelines as GuidelineSnippet[]}
                           queryUsed={c.query_used}
+                          synthesis={(c as { synthesis?: SynthesisOutput | null }).synthesis ?? null}
                         />
                       );
                     })()}

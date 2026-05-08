@@ -1,5 +1,5 @@
-import { useState, type ReactElement } from 'react';
-import type { GuidelineSnippet } from '../api';
+import { useState, type ReactElement, type ReactNode } from 'react';
+import type { GuidelineSnippet, SynthesisOutput } from '../api';
 import { BRAND, SURFACE } from '../styles/tokens';
 
 /**
@@ -16,6 +16,9 @@ export interface PostIngestContextCardProps {
   summary: string;
   guidelines: GuidelineSnippet[];
   queryUsed: string;
+  /** When provided, the 4-section synthesis is rendered above the summary +
+   *  guidelines. Null/undefined falls back to the deterministic-recap view. */
+  synthesis?: SynthesisOutput | null;
 }
 
 const SNIPPET_PREVIEW_CHARS = 200;
@@ -25,12 +28,121 @@ function preview(content: string): string {
   return `${content.slice(0, SNIPPET_PREVIEW_CHARS).trimEnd()}…`;
 }
 
+const CITATION_CHIP_STYLE: React.CSSProperties = {
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+  fontSize: 10,
+  padding: '1px 5px',
+  borderRadius: 4,
+  background: BRAND.base,
+  color: BRAND.onBrand,
+  marginLeft: 4,
+  whiteSpace: 'nowrap',
+};
+
+function renderCitations(ids: string[]): ReactNode {
+  return ids.map((id) => (
+    <span key={id} style={CITATION_CHIP_STYLE}>
+      {id}
+    </span>
+  ));
+}
+
+function SynthesisSection(props: { synthesis: SynthesisOutput }): ReactElement {
+  const { synthesis } = props;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      {synthesis.approved_facts.trim() && (
+        <p style={{ margin: '0 0 10px 0', lineHeight: 1.45 }}>
+          {synthesis.approved_facts}
+        </p>
+      )}
+
+      {synthesis.clinical_signals.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: SURFACE.muted,
+              letterSpacing: '0.02em',
+              marginBottom: 4,
+            }}
+          >
+            Clinical signals
+          </div>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {synthesis.clinical_signals.map((s, i) => (
+              <li key={i} style={{ padding: '4px 0', lineHeight: 1.45 }}>
+                {s.claim}
+                {renderCitations(s.citation_ids)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {synthesis.guideline_mappings.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: SURFACE.muted,
+              letterSpacing: '0.02em',
+              marginBottom: 4,
+            }}
+          >
+            Guideline mappings
+          </div>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {synthesis.guideline_mappings.map((m, i) => (
+              <li key={i} style={{ padding: '4px 0', lineHeight: 1.45 }}>
+                {m.claim}
+                {renderCitations([`guideline:${m.chunk_id}`])}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {synthesis.next_steps.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: SURFACE.muted,
+              letterSpacing: '0.02em',
+              marginBottom: 4,
+            }}
+          >
+            Suggested next steps
+          </div>
+          <ul style={{ paddingLeft: 18, margin: 0 }}>
+            {synthesis.next_steps.map((step, i) => (
+              <li key={i} style={{ padding: '2px 0', lineHeight: 1.45 }}>
+                {step}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PostIngestContextCard(
   props: PostIngestContextCardProps,
 ): ReactElement {
-  const { summary, guidelines, queryUsed } = props;
+  const { summary, guidelines, queryUsed, synthesis } = props;
   const [expanded, setExpanded] = useState<boolean>(true);
   const hasGuidelines = guidelines.length > 0;
+  const hasSynthesis =
+    !!synthesis &&
+    (synthesis.approved_facts.trim().length > 0 ||
+      synthesis.clinical_signals.length > 0 ||
+      synthesis.guideline_mappings.length > 0 ||
+      synthesis.next_steps.length > 0);
 
   return (
     <div
@@ -55,7 +167,11 @@ export default function PostIngestContextCard(
         Clinical context
       </div>
 
-      <p style={{ margin: '0 0 10px 0', lineHeight: 1.45 }}>{summary}</p>
+      {hasSynthesis ? (
+        <SynthesisSection synthesis={synthesis as SynthesisOutput} />
+      ) : (
+        <p style={{ margin: '0 0 10px 0', lineHeight: 1.45 }}>{summary}</p>
+      )}
 
       {!hasGuidelines && (
         <div style={{ color: SURFACE.subtle, fontSize: 12, fontStyle: 'italic' }}>
