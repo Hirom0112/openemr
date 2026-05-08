@@ -141,6 +141,252 @@ def _custom_observation_url() -> str:
     )
 
 
+def _custom_condition_url() -> str:
+    """Companion to ``_custom_observation_url`` for the FHIR Condition
+    endpoint added in Phase 4 of the 2026-05-08 problem_list build.
+
+    Same module, same JWT auth, parallel public shim
+    (public/condition.php). Used by ``write_condition`` and the
+    ``_perform_write`` short-circuit branch that routes grounded-
+    ICD-10 problem_list rows through to FHIR Condition on approve.
+    """
+    return (
+        settings.openemr_base_url.rstrip("/")
+        + "/interface/modules/custom_modules/oe-module-clinical-copilot/public/condition.php"
+    )
+
+
+# ── FHIR Condition writer (Phase 4) ─────────────────────────────────────────
+#
+# Lives alongside the Observation writers in this file rather than in a new
+# module. Justification: zero cross-module imports, share the same JWT
+# minter (_mint_copilot_jwt) and id pattern (_ID_PATTERN), share the same
+# 7-error taxonomy in _perform_write. A new module would force one extra
+# import in main.py per call site without any architectural payoff.
+
+_ICD10_SYSTEM = "http://hl7.org/fhir/sid/icd-10-cm"
+_SNOMED_SYSTEM = "http://snomed.info/sct"
+_CONDITION_CATEGORY_SYSTEM = "http://terminology.hl7.org/CodeSystem/condition-category"
+_CLINICAL_STATUS_SYSTEM = "http://terminology.hl7.org/CodeSystem/condition-clinical"
+_VERIFICATION_STATUS_SYSTEM = "http://terminology.hl7.org/CodeSystem/condition-ver-status"
+
+
+def deterministic_condition_id(document_id: str | int, code_or_idx: str) -> str:
+    """Deterministic id: ``copilot-{document_id}-{code_or_idx}``.
+
+    Same shape as :func:`deterministic_observation_id` so the PHP
+    ConditionController's id regex (mirrored from ObservationController:
+    ``r"^copilot-\\d+-[\\w.-]+$"``) accepts it. ``code_or_idx`` is
+    typically the sanitised ICD-10 code (e.g. ``"I48-91"`` from the dot-
+    decimal ``I48.91``) for grounded rows; for code-less rows the caller
+    passes ``"cond-{idx}"`` so multiple problems on the same document
+    don't collide on a single id.
+    """
+    sanitised = re.sub(r"[^\w.-]+", "-", str(code_or_idx).strip())
+    if not sanitised:
+        sanitised = "cond"
+    return f"copilot-{document_id}-{sanitised}"
+
+
+def _build_condition(
+    *,
+    document_id: str,
+    patient_id: str,
+    problem: dict[str, Any],
+    condition_id: str,
+) -> dict[str, Any]:
+    """Construct a FHIR R4 Condition body from a ProblemListItem-shaped dict.
+
+    Mirrors ``_build_observation``'s shape contract: the body conforms
+    to FHIR R4 + USCDI v3 (Condition Problems & Health Concerns), with
+    a private ``_copilot_citations`` extension that the PHP controller
+    strips before persisting (citations land in their own column).
+
+    Required by USCDI: clinicalStatus, verificationStatus, category,
+    code (or code.text), subject. We default verificationStatus to
+    'confirmed' here because every approved Co-Pilot row has been
+    clinician-reviewed; v1.5 may downgrade to 'unconfirmed' if rows
+    sit in pending state for too long.
+    """
+    icd10 = problem.get("icd10_code")
+    snomed = problem.get("snomed_code")
+    condition_text = str(problem.get("condition") or "Problem")
+
+    codings: list[dict[str, Any]] = []
+    if isinstance(icd10, str) and icd10.strip():
+        codings.append(
+            {"system": _ICD10_SYSTEM, "code": icd10.strip(), "display": condition_text}
+        )
+    if isinstance(snomed, str) and snomed.strip():
+        codings.append(
+            {"system": _SNOMED_SYSTEM, "code": snomed.strip(), "display": condition_text}
+        )
+    code_payload: dict[str, Any] = {"text": condition_text}
+    if codings:
+        code_payload["coding"] = codings
+
+    clinical_status = (problem.get("status") or "active").lower()
+    if clinical_status not in ("active", "resolved", "inactive"):
+        clinical_status = "active"
+
+    body: dict[str, Any] = {
+        "id": condition_id,
+        "resourceType": "Condition",
+        "clinicalStatus": {
+            "coding": [
+                {
+                    "system": _CLINICAL_STATUS_SYSTEM,
+                    "code": clinical_status,
+                    "display": clinical_status.capitalize(),
+                }
+            ]
+        },
+        "verificationStatus": {
+            "coding": [
+                {
+                    "system": _VERIFICATION_STATUS_SYSTEM,
+                    "code": "confirmed",
+                    "display": "Confirmed",
+                }
+            ]
+        },
+        "category": [
+            {
+                "coding": [
+                    {
+                        "system": _CONDITION_CATEGORY_SYSTEM,
+                        "code": "problem-list-item",
+                        "display": "Problem List Item",
+                    }
+                ]
+            }
+        ],
+        "code": code_payload,
+        "subject": {"reference": f"Patient/{patient_id}"},
+        "derivedFrom": [
+            {"reference": f"DocumentReference/copilot-{document_id}"}
+        ],
+    }
+
+    onset_raw = problem.get("onset_date")
+    if isinstance(onset_raw, str) and onset_raw.strip():
+        onset_clean = onset_raw.strip()
+        # FHIR R4 dateTime stems: YYYY, YYYY-MM, YYYY-MM-DD, or full
+        # ISO timestamp. Accept all four; everything else (e.g. "~2018",
+        # "adolescence", "Unknown") falls into onsetString so the
+        # imprecise value survives the round-trip without being coerced.
+        if re.match(
+            r"^\d{4}(-\d{2}(-\d{2}(T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})?)?)?)?$",
+            onset_clean,
+        ):
+            # If it's a bare year / year-month / year-month-day, leave
+            # it as-is. FHIR-compliant.
+            body["onsetDateTime"] = onset_clean
+        else:
+            body["onsetString"] = onset_clean
+
+    citations = problem.get("citations") or []
+    if isinstance(citations, list) and citations:
+        body["_copilot_citations"] = [
+            {
+                "bbox_id": cit.get("field_or_chunk_id") if isinstance(cit, dict) else None,
+                "quote_or_value": (
+                    cit.get("quote_or_value") if isinstance(cit, dict) else None
+                ),
+                "page": (
+                    cit.get("page_or_section") if isinstance(cit, dict) else None
+                ),
+            }
+            for cit in citations
+        ]
+
+    return body
+
+
+async def write_condition(
+    *,
+    document_id: str,
+    patient_id: str,
+    problem: dict[str, Any],
+    condition_id: str | None = None,
+) -> dict[str, Any]:
+    """POST one FHIR Condition to the custom Co-Pilot endpoint.
+
+    Parallel to :func:`write_observation` — same JWT, same id rule,
+    same 7-error taxonomy lifted into the response shape. Raises
+    ``RuntimeError`` on jwt mint failure or non-2xx response.
+    """
+    if condition_id is None:
+        icd10 = problem.get("icd10_code")
+        if isinstance(icd10, str) and icd10.strip():
+            condition_id = deterministic_condition_id(document_id, icd10)
+        else:
+            # Fall back to the row's index when the caller didn't pass
+            # a deterministic suffix. Rare path — the dispatcher branch
+            # always supplies one.
+            condition_id = deterministic_condition_id(document_id, "cond")
+
+    if _ID_PATTERN.match(condition_id) is None:
+        raise ValueError("condition_id failed copilot id pattern")
+
+    token = _mint_copilot_jwt()
+    if token is None:
+        raise RuntimeError("copilot_jwt_secret unset — condition write skipped")
+
+    body = _build_condition(
+        document_id=document_id,
+        patient_id=patient_id,
+        problem=problem,
+        condition_id=condition_id,
+    )
+
+    url = _custom_condition_url()
+    t0 = _dt.datetime.now(_dt.timezone.utc)
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            url,
+            json=body,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/fhir+json",
+                "Accept": "application/json",
+            },
+        )
+    duration_ms = int(
+        (_dt.datetime.now(_dt.timezone.utc) - t0).total_seconds() * 1000
+    )
+
+    if response.status_code >= 400:
+        _logger.warning(
+            "condition_write_failed",
+            extra={
+                "condition_id": condition_id,
+                "document_id": document_id,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+            },
+        )
+        raise RuntimeError(
+            f"condition write returned status {response.status_code}"
+        )
+
+    payload = response.json() if response.content else {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    _logger.info(
+        "condition_write_ok",
+        extra={
+            "condition_id": condition_id,
+            "document_id": document_id,
+            "icd10_code": problem.get("icd10_code"),
+            "action": payload.get("action"),
+            "duration_ms": duration_ms,
+        },
+    )
+    return payload
+
+
 def _value_quantity(lab_value: LabValue) -> dict[str, Any] | None:
     """Build a FHIR ``valueQuantity`` from a LabValue, if numeric."""
     raw = (lab_value.value or "").strip()
@@ -343,13 +589,29 @@ async def _perform_write(row: dict[str, Any]) -> tuple[WriteOutcome, str | None]
     """
     target_type = str(row.get("target_resource_type") or "")
     if target_type == "IntakeFormField":
-        # Documents-tab redesign: intake_form fields (allergies, medications,
-        # demographics, family hx, chief concern, code status) extracted from
-        # PDF intake forms and DOCX referral letters have no FHIR writers in
-        # this build. Approval is informational — the extracted text is
-        # citable from the document store; no discrete FHIR write happens.
-        # Returning "written" here lets the row reach a terminal state so the
-        # stuck-approved reaper doesn't keep retrying it.
+        # Phase 4 of the 2026-05-08 problem_list build — IntakeFormField
+        # rows whose target_resource_id slug is 'problem_list' AND whose
+        # payload carries a grounded ICD-10 code route through to the
+        # FHIR Condition writer. Other intake field kinds (allergies,
+        # medications, demographics, family hx, chief concern, code
+        # status) and code-less problem_list rows continue to no-op-
+        # write as before — approval is informational, the extracted
+        # text is citable from the document store, no discrete FHIR
+        # write happens.
+        target_id = str(row.get("target_resource_id") or "")
+        payload = row.get("payload") or {}
+        if (
+            isinstance(payload, dict)
+            and "intake-problem_list-" in target_id
+            and isinstance(payload.get("icd10_code"), str)
+            and payload.get("icd10_code").strip()
+        ):
+            outcome, write_error = await _problem_list_condition_write(
+                target_id=target_id,
+                payload=payload,
+                row=row,
+            )
+            return outcome, write_error
         return "written", None
     if target_type == "Task":
         return "failed", "task_writer_unavailable"
@@ -439,6 +701,130 @@ async def _perform_write(row: dict[str, Any]) -> tuple[WriteOutcome, str | None]
         "observation_write_ok_via_staging",
         extra={
             "observation_id": obs_id,
+            "duration_ms": duration_ms,
+        },
+    )
+    return "written", None
+
+
+async def _problem_list_condition_write(
+    *,
+    target_id: str,
+    payload: dict[str, Any],
+    row: dict[str, Any],
+) -> tuple[WriteOutcome, str | None]:
+    """Approve-time hook for grounded-ICD-10 problem_list rows.
+
+    Maps the Condition write onto the same 7-error taxonomy
+    ``_perform_write`` uses for Observations so the staging watchdog
+    + retry loops see a stable string for failures. We re-derive the
+    document_id and patient_id from the row (not the body) so this
+    function never needs the agent-api request_id_var or any global
+    state.
+    """
+    # target_id format: copilot-{document_id}-intake-problem_list-{idx}
+    m = re.match(r"^copilot-(\d+)-intake-problem_list-(\d+)$", target_id)
+    if m is None:
+        return "failed", "payload_invalid"
+    document_id = m.group(1)
+    idx = m.group(2)
+    patient_id = str(row.get("patient_id") or "")
+    if not patient_id:
+        return "failed", "payload_invalid"
+
+    icd10 = payload.get("icd10_code") or ""
+    # Sanitised id derivation: prefer ICD-10 (deterministic across re-
+    # extractions of the same problem on the same document); fall back
+    # to the row index for code-less rows (this branch shouldn't fire
+    # because the caller gates on grounded icd10, but kept for defense).
+    suffix = icd10.strip() if isinstance(icd10, str) and icd10.strip() else f"cond-{idx}"
+    condition_id = deterministic_condition_id(document_id, suffix)
+
+    try:
+        body = _build_condition(
+            document_id=document_id,
+            patient_id=patient_id,
+            problem=payload,
+            condition_id=condition_id,
+        )
+    except Exception as exc:
+        _logger.warning(
+            "condition_write_build_failed",
+            extra={"target_id": target_id, "error_type": type(exc).__name__},
+        )
+        return "failed", "payload_invalid"
+
+    if _ID_PATTERN.match(condition_id) is None:
+        return "failed", "payload_invalid"
+
+    try:
+        token = _mint_copilot_jwt()
+    except Exception as exc:
+        _logger.warning(
+            "condition_write_jwt_mint_raised",
+            extra={"condition_id": condition_id, "error_type": type(exc).__name__},
+        )
+        return "failed", "jwt_mint_failed"
+    if token is None:
+        return "failed", "jwt_mint_failed"
+
+    url = _custom_condition_url()
+    t0 = _dt.datetime.now(_dt.timezone.utc)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                url,
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/fhir+json",
+                    "Accept": "application/json",
+                },
+            )
+    except httpx.TimeoutException:
+        return "failed", "network_timeout"
+    except httpx.ConnectError:
+        return "failed", "network_unreachable"
+    except httpx.HTTPError as exc:
+        _logger.warning(
+            "condition_write_http_error",
+            extra={"condition_id": condition_id, "error_type": type(exc).__name__},
+        )
+        return "failed", "network_unreachable"
+    except Exception as exc:
+        _logger.warning(
+            "condition_write_unexpected",
+            extra={"condition_id": condition_id, "error_type": type(exc).__name__},
+        )
+        return "failed", "payload_invalid"
+
+    duration_ms = int(
+        (_dt.datetime.now(_dt.timezone.utc) - t0).total_seconds() * 1000
+    )
+    if 400 <= response.status_code < 500:
+        _logger.warning(
+            "condition_write_4xx",
+            extra={
+                "condition_id": condition_id,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+            },
+        )
+        return "failed", "php_4xx"
+    if response.status_code >= 500:
+        _logger.warning(
+            "condition_write_5xx",
+            extra={
+                "condition_id": condition_id,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+            },
+        )
+        return "failed", "php_5xx"
+    _logger.info(
+        "condition_write_ok_via_staging",
+        extra={
+            "condition_id": condition_id,
             "duration_ms": duration_ms,
         },
     )
@@ -818,6 +1204,7 @@ async def read_observations_for_document(
 
 
 __all__ = [
+    "deterministic_condition_id",
     "deterministic_observation_id",
     "lookup_loinc",
     "read_observations_for_document",
@@ -825,5 +1212,6 @@ __all__ = [
     "stage_intake_field",
     "stage_observation",
     "stage_task",
+    "write_condition",
     "write_observation",
 ]
