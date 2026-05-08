@@ -73,9 +73,15 @@ if (!is_numeric($pid) || (int) $pid <= 0) {
 }
 $pid = (int) $pid;
 
+// Same-origin embed: load the dashboard via Apache's ProxyPass at
+// /dashboard/* (configured in the Dockerfile). This puts the iframe
+// at OpenEMR's own origin, sidestepping the third-party-cookie
+// blocking that breaks iframe OAuth callbacks. The PATIENT_DASHBOARD_URL
+// env var is still used for the misconfigured-banner check + the
+// fallback "open in new tab" link (when the proxy is unreachable).
 $iframeSrc = $misconfigured
     ? ''
-    : rtrim($dashboardUrl, '/') . '/patient/' . rawurlencode((string) $pid);
+    : '/dashboard/patient/' . rawurlencode((string) $pid);
 
 ?>
 <!DOCTYPE html>

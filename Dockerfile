@@ -7,6 +7,22 @@ RUN printf '%s\n' \
     'Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains" env=HTTPS' \
     > /etc/apache2/conf.d/railway-proxy.conf
 
+# Reverse-proxy /dashboard/* to the patient-dashboard Railway service so
+# the embedded Next.js app appears at the same origin as OpenEMR. This
+# eliminates the third-party-cookie problem that blocks iframe OAuth
+# callbacks (Privacy Sandbox / CHIPS / Safari ITP). The dashboard's
+# next.config.ts has basePath:'/dashboard' so its internal links + asset
+# URLs match this proxy path. Falls through silently when the dashboard
+# service isn't reachable (Apache returns 502; rest of OpenEMR keeps
+# working since this directive is path-scoped).
+RUN { \
+      echo 'ProxyRequests Off'; \
+      echo 'ProxyPreserveHost On'; \
+      echo 'ProxyPass /dashboard http://patient-dashboard.railway.internal:3000/dashboard'; \
+      echo 'ProxyPassReverse /dashboard http://patient-dashboard.railway.internal:3000/dashboard'; \
+      echo 'ProxyTimeout 60'; \
+    } > /etc/apache2/conf.d/dashboard-proxy.conf
+
 # Pre-populate sqlconf.php so the entrypoint skips auto_configure.php
 # and goes directly to starting Apache. DB was initialized separately.
 RUN mkdir -p /var/www/localhost/htdocs/openemr/sites/default && \
