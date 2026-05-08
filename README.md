@@ -2,7 +2,7 @@
 
 ## Submission
 
-This branch is the W2 deliverable. The single-page submission summary lives in [`SUBMISSION.md`](./SUBMISSION.md) — live URLs, eval-gate evidence (regression PR #1 hard-failing the 50-case suite), the deployed-vs-spec table, and the honest deferral list. The reproducible 4-minute demo walkthrough lives in [`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md). Demo video: `[VIDEO_LINK_HERE]`. The architecture single-source-of-truth is [`W2_ARCHITECTURE.md`](./W2_ARCHITECTURE.md), with the deployed-build deviation called out in §4.2.1 and its security tradeoff in §4.2.2 / [`docs/SECURITY_TRADEOFFS.md`](./docs/SECURITY_TRADEOFFS.md).
+This branch is the W2 deliverable. The single-page submission summary lives in [`SUBMISSION.md`](./SUBMISSION.md) — live URLs, eval-gate evidence (regression PR #1 hard-failing the 156-case suite), the deployed-vs-spec table, and the honest deferral list. The reproducible 4-minute demo walkthrough lives in [`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md). Demo video: `[VIDEO_LINK_HERE]`. The architecture single-source-of-truth is [`W2_ARCHITECTURE.md`](./W2_ARCHITECTURE.md) (W2) plus [`W1_ARCHITECTURE.md`](./W1_ARCHITECTURE.md) (W1 dispatcher); the deployed-build deviation is called out in W2_ARCHITECTURE §4.2.1 and its security tradeoff in §4.2.2 / [`docs/SECURITY_TRADEOFFS.md`](./docs/SECURITY_TRADEOFFS.md).
 
 ### Submission documents (one-stop index)
 
@@ -11,8 +11,9 @@ This branch is the W2 deliverable. The single-page submission summary lives in [
 | [`SUBMISSION.md`](./SUBMISSION.md) | Single-page summary, live URLs, deployed-vs-spec, deferrals |
 | [`W2_ARCHITECTURE.md`](./W2_ARCHITECTURE.md) | Architecture single-source-of-truth (supervisor, workers, RAG, observability) |
 | [`docs/DEMO_SCRIPT.md`](./docs/DEMO_SCRIPT.md) | Reproducible 4-minute demo walkthrough |
-| [`docs/latency_cost_report.md`](./docs/latency_cost_report.md) | Live `/metrics` scrape — p50/p95 latency, cost per 100 turns, 98% prompt-cache hit rate |
-| [`agent-api/evals/README.md`](./agent-api/evals/README.md) | 98-case golden set, 14 boolean rubrics, CI gate + pre-push hook docs |
+| [`docs/latency_cost_report.md`](./docs/latency_cost_report.md) | Live `/metrics` scrape — p50/p95 latency, cost per 100 turns, ≥95% prompt-cache hit rate per latest scrape |
+| [`agent-api/evals/README.md`](./agent-api/evals/README.md) | 156-case golden set at submission lock, 14 boolean rubrics combined (11 mechanical + 3 LLM-graded), CI gate + pre-push hook docs |
+| [`W1_ARCHITECTURE.md`](./W1_ARCHITECTURE.md) | W1 dispatcher architecture (raw Anthropic SDK + custom Checkpointer, 5+1 tools, marker-gated pytest suite) |
 | [`docs/SECURITY_TRADEOFFS.md`](./docs/SECURITY_TRADEOFFS.md) | FHIR Binary write deviation + secret handling + four-gate REST investigation |
 | Deployed agent-api | <https://copilot-agent-api-production.up.railway.app/health> |
 
@@ -36,7 +37,7 @@ The deliverable ships in two additive passes. Week 1 (W1) is the structured-data
 | Wrong-patient detection | Patient-id normalization and census-scope guard at dispatcher entry | MRN-dominant demographic comparator (W2_ARCHITECTURE §5.6) emitting `agent_w2_demographic_checks_total` |
 | Critic with citation fidelity | W1 verification layer preserved on the structured-data path | New critic with schema / citation / fidelity / demographic checks, surfacing `pass` / `soft_warn` / `hard_block` |
 | Bbox overlay UI | Chat surface, brief panel | `agent-ui` `DocumentViewer` + `BboxOverlay` + `CitationChip` for evidence-grounded chips |
-| 50-case eval gate | W1 prompt-eval (47 cases) | GH Actions `w2-eval` job in `.github/workflows/copilot-eval.yml` with `baseline.json`, `diff_baseline.py`, advisory pre-push hook |
+| Eval gate | W1 dispatcher tests under the same pytest gate (`hard_failure` / `clinical_accuracy` markers); see [`W1_ARCHITECTURE.md §6.1`](./W1_ARCHITECTURE.md) | 156-case W2 golden set + GH Actions `w2-eval` job in `.github/workflows/copilot-eval.yml` with `baseline.json`, `diff_baseline.py`, advisory pre-push hook |
 
 Week 1 features are unchanged in Week 2 by architectural constraint #3 (additive, not a rewrite): the W2 graph and document path live behind their own routes, share observability primitives with W1, and never modify W1 code paths or contracts.
 
