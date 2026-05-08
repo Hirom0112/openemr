@@ -1336,7 +1336,25 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
       ocr_layout?: BboxLayoutBlock[];
       pdf_url?: string;
     } | null;
-    const kind = (ext && typeof ext.kind === 'string') ? ext.kind : 'unknown';
+    // Multimodal lanes (HL7/XLSX/DOCX/TIFF) return extraction=null and surface
+    // their summary on metadata.parse_summary + metadata.staging instead. Fall
+    // back to those so the post-ingest narrative shows the real format and
+    // staged-row count rather than "Kind: unknown / Extracted 0 fields".
+    const parseSummary = (resp.metadata?.parse_summary ?? null) as {
+      kind?: string;
+      classifier_confidence?: number;
+      lab_values_staged?: number;
+      allergies_staged?: number;
+      tasks_staged?: number;
+    } | null;
+    const stagingMeta = (resp.metadata?.staging ?? null) as {
+      pending_extraction_ids?: number[];
+    } | null;
+    const kind = (ext && typeof ext.kind === 'string')
+      ? ext.kind
+      : (parseSummary && typeof parseSummary.kind === 'string')
+        ? parseSummary.kind
+        : 'unknown';
     let valueCount = 0;
     if (ext) {
       if (Array.isArray(ext.values)) valueCount = ext.values.length;
@@ -1345,8 +1363,22 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
     if (valueCount === 0 && Array.isArray(resp.citations)) {
       valueCount = resp.citations.length;
     }
-    const conf = ext && typeof ext.classifier_confidence === 'number'
-      ? ` (classifier confidence ${(ext.classifier_confidence * 100).toFixed(0)}%)`
+    if (valueCount === 0 && stagingMeta && Array.isArray(stagingMeta.pending_extraction_ids)) {
+      valueCount = stagingMeta.pending_extraction_ids.length;
+    }
+    if (valueCount === 0 && parseSummary) {
+      valueCount =
+        (typeof parseSummary.lab_values_staged === 'number' ? parseSummary.lab_values_staged : 0)
+        + (typeof parseSummary.allergies_staged === 'number' ? parseSummary.allergies_staged : 0)
+        + (typeof parseSummary.tasks_staged === 'number' ? parseSummary.tasks_staged : 0);
+    }
+    const confidenceSource = ext && typeof ext.classifier_confidence === 'number'
+      ? ext.classifier_confidence
+      : (parseSummary && typeof parseSummary.classifier_confidence === 'number'
+        ? parseSummary.classifier_confidence
+        : null);
+    const conf = confidenceSource !== null
+      ? ` (classifier confidence ${(confidenceSource * 100).toFixed(0)}%)`
       : '';
     const fhirPath = typeof resp.metadata?.fhir_write_path === 'string'
       ? resp.metadata.fhir_write_path
