@@ -1170,9 +1170,11 @@ Measurement validates or invalidates these predictions. The validation outcome i
 
 ## 11. Eval Gate
 
-### 11.1 Case mix (156 total)
+### 11.1 Case mix (156 total)[^w2-cases]
 
 Live bucket counts as of submission lock (Phase 9.9 multimodal expansion). Run `python3 -c "from collections import Counter; from tests.fixtures.w2_eval_cases import CASES; print(Counter(c.bucket for c in CASES))"` from `agent-api/` for the current count.
+
+[^w2-cases]: Counts evolve as the suite grows. See `agent-api/tests/fixtures/w2_eval_cases.py` for the live source of truth, and `agent-api/evals/README.md` for the runtime introspection command. Where this doc cites a static number, treat it as the submission-lock snapshot — re-run the runtime command before quoting the figure elsewhere.
 
 | Bucket | Count | Description |
 |---|---|---|
