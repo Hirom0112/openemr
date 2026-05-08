@@ -925,6 +925,19 @@ async def stage_observation(
         observation_id=observation_id,
         loinc=(code, display),
     )
+    # `_build_observation` puts citations under `_copilot_citations` (with a
+    # `bbox_id` field name) — the FHIR-shape extension that the PHP
+    # controller persists into its own column on real writes. The agent-ui's
+    # `_findFirstCitation` walker only looks for arrays under the key
+    # `citations` (with `field_or_chunk_id`), so without a top-level
+    # `citations[]` the review panel never finds them and the document
+    # bbox-highlight stays blank. Add the LabValue's original citations[]
+    # at the payload root for the staging path only — this row is
+    # never POSTed to FHIR (informational/staging-side artifact). Mirrors
+    # the same shape every IntakeFormField row already carries
+    # (medications, allergies, family_history all stage their model_dump
+    # whose citations[] sits at the root).
+    body["citations"] = [c.model_dump(mode="json") for c in lab_value.citations]
     return await _staging_store.stage_pending(
         document_reference_id=document_reference_id,
         file_batch_id=file_batch_id,
