@@ -3168,7 +3168,11 @@ class _ChatHistoryTurn(BaseModel):
 class DocumentChatRequest(BaseModel):
     patient_id: str
     question: str
-    extraction: dict[str, Any]
+    # Optional for parity with PostIngestContextRequest — multimodal lanes
+    # (HL7/XLSX/DOCX/TIFF) return extraction=None from the dispatcher and
+    # the UI forwards that as null. The route already does
+    # ``body.extraction or {}`` at line 3216, so helpers no-op on None.
+    extraction: dict[str, Any] | None = None
     guidelines: list[dict[str, Any]] = []
     history: list[_ChatHistoryTurn] = []
 
