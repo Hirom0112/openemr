@@ -93,7 +93,20 @@ export function MedicationsCardView({
 }: MedicationsCardViewProps): React.ReactElement {
   if (medications.length === 0) {
     // Mirror `templates/patient/card/medication.html.twig:13`.
-    return <EmptyCard title={CARD_TITLE} message="Nothing Recorded" />;
+    // Pencil affordance preserved so chrome is consistent across patients.
+    return (
+      <EmptyCard
+        title={CARD_TITLE}
+        message="Nothing Recorded"
+        action={
+          <EditPencilButton
+            ariaLabel="Edit medications"
+            testId="medications-edit"
+            cardName="MedicationsCard"
+          />
+        }
+      />
+    );
   }
 
   return (

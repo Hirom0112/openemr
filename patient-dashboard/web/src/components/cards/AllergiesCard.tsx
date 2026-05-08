@@ -109,7 +109,22 @@ export function AllergiesCardView({
     // Original Twig (`templates/patient/card/allergies.html.twig:34`)
     // renders the literal "Nothing Recorded" — match that copy
     // verbatim so empty-state strings agree across all cards.
-    return <EmptyCard title={CARD_TITLE} message="Nothing Recorded" />;
+    // The pencil affordance renders even on empty cards so the
+    // chrome is consistent across patients (Robert Finch with no
+    // allergies still surfaces the read-only pencil + tooltip).
+    return (
+      <EmptyCard
+        title={CARD_TITLE}
+        message="Nothing Recorded"
+        action={
+          <EditPencilButton
+            ariaLabel="Edit allergies"
+            testId="allergies-edit"
+            cardName="AllergiesCard"
+          />
+        }
+      />
+    );
   }
 
   const visible = allergies.slice(0, MAX_VISIBLE);

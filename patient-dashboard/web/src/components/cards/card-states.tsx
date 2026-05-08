@@ -71,6 +71,15 @@ export function ErrorCard({
 
 interface EmptyCardProps extends CardStateProps {
   message?: string;
+  /**
+   * Optional header action (typically the read-only EditPencilButton).
+   * When supplied, the empty card renders the pencil in the top-right of
+   * the header so the affordance is uniform across patients regardless
+   * of whether the card has data — a Robert Finch chart with no allergies
+   * still surfaces the pencil + tooltip in the same position as a Gloria
+   * chart with a populated list.
+   */
+  action?: React.ReactNode;
 }
 
 /**
@@ -83,11 +92,13 @@ interface EmptyCardProps extends CardStateProps {
 export function EmptyCard({
   title,
   message = "Nothing recorded.",
+  action,
 }: EmptyCardProps): React.ReactElement {
   return (
     <Card size="sm" data-testid="empty-card">
-      <CardHeader>
+      <CardHeader className="grid-cols-[1fr_auto] items-center">
         <CardTitle>{title}</CardTitle>
+        {action ?? null}
       </CardHeader>
       <CardContent className="text-muted-foreground">{message}</CardContent>
     </Card>

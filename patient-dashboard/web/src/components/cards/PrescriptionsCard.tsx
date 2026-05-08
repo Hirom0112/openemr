@@ -105,7 +105,20 @@ export function PrescriptionsCardView({
     // Match the empty-state copy used by the other clinical cards;
     // the Prescriptions Smarty fragment has no separate empty string,
     // so we align with the Twig clinical-card convention.
-    return <EmptyCard title={CARD_TITLE} message="Nothing Recorded" />;
+    // Pencil affordance preserved so chrome is consistent across patients.
+    return (
+      <EmptyCard
+        title={CARD_TITLE}
+        message="Nothing Recorded"
+        action={
+          <EditPencilButton
+            ariaLabel="Edit prescriptions (not yet wired)"
+            testId="prescriptions-edit"
+            cardName="PrescriptionsCard"
+          />
+        }
+      />
+    );
   }
 
   return (

@@ -175,7 +175,20 @@ export function MedicalProblemsCardView({
 
   if (visible.length === 0) {
     // Mirror `templates/patient/card/medical_problems.html.twig:13`.
-    return <EmptyCard title={CARD_TITLE} message="Nothing Recorded" />;
+    // Pencil affordance preserved so chrome is consistent across patients.
+    return (
+      <EmptyCard
+        title={CARD_TITLE}
+        message="Nothing Recorded"
+        action={
+          <EditPencilButton
+            ariaLabel="Edit medical problems (not yet wired)"
+            testId="medical-problems-edit"
+            cardName="MedicalProblemsCard"
+          />
+        }
+      />
+    );
   }
 
   return (

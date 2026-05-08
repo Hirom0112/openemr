@@ -371,7 +371,20 @@ export function VitalsCardView({
 
   if (rows.length === 0) {
     // Mirror `interface/patient_file/summary/vitals_fragment.php:30`.
-    return <EmptyCard title={CARD_TITLE} message="No vitals have been documented." />;
+    // Pencil affordance preserved so chrome is consistent across patients.
+    return (
+      <EmptyCard
+        title={CARD_TITLE}
+        message="No vitals have been documented."
+        action={
+          <EditPencilButton
+            ariaLabel="Edit vitals"
+            testId="vitals-edit"
+            cardName="VitalsCard"
+          />
+        }
+      />
+    );
   }
 
   // Fixed display order, mirroring the case-branch sequence in the
