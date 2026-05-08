@@ -377,12 +377,12 @@ A worker that dies mid-graph leaves a stub row in `processing` indefinitely. The
 
 ### 4.7 Endpoints
 
-| Endpoint | Path | Purpose |
-|---|---|---|
-| `POST /document/ingest` | B | Direct upload; size-validated; writes to OpenEMR; runs graph |
-| `POST /document/scan_unprocessed` | A | List + ingest unprocessed `DocumentReference`s for a patient |
-| `GET /document/{id}/preview` | both | Stream PDF bytes for `pdf.js` viewer |
-| `POST /document/{id}/reclassify` | both | Manual override of classifier verdict; logs correction; triggers re-extraction |
+| Endpoint | Path | Status | Purpose |
+|---|---|---|---|
+| `POST /document/ingest` | B | **Live** (`main.py:2035`) | Direct upload; size-validated; writes to OpenEMR; runs graph |
+| `POST /document/scan_unprocessed` | A | **Deferred to Phase 8** — not in submission build (see `SUBMISSION.md` "Known gaps") | List + ingest unprocessed `DocumentReference`s for a patient |
+| `GET /document/{id}/preview` | both | **Deferred to Phase 8** — not in submission build | Stream PDF bytes for `pdf.js` viewer |
+| `POST /document/{id}/reclassify` | both | **Deferred to Phase 8** — not in submission build | Manual override of classifier verdict; logs correction; triggers re-extraction |
 
 ### 4.8 Synthetic locator grammar (multimodal expansion)
 
@@ -1386,14 +1386,16 @@ If a post-pilot owner is not named for any subsystem, the honest-degradation pri
 
 ### 17.3 New routes (`agent-api/main.py`)
 
-| Route | Purpose |
-|---|---|
-| `POST /document/ingest` | Path B upload + extract |
-| `POST /document/scan_unprocessed` | Path A passive ingest |
-| `GET /document/{id}/preview` | PDF stream for `pdf.js` |
-| `POST /document/{id}/reclassify` | Manual classifier override |
-| `POST /evidence/search` | Hybrid retrieval |
-| `POST /agent/w2/dispatch` | W2 supervisor entry point |
+| Route | Status | Purpose |
+|---|---|---|
+| `POST /document/ingest` | **Live** (`main.py:2035`) | Path B upload + extract |
+| `POST /document/scan_unprocessed` | **Deferred to Phase 8** | Path A passive ingest |
+| `GET /document/{id}/preview` | **Deferred to Phase 8** | PDF stream for `pdf.js` |
+| `POST /document/{id}/reclassify` | **Deferred to Phase 8** | Manual classifier override |
+| `POST /evidence/search` | **Live** (`main.py:2665`) | Hybrid retrieval |
+| `POST /agent/w2/dispatch` | **Live** (`main.py:2708`) | W2 supervisor entry point |
+
+> **Staging surface note.** The 6 staging / human-in-the-loop approval routes (`/pending-extractions`, `/pending-extractions/{id}`, `/pending-extractions/{id}/approve`, `/pending-extractions/batch-approve`, `/pending-extractions/{id}/reject`, `/pending-extractions/{id}/retry`) are mounted from `staging/router.py` via `app.include_router(_staging_router)` at `main.py:3657`, not declared with `@app.*` decorators in `main.py`. They are part of the W2 ingestion lifecycle and are documented inline with the Phase 9.9 multimodal expansion (§11.9). Future audits enumerating routes must grep both `main.py` and `staging/router.py`.
 
 ### 17.4 Postgres (extend audit DB)
 
