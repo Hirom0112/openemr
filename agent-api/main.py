@@ -3046,7 +3046,12 @@ def _synthesize_doc_summary(extraction: dict) -> str:
 
 
 class PostIngestContextRequest(BaseModel):
-    extraction: dict[str, Any]
+    # Optional because the multimodal lanes (HL7/XLSX/DOCX/TIFF) return
+    # extraction=None from the dispatcher. The route's existing
+    # ``body.extraction or {}`` coerces None→{}, which the summary/RAG-query
+    # helpers already accept as "empty" — yielding the documented
+    # empty-guidelines (200, guidelines: []) response.
+    extraction: dict[str, Any] | None = None
     patient_id: str
     document_reference_id: str
 
