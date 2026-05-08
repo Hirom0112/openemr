@@ -125,9 +125,16 @@ def classify_keywords(layout: List[LayoutBlock]) -> Optional[ClassifierVerdict]:
     lab_hits = _count_matches(layout, _LAB_RE)
     intake_hits = _count_matches(layout, _INTAKE_RE)
 
-    # Prefer the kind with more matches; ties go to lab_report (clinically
-    # higher value for triage), but only when lab also has at least one hit.
-    if lab_hits and len(lab_hits) >= len(intake_hits):
+    # Prefer the kind with more matches; **strict gt** so ties go to
+    # intake_form. Earlier behavior was lab-wins-ties ("clinically higher
+    # value for triage"), but ties send PMH-bearing intake forms to the
+    # wrong schema (no problem_list / family_history / chief_concern
+    # surfaces on the LabReport schema), which silently drops every
+    # clinical signal except labs. Per the 2026-05-08 problem_list
+    # build's Phase 0 finding: intake-wins-ties is the safer default
+    # since intake schemas can carry a `pertinent_labs` list, but
+    # lab schemas have no PMH slot.
+    if lab_hits and len(lab_hits) > len(intake_hits):
         confidence = _confidence_for(len(lab_hits))
         verdict = ClassifierVerdict(
             kind="lab_report",
