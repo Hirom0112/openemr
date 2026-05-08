@@ -2615,6 +2615,7 @@ async def document_ingest(
                 "request_id": rid,
                 "size_bytes": size_bytes,
                 "page_count": page_count,
+                "format": detected_format,
                 # Phase 9 Slice 9.3 — staging + parse_summary additions.
                 # Cached PDF/PNG path stays on direct write_observation
                 # (per spec: do NOT migrate W2 callers to staging), so
@@ -3032,6 +3033,7 @@ async def document_ingest(
             "request_id": rid,
             "size_bytes": size_bytes,
             "page_count": page_count,
+            "format": detected_format,
             # Phase 9 Slice 9.7 — PDF/PNG path now stages every derived
             # row (Observations + IntakeFormFields). The frontend reads
             # ``staging.pending_extraction_ids`` and routes them to the

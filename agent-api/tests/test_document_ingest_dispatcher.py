@@ -442,8 +442,10 @@ async def test_dispatch_pdf_falls_through_to_legacy_path(
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    # Legacy PDF path returns the full extraction body — and metadata
-    # carries no ``format`` key (that's a Slice 9.10 multimodal-only field).
+    # Legacy PDF path returns the full extraction body. ``metadata.format``
+    # is now emitted alongside the multimodal lanes so the agent-ui
+    # post-upload router can route PDF/PNG uploads to DocumentReviewPanel
+    # instead of falling back to the legacy ApprovalModal.
     assert body["extraction"]["kind"] == "lab_report"
-    assert "format" not in body["metadata"] or body["metadata"].get("format") is None
+    assert body["metadata"].get("format") == "pdf"
     assert extract_mock.await_count == 1
