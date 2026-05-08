@@ -202,6 +202,7 @@ export default function App({ config }: AppProps) {
                 pendingCount={pendingCount}
                 onSwitchToDocumentsTab={() => setActiveTab('documents')}
                 onTriggerApproval={triggerApproval}
+                onTriggerRichReview={triggerRichReview}
                 postApprovalGuidelines={postApprovalGuidelines}
               />
             </div>

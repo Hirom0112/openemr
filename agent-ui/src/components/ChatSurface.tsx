@@ -512,9 +512,17 @@ interface ChatSurfaceProps {
    *  banner click handler. */
   onSwitchToDocumentsTab: () => void;
   /** Phase 2 — opens the App-level ApprovalModal preloaded with the staging
-   *  batch. Used by the post-upload flow (`handleStaged`); DocumentsTab
-   *  calls the same setter independently. */
+   *  batch. Used by the post-upload flow (`handleStaged`) for legacy formats
+   *  (HL7/XLSX/TIFF); DocumentsTab calls the same setter independently. */
   onTriggerApproval: (staging: StagingMetadata, lane: Lane | null) => void;
+  /** Phase 3 — opens the App-level DocumentReviewPanel for the rich-editor
+   *  formats (PDF/PNG/DOCX). Used by the post-upload flow when the response
+   *  format is one of the rich-eligible ones. */
+  onTriggerRichReview: (
+    documentReferenceId: string,
+    fileBatchId: string,
+    rowIds: number[],
+  ) => void;
   /** Phase 3 — RAG result fired by DocumentReviewPanel after a batch is
    *  fully decided. When this prop changes (new documentReferenceId), an
    *  assistant message carrying ``metadata.post_ingest_context`` is
@@ -533,6 +541,7 @@ export default function ChatSurface({
   pendingCount,
   onSwitchToDocumentsTab,
   onTriggerApproval,
+  onTriggerRichReview,
   postApprovalGuidelines,
 }: ChatSurfaceProps) {
   const displayName = (providerName && providerName.trim()) || 'Doctor';
@@ -644,9 +653,23 @@ export default function ChatSurface({
   const [pendingQuarantine, setPendingQuarantine] = useState<{ payload: QuarantineIngestPayload; lane: Lane | null } | null>(null);
   const [pendingDuplicate, setPendingDuplicate] = useState<{ payload: DuplicateIngestPayload; lane: Lane | null } | null>(null);
 
-  const handleStaged = useCallback((staging: StagingMetadata, _resp: IngestResponse, file: File): void => {
+  const handleStaged = useCallback((staging: StagingMetadata, resp: IngestResponse, file: File): void => {
+    // Phase 3 routing: PDF/PNG/DOCX get the rich DocumentReviewPanel with
+    // the source preview on the left and structured editors on the right.
+    // HL7/XLSX/TIFF (and any unknown format) keep the legacy ApprovalModal —
+    // they have no rich-editor cards yet and the modal handles them fine.
+    const format = typeof resp.metadata?.format === 'string' ? resp.metadata.format : '';
+    const richEditorFormats = new Set(['pdf', 'png', 'docx']);
+    if (richEditorFormats.has(format)) {
+      onTriggerRichReview(
+        resp.document_reference_id,
+        staging.file_batch_id,
+        staging.pending_extraction_ids,
+      );
+      return;
+    }
     onTriggerApproval(staging, laneFromFilename(file.name));
-  }, [onTriggerApproval]);
+  }, [onTriggerApproval, onTriggerRichReview]);
 
   const handleQuarantined = useCallback((payload: QuarantineIngestPayload, file: File): void => {
     setPendingQuarantine({ payload, lane: laneFromFilename(file.name) });
