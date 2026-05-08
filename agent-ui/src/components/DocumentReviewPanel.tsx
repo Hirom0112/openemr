@@ -51,6 +51,23 @@ export interface DocumentReviewPanelProps {
   documentReferenceId: string;
   fileBatchId: string;
   pendingRowIds: number[];
+  /**
+   * When true, the panel renders a verification-only view: inputs are
+   * disabled, per-row Approve/Reject and the bulk action bar are
+   * hidden, and the status pill flips to "Read-only · Approved". Used
+   * by the chat citation chips so the clinician can revisit a cited
+   * field after the document is approved without re-triggering edit
+   * UI. Defaults to false.
+   */
+  readOnly?: boolean;
+  /**
+   * Optional citation `field_or_chunk_id` (e.g. "p1-b007") that the
+   * panel should auto-focus on mount. The panel scans loaded rows to
+   * find one whose primary citation matches and applies the active
+   * highlight + scrolls the right rail to that card. Falls through
+   * silently when no match is found.
+   */
+  initialActiveCitationFieldId?: string;
   onClose: () => void;
   onCompleted: (
     documentReferenceId: string,
@@ -318,6 +335,8 @@ export default function DocumentReviewPanel(
     documentReferenceId,
     fileBatchId,
     pendingRowIds,
+    readOnly = false,
+    initialActiveCitationFieldId,
     onClose,
     onCompleted,
   } = props;
@@ -456,6 +475,29 @@ export default function DocumentReviewPanel(
     () => citations.filter((c) => c.page === activePage),
     [citations, activePage],
   );
+
+  // When the panel mounts in read-only mode and the caller passed a
+  // citation field id (e.g. "p1-b007"), find the row whose primary
+  // citation matches and auto-focus it. Runs ONCE per (rowsLoaded,
+  // initialActiveCitationFieldId) — re-running on activeRowId change
+  // would fight the user's clicks.
+  useEffect(() => {
+    if (!initialActiveCitationFieldId || rows.length === 0) return;
+    const match = citations.find(
+      (c) => c.fieldOrChunkId === initialActiveCitationFieldId,
+    );
+    if (!match) return;
+    setActiveRowId(match.rowId);
+    if (match.page !== activePage) setActivePage(match.page);
+    // Best-effort scroll the rail card into view after paint.
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        const el = document.getElementById(`copilot-review-field-${match.rowId}`);
+        el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialActiveCitationFieldId, rows.length]);
 
   // ── Row mutation callbacks ─────────────────────────────────────────────
   const setRowState = useCallback((rowId: number, patch: Partial<RowState>) => {
@@ -683,8 +725,12 @@ export default function DocumentReviewPanel(
         </div>
 
         <div className="cdr-topbar-right">
-          <span className="cdr-status-pill">
-            {reviewedCount === allCount && allCount > 0 ? 'All Reviewed' : 'Ready for Review'}
+          <span className={`cdr-status-pill${readOnly ? ' cdr-status-pill-readonly' : ''}`}>
+            {readOnly
+              ? 'Read-only · Approved'
+              : reviewedCount === allCount && allCount > 0
+                ? 'All Reviewed'
+                : 'Ready for Review'}
           </span>
           <button
             type="button"
@@ -745,6 +791,7 @@ export default function DocumentReviewPanel(
                     citation={citations.find((c) => c.rowId === lr.row.id)}
                     active={activeRowId === lr.row.id}
                     busy={bulkBusy}
+                    readOnly={readOnly}
                     onClick={() => onFieldClick(lr.row.id)}
                     onValueChange={onValueChange}
                     onApprove={() => void onApproveOne(lr.row.id)}
@@ -755,41 +802,43 @@ export default function DocumentReviewPanel(
             ))}
           </div>
 
-          <div className="cdr-action-bar">
-            <div className="cdr-progress">
-              <div className="cdr-progress-bar">
-                <div
-                  className="cdr-progress-fill"
-                  style={{
-                    width: `${allCount === 0 ? 0 : (reviewedCount / allCount) * 100}%`,
-                  }}
-                />
+          {!readOnly && (
+            <div className="cdr-action-bar">
+              <div className="cdr-progress">
+                <div className="cdr-progress-bar">
+                  <div
+                    className="cdr-progress-fill"
+                    style={{
+                      width: `${allCount === 0 ? 0 : (reviewedCount / allCount) * 100}%`,
+                    }}
+                  />
+                </div>
+                <div className="cdr-progress-text">
+                  <strong>{reviewedCount}</strong> of {allCount} reviewed
+                  {bulkSummary ? ` · ${bulkSummary}` : ''}
+                </div>
               </div>
-              <div className="cdr-progress-text">
-                <strong>{reviewedCount}</strong> of {allCount} reviewed
-                {bulkSummary ? ` · ${bulkSummary}` : ''}
+              <div className="cdr-action-buttons">
+                <button
+                  type="button"
+                  className="cdr-btn cdr-btn-action-reject"
+                  onClick={() => void onRejectAll()}
+                  disabled={bulkBusy || liveRows.length === 0}
+                >
+                  Reject all
+                </button>
+                <button
+                  type="button"
+                  className="cdr-btn cdr-btn-action-approve"
+                  onClick={() => void onApproveAll()}
+                  disabled={bulkBusy || liveRows.length === 0}
+                >
+                  {bulkBusy ? 'Working…' : 'Approve all'}
+                  <span className="cdr-count">{liveRows.length}</span>
+                </button>
               </div>
             </div>
-            <div className="cdr-action-buttons">
-              <button
-                type="button"
-                className="cdr-btn cdr-btn-action-reject"
-                onClick={() => void onRejectAll()}
-                disabled={bulkBusy || liveRows.length === 0}
-              >
-                Reject all
-              </button>
-              <button
-                type="button"
-                className="cdr-btn cdr-btn-action-approve"
-                onClick={() => void onApproveAll()}
-                disabled={bulkBusy || liveRows.length === 0}
-              >
-                {bulkBusy ? 'Working…' : 'Approve all'}
-                <span className="cdr-count">{liveRows.length}</span>
-              </button>
-            </div>
-          </div>
+          )}
         </aside>
       </div>
     </div>
@@ -1106,8 +1155,18 @@ function BboxLayer(p: BboxLayerProps): ReactElement {
             onClick={() => onBboxClick(c.rowId)}
             title={c.quote || c.shortLabel}
           >
-            <span className="cdr-citation-label">
-              #{c.ordinal} {c.shortLabel}
+            {/* Default state: a small number-only badge that doesn't
+                obscure document text. On hover OR when the row is
+                active, the badge expands to show #N + short label. */}
+            <span
+              className="cdr-citation-badge"
+              data-ordinal={c.ordinal}
+            >
+              <span className="cdr-citation-badge-number">{c.ordinal}</span>
+              <span className="cdr-citation-badge-detail">
+                {' '}
+                {c.shortLabel}
+              </span>
             </span>
           </button>
         );
@@ -1186,6 +1245,7 @@ interface FieldCardProps {
   citation?: FlatCitation;
   active: boolean;
   busy: boolean;
+  readOnly?: boolean;
   onClick: () => void;
   onValueChange: (rowId: number, override: Record<string, unknown> | null) => void;
   onApprove: () => void;
@@ -1193,7 +1253,7 @@ interface FieldCardProps {
 }
 
 function FieldCard(p: FieldCardProps): ReactElement {
-  const { lr, citation, active, busy, onClick, onValueChange, onApprove, onReject } = p;
+  const { lr, citation, active, busy, readOnly = false, onClick, onValueChange, onApprove, onReject } = p;
   const status = lr.state.status;
   const decision = lr.state.decision;
   const cardClasses = [
@@ -1202,9 +1262,10 @@ function FieldCard(p: FieldCardProps): ReactElement {
     status === 'done' && decision === 'approved' ? 'cdr-field-approved' : '',
     status === 'done' && decision === 'rejected' ? 'cdr-field-rejected' : '',
     status === 'error' ? 'cdr-field-error' : '',
+    readOnly ? 'cdr-field-readonly' : '',
   ].filter(Boolean).join(' ');
 
-  const inputDisabled = busy || status === 'busy' || status === 'done';
+  const inputDisabled = readOnly || busy || status === 'busy' || status === 'done';
 
   const labelText = _labelFor(lr.row);
   const citationChip = citation
@@ -1247,24 +1308,26 @@ function FieldCard(p: FieldCardProps): ReactElement {
             </span>
           )}
         </div>
-        <div className="cdr-field-buttons">
-          <button
-            type="button"
-            className="cdr-btn-tiny cdr-btn-tiny-reject"
-            onClick={(e) => { e.stopPropagation(); onReject(); }}
-            disabled={inputDisabled}
-          >
-            Reject
-          </button>
-          <button
-            type="button"
-            className="cdr-btn-tiny cdr-btn-tiny-approve"
-            onClick={(e) => { e.stopPropagation(); onApprove(); }}
-            disabled={inputDisabled}
-          >
-            Approve
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="cdr-field-buttons">
+            <button
+              type="button"
+              className="cdr-btn-tiny cdr-btn-tiny-reject"
+              onClick={(e) => { e.stopPropagation(); onReject(); }}
+              disabled={inputDisabled}
+            >
+              Reject
+            </button>
+            <button
+              type="button"
+              className="cdr-btn-tiny cdr-btn-tiny-approve"
+              onClick={(e) => { e.stopPropagation(); onApprove(); }}
+              disabled={inputDisabled}
+            >
+              Approve
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1759,6 +1822,14 @@ const REVIEW_CSS = `
   border-radius: 50%;
   background: var(--accent);
 }
+.cdr-status-pill-readonly {
+  background: var(--surface-tint);
+  color: var(--ink-soft);
+  border: 1px solid var(--border);
+}
+.cdr-status-pill-readonly::before { background: var(--ink-muted); }
+.cdr-field-readonly { cursor: default; }
+.cdr-field-readonly:hover { box-shadow: none; }
 
 .cdr-btn {
   font-family: var(--font-body);
@@ -1883,21 +1954,44 @@ const REVIEW_CSS = `
   z-index: 1;
 }
 
-.cdr-citation-label {
+/* Citation badge — number-only by default, expands on hover/active to
+   show "#N <shortLabel>". Sits above the bbox so it never occludes
+   document text inside the citation rectangle itself. */
+.cdr-citation-badge {
   position: absolute;
-  top: -22px;
+  top: -18px;
   left: -2px;
+  display: inline-flex;
+  align-items: center;
   background: var(--accent);
   color: white;
   font-family: var(--font-mono);
   font-size: 9px;
   font-weight: 500;
-  padding: 2px 6px;
+  padding: 2px 5px;
   border-radius: 2px;
   white-space: nowrap;
   letter-spacing: 0.02em;
+  max-width: 16px;        /* room for 1-3 digit ordinal */
+  overflow: hidden;
+  transition: max-width 180ms ease-out, padding 180ms ease-out;
+  pointer-events: none;
 }
-.cdr-citation-box-active .cdr-citation-label { background: var(--warn); }
+.cdr-citation-badge-number { display: inline-block; }
+.cdr-citation-badge-detail {
+  opacity: 0;
+  transition: opacity 120ms ease-out 60ms;
+}
+.cdr-citation-box:hover .cdr-citation-badge,
+.cdr-citation-box-active .cdr-citation-badge {
+  max-width: 360px;
+  padding: 2px 7px;
+}
+.cdr-citation-box:hover .cdr-citation-badge-detail,
+.cdr-citation-box-active .cdr-citation-badge-detail {
+  opacity: 1;
+}
+.cdr-citation-box-active .cdr-citation-badge { background: var(--warn); }
 
 .cdr-docx-list {
   display: flex;

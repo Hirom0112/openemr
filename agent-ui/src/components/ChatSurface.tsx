@@ -522,6 +522,7 @@ interface ChatSurfaceProps {
     documentReferenceId: string,
     fileBatchId: string,
     rowIds: number[],
+    options?: { readOnly?: boolean; initialActiveCitationFieldId?: string },
   ) => void;
   /** Phase 3 — RAG result fired by DocumentReviewPanel after a batch is
    *  fully decided. When this prop changes (new documentReferenceId), an
@@ -1837,6 +1838,30 @@ export default function ChatSurface({
                       if (!ext || !ext.citations || ext.citations.length === 0) return null;
                       const docCitations = ext.citations.filter((c) => c.source_type === 'document');
                       if (docCitations.length === 0) return null;
+                      // Pull staging metadata + document_reference_id for
+                      // the read-only review-panel route. When both are
+                      // present, the chip click opens DocumentReviewPanel
+                      // in readOnly mode so the operator gets the rich
+                      // field-card view (with the cited bbox highlighted)
+                      // instead of the bare side-panel viewer. Falls back
+                      // to setViewerSource when staging is missing — older
+                      // assistant messages from before staging was wired
+                      // up still need a working chip click.
+                      const respMeta = (msg.response?.metadata ?? {}) as {
+                        staging?: { pending_extraction_ids?: number[]; file_batch_id?: string };
+                      };
+                      const respData = (msg.response?.data ?? {}) as { document_reference_id?: string };
+                      const stagedRowIds: number[] = Array.isArray(respMeta.staging?.pending_extraction_ids)
+                        ? respMeta.staging!.pending_extraction_ids!
+                        : [];
+                      const stagedDocRef: string = typeof respData.document_reference_id === 'string'
+                        ? respData.document_reference_id
+                        : '';
+                      const stagedBatchId: string = typeof respMeta.staging?.file_batch_id === 'string'
+                        ? respMeta.staging!.file_batch_id!
+                        : '';
+                      const canOpenReadOnlyReview =
+                        stagedRowIds.length > 0 && stagedDocRef.length > 0;
                       return (
                         <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap' }}>
                           {docCitations.map((c, i) => (
@@ -1845,13 +1870,27 @@ export default function ChatSurface({
                               citation={c}
                               index={i}
                               total={docCitations.length}
-                              onClick={() => setViewerSource({
-                                citations: docCitations,
-                                activeIndex: i,
-                                bboxLayout: ext.ocr_layout ?? [],
-                                pdfUrl: ext.pdf_url,
-                                pdfBytes: ext.pdf_bytes,
-                              })}
+                              onClick={() => {
+                                if (canOpenReadOnlyReview) {
+                                  onTriggerRichReview(
+                                    stagedDocRef,
+                                    stagedBatchId,
+                                    stagedRowIds,
+                                    {
+                                      readOnly: true,
+                                      initialActiveCitationFieldId: c.field_or_chunk_id,
+                                    },
+                                  );
+                                  return;
+                                }
+                                setViewerSource({
+                                  citations: docCitations,
+                                  activeIndex: i,
+                                  bboxLayout: ext.ocr_layout ?? [],
+                                  pdfUrl: ext.pdf_url,
+                                  pdfBytes: ext.pdf_bytes,
+                                });
+                              }}
                             />
                           ))}
                         </div>

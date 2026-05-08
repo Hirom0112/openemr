@@ -28,6 +28,7 @@ interface Props {
     documentReferenceId: string,
     fileBatchId: string,
     rowIds: number[],
+    options?: { readOnly?: boolean; initialActiveCitationFieldId?: string },
   ) => void;
 }
 

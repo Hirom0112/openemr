@@ -34,10 +34,15 @@ export default function App({ config }: AppProps) {
 
   // Phase-3 — rich review panel target. When non-null the panel mounts
   // over the active tab; HL7/XLSX still use ApprovalModal (above).
+  // ``readOnly`` opens the panel for verification only — chip clicks in
+  // chat scrollback re-mount the panel without edit affordances so the
+  // operator can revisit a cited field after the document is approved.
   const [reviewTarget, setReviewTarget] = useState<{
     documentReferenceId: string;
     fileBatchId: string;
     rowIds: number[];
+    readOnly?: boolean;
+    initialActiveCitationFieldId?: string;
   } | null>(null);
 
   // Phase-3 — post-approval RAG result, handed down to ChatSurface so it
@@ -114,8 +119,19 @@ export default function App({ config }: AppProps) {
   );
 
   const triggerRichReview = useCallback(
-    (documentReferenceId: string, fileBatchId: string, rowIds: number[]) => {
-      setReviewTarget({ documentReferenceId, fileBatchId, rowIds });
+    (
+      documentReferenceId: string,
+      fileBatchId: string,
+      rowIds: number[],
+      options?: { readOnly?: boolean; initialActiveCitationFieldId?: string },
+    ) => {
+      setReviewTarget({
+        documentReferenceId,
+        fileBatchId,
+        rowIds,
+        readOnly: options?.readOnly === true,
+        initialActiveCitationFieldId: options?.initialActiveCitationFieldId,
+      });
     },
     [],
   );
@@ -249,6 +265,8 @@ export default function App({ config }: AppProps) {
           documentReferenceId={reviewTarget.documentReferenceId}
           fileBatchId={reviewTarget.fileBatchId}
           pendingRowIds={reviewTarget.rowIds}
+          readOnly={reviewTarget.readOnly === true}
+          initialActiveCitationFieldId={reviewTarget.initialActiveCitationFieldId}
           onClose={() => setReviewTarget(null)}
           onCompleted={handleReviewCompleted}
         />
