@@ -192,6 +192,38 @@ function _detectKind(contentType: string | null): ViewerKind {
   return 'unknown';
 }
 
+/**
+ * Sniff the first bytes of a fetched document to determine its true kind,
+ * regardless of what the server's Content-Type header says. Defensive
+ * against the case where OpenEMR's `documents.mimetype` is wrong because
+ * the user uploaded e.g. a PNG screenshot named "kowalski.pdf" — the
+ * extension and Content-Type say PDF, but the actual bytes are PNG, and
+ * pdf.js fails to render with "could not load PDF". Sniffing the magic
+ * header makes the preview robust to that mislabel.
+ *
+ * Magic numbers (first 8 bytes):
+ *   PDF:  25 50 44 46 2D                     (%PDF-)
+ *   PNG:  89 50 4E 47 0D 0A 1A 0A
+ *   JPEG: FF D8 FF
+ *   ZIP/DOCX: 50 4B 03 04                    (PK\3\4)
+ */
+function _sniffKind(bytes: ArrayBuffer): ViewerKind {
+  if (bytes.byteLength < 8) return 'unknown';
+  const v = new Uint8Array(bytes, 0, 8);
+  // %PDF-
+  if (v[0] === 0x25 && v[1] === 0x50 && v[2] === 0x44 && v[3] === 0x46 && v[4] === 0x2d) return 'pdf';
+  // PNG signature
+  if (
+    v[0] === 0x89 && v[1] === 0x50 && v[2] === 0x4e && v[3] === 0x47 &&
+    v[4] === 0x0d && v[5] === 0x0a && v[6] === 0x1a && v[7] === 0x0a
+  ) return 'image';
+  // JPEG SOI
+  if (v[0] === 0xff && v[1] === 0xd8 && v[2] === 0xff) return 'image';
+  // ZIP / DOCX (also XLSX / EPUB but we only care about DOCX in this app)
+  if (v[0] === 0x50 && v[1] === 0x4b && v[2] === 0x03 && v[3] === 0x04) return 'docx';
+  return 'unknown';
+}
+
 function _payloadValue(row: PendingExtractionRow): Record<string, unknown> {
   const p = row.payload as Record<string, unknown>;
   // Demographics rows wrap the field bag under a `demographics` key.
@@ -608,7 +640,15 @@ export default function DocumentReviewPanel(
         const { bytes, contentType } = await fetchDocumentBinary(baseUrl, documentReferenceId);
         if (cancelled) return;
         setPreviewBytes(bytes);
-        setPreviewKind(_detectKind(contentType));
+        // Prefer magic-byte sniff over Content-Type — OpenEMR can mislabel
+        // a PNG screenshot uploaded as "kowalski.pdf" with mimetype
+        // "application/pdf", which would route to pdf.js and fail. Sniff
+        // the first 8 bytes; only fall through to Content-Type when the
+        // header is recognised but the magic isn't.
+        const sniffed = _sniffKind(bytes);
+        const headerKind = _detectKind(contentType);
+        const finalKind: ViewerKind = sniffed !== 'unknown' ? sniffed : headerKind;
+        setPreviewKind(finalKind);
       } catch (err) {
         if (cancelled) return;
         setPreviewError(err instanceof Error ? err.message : 'Failed to load preview.');
