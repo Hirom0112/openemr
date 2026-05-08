@@ -28,14 +28,17 @@ ENV HOSTNAME=0.0.0.0
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs
 
-# When `output: "standalone"` is set in next.config.ts, Next emits a
-# self-contained ./.next/standalone tree. Until that's enabled we ship
-# the full build output.
+# With `output: "standalone"` in next.config.ts, Next emits a
+# self-contained ./.next/standalone tree containing server.js + only
+# the runtime deps it needs. server.js correctly honours basePath
+# (which `next start` doesn't in our test). Static + public assets
+# must be copied alongside since standalone doesn't include them.
 COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
 EXPOSE 3000
-CMD ["npx", "next", "start", "-p", "3000"]
+# server.js is the entrypoint emitted by standalone output. It binds
+# to PORT env (3000) and HOSTNAME (0.0.0.0) and respects basePath.
+CMD ["node", "server.js"]
