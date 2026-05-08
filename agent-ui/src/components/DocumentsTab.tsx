@@ -41,12 +41,45 @@ interface DocumentGroup {
   /** True when every row in the group has a target_resource_type that the
    *  rich panel knows how to edit (Observation | IntakeFormField). */
   richEligible: boolean;
+  /** Human label like "Whitaker Lab Report" / "Reyes Intake Form".
+   *  Falls back to the documentRef when no demographics name is found. */
+  displayLabel: string;
 }
 
 const RICH_ELIGIBLE_TYPES = new Set(['Observation', 'IntakeFormField']);
 
+/** Pull demographics last name from a row whose target_resource_id matches
+ *  the intake-demographics deterministic shape. Returns "" when no name
+ *  is present. */
+function _lastNameFromRow(row: PendingExtractionRow): string {
+  if (!/-intake-demographics-\d+$/.test(row.target_resource_id ?? '')) return '';
+  const p = row.payload as { demographics?: { name?: { value?: unknown } } };
+  const raw = p.demographics?.name?.value;
+  if (typeof raw !== 'string' || !raw.trim()) return '';
+  // "WHITAKER, JAMES" → "Whitaker", "Margaret Chen" → "Chen".
+  const comma = raw.indexOf(',');
+  if (comma > 0) return raw.slice(0, comma).trim();
+  const parts = raw.trim().split(/\s+/);
+  return parts[parts.length - 1] ?? '';
+}
+
+function _titleCase(s: string): string {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+function _kindLabelFromByResource(byResource: Record<string, number>): string {
+  if ((byResource.Observation ?? 0) > 0) return 'Lab Report';
+  if ((byResource.IntakeFormField ?? 0) > 0) return 'Intake Form';
+  if ((byResource.Task ?? 0) > 0) return 'Task';
+  if ((byResource.AllergyIntolerance ?? 0) > 0) return 'Allergy';
+  return 'Document';
+}
+
 function groupRows(rows: PendingExtractionRow[]): DocumentGroup[] {
   const map = new Map<string, DocumentGroup>();
+  // Cached per-document last name; we walk demographics rows once per group.
+  const lastNames = new Map<string, string>();
   for (const row of rows) {
     const key = row.document_reference_id || '(unknown)';
     let group = map.get(key);
@@ -57,6 +90,7 @@ function groupRows(rows: PendingExtractionRow[]): DocumentGroup[] {
         rowIds: [],
         byResource: {},
         richEligible: true,
+        displayLabel: key,
       };
       map.set(key, group);
     }
@@ -66,6 +100,16 @@ function groupRows(rows: PendingExtractionRow[]): DocumentGroup[] {
     if (!RICH_ELIGIBLE_TYPES.has(t)) {
       group.richEligible = false;
     }
+    if (!lastNames.has(key)) {
+      const ln = _lastNameFromRow(row);
+      if (ln) lastNames.set(key, ln);
+    }
+  }
+  // Compute display labels post-grouping so byResource is fully populated.
+  for (const group of map.values()) {
+    const last = lastNames.get(group.documentRef) ?? '';
+    const kind = _kindLabelFromByResource(group.byResource);
+    group.displayLabel = last ? `${_titleCase(last)} ${kind}` : kind;
   }
   // Stable order: by documentRef ascending.
   return [...map.values()].sort((a, b) =>
@@ -136,9 +180,14 @@ function DocumentCard({ group, onReview }: DocumentCardProps): ReactElement {
   return (
     <div style={styles.card}>
       <div style={styles.cardHeader}>
-        <code style={styles.docRef} title={group.documentRef}>
-          {group.documentRef}
-        </code>
+        <div style={styles.cardTitleBlock}>
+          <span style={styles.docTitle} title={group.documentRef}>
+            {group.displayLabel}
+          </span>
+          <code style={styles.docRefSub} title={group.documentRef}>
+            {group.documentRef}
+          </code>
+        </div>
         <span style={styles.statePill}>
           {total} fact{total === 1 ? '' : 's'} pending review
         </span>
@@ -183,8 +232,32 @@ const styles: Record<string, React.CSSProperties> = {
   cardHeader: {
     display: 'flex',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 10,
     flexWrap: 'wrap',
+  },
+  cardTitleBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+    minWidth: 0,
+    flex: 1,
+  },
+  docTitle: {
+    fontSize: 14,
+    fontWeight: 600,
+    color: SURFACE.fgStrong,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  docRefSub: {
+    fontSize: 11,
+    color: SURFACE.muted,
+    fontFamily: 'monospace',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   docRef: {
     fontSize: 12,
