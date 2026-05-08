@@ -8,7 +8,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 _State = Literal["pending", "approved", "rejected", "written", "failed"]
-_TargetResourceType = Literal["Observation", "Task", "AllergyIntolerance"]
+_TargetResourceType = Literal[
+    "Observation",
+    "Task",
+    "AllergyIntolerance",
+    # Phase-3 Documents-tab: per-field intake-form rows. See note in
+    # ``staging.store.TargetResourceType``.
+    "IntakeFormField",
+]
 
 
 class PendingExtractionRow(BaseModel):

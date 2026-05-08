@@ -38,7 +38,17 @@ _logger = logging.getLogger(__name__)
 
 
 PendingState = Literal["pending", "approved", "rejected", "written", "failed"]
-TargetResourceType = Literal["Observation", "Task", "AllergyIntolerance"]
+TargetResourceType = Literal[
+    "Observation",
+    "Task",
+    "AllergyIntolerance",
+    # Phase-3 Documents-tab redesign: per-field intake-form rows (PDF/DOCX
+    # allergies/meds/demographics/family-hx/chief-concern/code-status). No
+    # FHIR writer; approval is informational. See ``observations.writer.
+    # _perform_write`` for the short-circuit and ``audit/schema.sql`` for
+    # the matching CHECK-constraint relaxation.
+    "IntakeFormField",
+]
 
 MAX_RETRIES: int = 3
 REJECT_REASON_MAX_CHARS: int = 256
