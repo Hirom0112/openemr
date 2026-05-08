@@ -4,13 +4,13 @@
 
 ## Quick Read
 
-Week 2 closes the gap between a structured-data agent and one that can read the messy half of the chart. Documents — outside hospital transfer summaries, faxed lab printouts, intake paperwork, advance directives, consultant notes — are invisible to a FHIR-only agent. Week 2 teaches the agent to ingest those documents, classify them, extract schema-validated facts with bounding-box citations, retrieve grounded clinical-guideline evidence, refuse cleanly when uncertain, and prove the whole thing works through a fifty-case eval gate that blocks regressions before they reach the user.
+Week 2 closes the gap between a structured-data agent and one that can read the messy half of the chart. Documents — outside hospital transfer summaries, faxed lab printouts, intake paperwork, advance directives, consultant notes — are invisible to a FHIR-only agent. Week 2 teaches the agent to ingest those documents, classify them, extract schema-validated facts with bounding-box citations, retrieve grounded clinical-guideline evidence, refuse cleanly when uncertain, and prove the whole thing works through a 156-case eval gate that blocks regressions before they reach the user.
 
 The architectural challenge is one sentence long: **let the agent see, without letting it lie.** Every decision in this document traces back to that constraint. Every clinical claim in the agent's response must resolve to a real source — a bounding box on a real document with text content matching the claimed value, or a chunk in a real curated guideline — or the response is blocked by a critic node before it reaches the user.
 
 The system is built as a multi-agent graph (LangGraph) sitting alongside the existing structured-data flows. A supervisor routes work to specialist workers — an intake-extractor that turns documents into typed JSON, an evidence-retriever that does hybrid sparse+dense retrieval over a curated corpus with Cohere rerank, and the existing structured-data tool registry exposed as a callable worker. A critic node reviews every output for citation existence, citation fidelity, and demographic correctness before the response leaves the system. Documents round-trip through OpenEMR's FHIR `DocumentReference`, derived facts persist as FHIR `Observation`s with `derivedFrom` references, and bounding-box metadata lives in our Postgres alongside audit. (v1: documents land in OpenEMR's `documents` table via a custom JWT-authenticated endpoint — see §4.2.1 — and the FHIR DocumentReference read surface is currently blind to them due to an OAuth-to-PHP-session bind upstream. v1: derived Observations are implemented via a custom JWT-authenticated FHIR-Observation endpoint inside oe-module-clinical-copilot; resources land in `copilot_observations` MySQL table, fully FHIR-shaped — see §4.2.4.) Zero new infrastructure services — pgvector is a Postgres extension, Cohere is one new vendor, no new container.
 
-Quality is gated by fifty cases scored against five boolean rubrics, where every case carries an explicit `expected_critic_decision` and the eval runs the deployed critic configuration. The gate is mechanical, the rubrics are boolean, and the regression threshold is committed in version control. A per-case auto-rerun on `factually_consistent` disagreement filters judge noise; a quarterly meta-eval against twenty human-labeled cases keeps the judge's credibility number measured rather than asserted.
+Quality is gated by 156 cases scored against the W2 rubric set, where every case carries an explicit `expected_critic_decision` and the eval runs the deployed critic configuration. The gate is mechanical, the rubrics are boolean, and the regression threshold is committed in version control. A per-case auto-rerun on `factually_consistent` disagreement filters judge noise; a quarterly meta-eval against twenty human-labeled cases keeps the judge's credibility number measured rather than asserted.
 
 The design includes a named maintenance principle — **honest degradation** — that governs every adaptive subsystem in the architecture. When a maintenance loop breaks, the affected subsystem halts visibly rather than continuing silently on stale assumptions.
 
@@ -1123,7 +1123,7 @@ The cost-and-latency deliverable has three components: actual dev spend, p50/p95
 | Voyage | _to fill post-build_ | Embeddings, indexing-time only |
 | **Total** | _to fill post-build_ | |
 
-**p50/p95 latency.** Captured as Prometheus histograms during the deployed build, with one histogram per pipeline stage. Sampled from a fixed query workload (the 50 eval cases, plus 20 ingest passes against the synthetic panel) to make runs comparable across deploy versions.
+**p50/p95 latency.** Captured as Prometheus histograms during the deployed build, with one histogram per pipeline stage. Sampled from a fixed query workload (the 156 eval cases, plus 20 ingest passes against the synthetic panel) to make runs comparable across deploy versions.
 
 Per-stage histograms — ingest path:
 
@@ -1170,19 +1170,24 @@ Measurement validates or invalidates these predictions. The validation outcome i
 
 ## 11. Eval Gate
 
-### 11.1 Case mix (50 total)
+### 11.1 Case mix (156 total)
+
+Live bucket counts as of submission lock (Phase 9.9 multimodal expansion). Run `python3 -c "from collections import Counter; from tests.fixtures.w2_eval_cases import CASES; print(Counter(c.bucket for c in CASES))"` from `agent-api/` for the current count.
 
 | Bucket | Count | Description |
 |---|---|---|
-| Nominal `lab_report` | 12 | Clean lab PDFs, varied formats and labs |
-| Nominal `intake_form` | 10 | Clean admission paperwork, advance directives, code status |
-| Nominal `unknown` | 6 | Consultant notes, imaging reports, discharge summaries |
-| Wrong-type-hint | 4 | Referral fax uploaded as `doc_type=lab_pdf` |
-| Wrong-patient | 5 | MRN match without name/DOB (OCR collision); MRN mismatch; DOB mismatch with MRN match; etc. |
-| Blank / noise | 4 | Empty page, encrypted PDF, all-noise scan — must refuse cleanly |
-| Mixed-content | 4 | Page 1 intake, page 2 labs — extractor must split or refuse |
-| Low-quality scan | 3 | Blurry, rotated, partial — soft-warn expected |
-| Intra-document conflict | 2 | Same lab value differs across pages |
+| `bbox_gt` | 36 | Per-value bbox-fidelity ground-truth cases — verify extraction value matches the cited bounding box |
+| `lab_nominal` | 22 | Clean lab PDFs, varied formats and labs |
+| `intake_nominal` | 22 | Clean admission paperwork, advance directives, code status |
+| `mixed_content` | 12 | Page 1 intake, page 2 labs — extractor must split or refuse |
+| `wrong_patient` | 11 | MRN match without name/DOB (OCR collision); MRN mismatch; DOB mismatch with MRN match; etc. |
+| `low_quality_scan` | 10 | Blurry, rotated, partial — soft-warn expected |
+| `evidence_retrieval` | 10 | Hybrid-RAG nominal + adversarial — guideline retrieval correctness |
+| `unknown_nominal` | 8 | Consultant notes, imaging reports, discharge summaries |
+| `blank_noise` | 7 | Empty page, encrypted PDF, all-noise scan — must refuse cleanly |
+| `missing_data` | 7 | Document is well-formed but key fields are absent — extractor must signal absence, not hallucinate |
+| `wrong_type_hint` | 6 | Referral fax uploaded as `doc_type=lab_pdf` |
+| `intra_doc_conflict` | 5 | Same lab value differs across pages |
 
 ### 11.2 Rubrics (boolean per case)
 
@@ -1207,15 +1212,19 @@ Cases with `expected_critic_decision: "pass"` that come back `"hard_block"` are 
 
 ### 11.5 Gate logic
 
+> **Live baseline shipped at `agent-api/evals/baseline.json`.** The example below is illustrative shape only — actual pass rates intentionally sit below 1.00 in some categories because the gate guards against regression from the *baseline*, not against a static pass-everything bar. For current values, read the live file. The shape (per-rubric `pass_rate` + `min_threshold`, plus a `per_modality` map after the Phase 9.9 expansion) is stable; the numbers move as new cases land.
+
 ```
   baseline.json  (committed; updated only via reviewed PR)
     {
-      "schema_valid":             {"pass_rate": 1.00, "min_threshold": 0.98},
-      "citation_present":         {"pass_rate": 1.00, "min_threshold": 0.98},
-      "correct_critic_decision":  {"pass_rate": 0.96, "min_threshold": 0.90},
-      "factually_consistent":     {"pass_rate": 0.94, "min_threshold": 0.85},
-      "safe_refusal":             {"pass_rate": 0.96, "min_threshold": 0.90},
-      "no_phi_in_logs":           {"pass_rate": 1.00, "min_threshold": 1.00}
+      "schema_valid":             {"pass_rate": 0.XX, "min_threshold": <live>},
+      "citation_present":         {"pass_rate": 0.XX, "min_threshold": <live>},
+      "correct_critic_decision":  {"pass_rate": 0.XX, "min_threshold": <live>},
+      "factually_consistent":     {"pass_rate": 0.XX, "min_threshold": <live>},
+      "safe_refusal":             {"pass_rate": 0.XX, "min_threshold": <live>},
+      "no_phi_in_logs":           {"pass_rate": 1.00, "min_threshold": 1.00},
+      "...":                      "see baseline.json for the full rubric set including provenance_chain, citation_iou, quarantine_audit_emitted, etc.",
+      "per_modality":             { "...": "modality-keyed pass-rate map populated by the Phase 9.9 expansion" }
     }
 
   critic_false_positive_rate:    {"max": 0.02, "tighter_than": "regression_gate"}
@@ -1244,8 +1253,8 @@ If the meta-eval cadence lapses (no human labeler named), the system follows the
 | Hook | Coverage |
 |---|---|
 | Pre-push git hook | 10-case smoke subset (one of each bucket) |
-| GitHub Actions on PR | Full 50-case run, baseline diff, pass/fail comment posted |
-| Nightly | Full 50-case run + cost/latency report, threshold drift alerts |
+| GitHub Actions on PR | Full 156-case run, baseline diff, pass/fail comment posted |
+| Nightly | Full 156-case run + cost/latency report, threshold drift alerts |
 | Quarterly | 20-case meta-eval against human labels |
 
 The grader-injected regression test: before final submission, a deliberate extraction regression is introduced in a feature branch and the gate's failure is confirmed. If it does not fail, the gate is broken and is fixed before submission.
@@ -1258,7 +1267,7 @@ The grader-injected regression test: before final submission, a deliberate extra
 |---|---|---|---|---|
 | 1 | OpenEMR FHIR Binary write fails on large PDFs | Medium | REST `/api/patient/.../document` documented fallback | File still files to chart; audit story preserved |
 | 2 | Vision hallucinates fields on blurry scans | High | OCR-region constraint always holds; value-fidelity check disabled with soft-warn below OCR confidence threshold | Worst case: response soft-warned, bboxes greyed-out, user told scan quality is low |
-| 3 | Real PHI accidentally enters eval cases | Medium | All 50 cases sourced from synthetic 25-patient panel + public guideline excerpts only | `no_phi_in_logs` rubric mechanically catches it; CI fails |
+| 3 | Real PHI accidentally enters eval cases | Medium | All 156 cases sourced from synthetic 25-patient panel + public guideline excerpts only | `no_phi_in_logs` rubric mechanically catches it; CI fails |
 | 4 | LLM-judge cost exceeds budget | Low | Haiku for 4 of 5 LLM-judged rubrics; Sonnet only on `factually_consistent`; ~$100/month total | Documented budget line |
 | 5 | LangGraph fights us on streaming, audit ContextVars | Medium | Day-1 spike; hand-rolled supervisor (~150 lines) is the fallback | No user impact; internal contingency only |
 | 6 | Single critic mode too strict in deployed app | Low | Soft-warn behaviors render as banners, not blocks; only hard-block categories block | Demo doesn't die; regression gate still bites |
@@ -1336,7 +1345,7 @@ If a post-pilot owner is not named for any subsystem, the honest-degradation pri
 |---|---|
 | Architecture Defense | This document; schema skeletons; risk register; defense pitch |
 | MVP | `POST /document/ingest`, OCR layer, classifier, lab + intake extractors, corpus indexed in pgvector, `POST /evidence/search`, smoke test on one document of each type |
-| Early Submission | Full LangGraph supervisor + workers + critic, `unknown` extractor, Cohere rerank wired, wrong-patient detection, intra-document conflict, 50-case eval suite + baseline + diff script + pre-push hook + workflow gate, deployed on Railway, UI bbox overlay, demo video |
+| Early Submission | Full LangGraph supervisor + workers + critic, `unknown` extractor, Cohere rerank wired, wrong-patient detection, intra-document conflict, 156-case eval suite + baseline + diff script + pre-push hook + workflow gate, deployed on Railway, UI bbox overlay, demo video |
 | Final | Adversarial sweep, cost/latency report, README W1/W2 split, audit catalog updated, regression-injection test confirmed, judge meta-eval baseline established, interview-ready |
 
 ---
@@ -1411,7 +1420,7 @@ If a post-pilot owner is not named for any subsystem, the honest-degradation pri
 
 | File | Purpose |
 |---|---|
-| `tests/fixtures/w2_eval_cases.py` | 50 golden cases with `expected_critic_decision` |
+| `tests/fixtures/w2_eval_cases.py` | 156 golden cases with `expected_critic_decision` |
 | `tests/test_w2_eval.py` | Parametrized runner with 6 rubric judges + critic FP rate |
 | `tests/test_classifier.py` | Classifier behavior, fast-path correctness |
 | `tests/test_extractor_lab.py` | Lab schema fill, citation resolution, fidelity |
@@ -1431,7 +1440,7 @@ If a post-pilot owner is not named for any subsystem, the honest-degradation pri
 
 | File | Change |
 |---|---|
-| `.github/workflows/copilot-eval.yml` | Extend to run 50-case W2 suite + baseline diff + critic FP rate |
+| `.github/workflows/copilot-eval.yml` | Extend to run 156-case W2 suite + baseline diff + critic FP rate |
 | `evals/baseline.json` | Committed baseline for diff |
 | `evals/diff_baseline.py` | Threshold computation script |
 | `evals/judge_credibility.json` | Quarterly meta-eval results |
@@ -1450,7 +1459,7 @@ If a post-pilot owner is not named for any subsystem, the honest-degradation pri
 
 ## 18. The One-Sentence Defense
 
-> **A multi-agent clinical agent that reads documents, cites every fact to a real source with verified value-to-bbox fidelity, refuses cleanly when uncertain, surfaces conflicts rather than silently resolving them, and is gated by a 50-case CI suite — so the user's morning brief sees the messy half of the chart she would otherwise be assembling herself.**
+> **A multi-agent clinical agent that reads documents, cites every fact to a real source with verified value-to-bbox fidelity, refuses cleanly when uncertain, surfaces conflicts rather than silently resolving them, and is gated by a 156-case CI suite — so the user's morning brief sees the messy half of the chart she would otherwise be assembling herself.**
 
 ---
 
