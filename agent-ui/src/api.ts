@@ -880,6 +880,62 @@ export async function patchCitationBbox(
   return _jsonOrThrow<CitationBboxPatchResponse>(res, 'patch citation bbox');
 }
 
+// ── Manual citation create (Feature A) ──────────────────────────────────────
+
+export type ManualCitationKind =
+  | 'medication'
+  | 'allergy'
+  | 'family_history'
+  | 'chief_concern'
+  | 'code_status'
+  | 'other';
+
+export interface ManualCitationCreateBody {
+  patient_id: string;
+  document_reference_id: string;
+  file_batch_id: string;
+  kind: ManualCitationKind;
+  value: string;
+  /** Optional second field whose semantics depend on `kind`:
+   *   - medication: dose
+   *   - allergy: reaction
+   *   - family_history: relation (REQUIRED when kind=family_history)
+   *   - other: free-form note
+   *   - chief_concern / code_status: ignored
+   */
+  extra?: string;
+  page: number;
+  bbox: [number, number, number, number];
+}
+
+export interface ManualCitationCreateResponse {
+  pending_id: number;
+  target_resource_id: string;
+  kind: string;
+  page: number;
+  bbox: [number, number, number, number];
+}
+
+/**
+ * POST /pending-extractions/manual — clinician-authored row covering
+ * something the OCR/LLM missed. Server stamps `provenance: "manual"`
+ * on the payload root; the rail card renders a 'Manual entry' pill.
+ */
+export async function createManualCitation(
+  baseUrl: string,
+  body: ManualCitationCreateBody,
+): Promise<ManualCitationCreateResponse> {
+  const res = await fetch(
+    `${baseUrl}/pending-extractions/manual`,
+    withAuth({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+  return _jsonOrThrow<ManualCitationCreateResponse>(res, 'manual citation create');
+}
+
 // ── Quarantine exports ──────────────────────────────────────────────────────
 
 /** GET /document/quarantine?state=... */

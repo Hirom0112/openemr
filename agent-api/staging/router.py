@@ -665,6 +665,256 @@ async def patch_citation_bbox(
     )
 
 
+# ── Manual citation creation (Feature A) ─────────────────────────────────────
+#
+# Lets the clinician add a field the OCR/LLM missed. They draw a box on the
+# rendered document (see frontend) and POST it here with a kind + value; we
+# materialise an IntakeFormField staging row whose payload mirrors the
+# auto-extracted shape, plus a synthesised Citation pointing at the
+# user-drawn bbox + page. ``provenance: "manual"`` is stamped on the
+# payload so the rail card renders a 'Manual entry' pill and any future
+# extraction-quality eval can exclude these rows from its counts.
+#
+# This endpoint is NOT gated by COPILOT_DEV_BBOX_LOG — it's intended as
+# a real clinician feature, not a debug aid. Production deploys accept
+# manual rows; the JWT middleware + role gate already restricts who can
+# create them.
+
+
+_MANUAL_KINDS = frozenset(
+    {"medication", "allergy", "family_history", "chief_concern", "code_status", "other"}
+)
+_CODE_STATUS_VALUES = frozenset(
+    {"full_code", "DNR", "DNI", "comfort_care", "POLST", "unknown"}
+)
+
+
+class ManualCitationCreateBody(BaseModel):
+    """Body for ``POST /pending-extractions/manual``.
+
+    ``value`` is the primary text the clinician typed; ``extra`` is the
+    optional second field whose semantics depend on ``kind``:
+
+    - medication: dose
+    - allergy: reaction
+    - family_history: relation (REQUIRED when kind=family_history)
+    - other: free-form note
+    - chief_concern / code_status: ignored
+
+    See :func:`_build_manual_payload` for the per-kind payload shape.
+    """
+
+    patient_id: str
+    document_reference_id: str
+    file_batch_id: str
+    kind: str
+    value: str
+    extra: str | None = None
+    page: int
+    bbox: list[float]
+
+
+class ManualCitationCreateResponse(BaseModel):
+    pending_id: int
+    target_resource_id: str
+    kind: str
+    page: int
+    bbox: list[float]
+
+
+def _build_manual_payload(
+    kind: str,
+    value: str,
+    extra: str | None,
+    citation: dict[str, Any],
+) -> dict[str, Any]:
+    """Construct the IntakeFormField-shaped payload for a manual row.
+
+    Each branch matches the schema's required-field set for that kind so
+    the payload round-trips through the existing approve flow without
+    needing a special manual-only writer path. ``provenance: "manual"``
+    rides at the payload root for downstream filtering.
+    """
+    base = {"provenance": "manual", "needs_review": False, "citations": [citation]}
+    if kind == "chief_concern":
+        return {**base, "value": value}
+    if kind == "medication":
+        # MedicationItem requires `name`. Treat `value` as the medication
+        # name; `extra` (when given) becomes `dose`.
+        out: dict[str, Any] = {**base, "name": value}
+        if extra:
+            out["dose"] = extra
+        return out
+    if kind == "allergy":
+        # AllergyItem requires `substance`.
+        out = {**base, "substance": value}
+        if extra:
+            out["reaction"] = extra
+        return out
+    if kind == "family_history":
+        # FamilyHistoryItem requires both `relation` AND `condition`.
+        # We map: extra = relation (asked for in the form), value = condition.
+        if not extra:
+            raise HTTPException(
+                status_code=400,
+                detail="family_history rows require `extra` (the relation, e.g. Father)",
+            )
+        return {**base, "relation": extra, "condition": value}
+    if kind == "code_status":
+        if value not in _CODE_STATUS_VALUES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"code_status value must be one of: {sorted(_CODE_STATUS_VALUES)}",
+            )
+        return {**base, "value": value}
+    if kind == "other":
+        out = {**base, "value": value}
+        if extra:
+            out["note"] = extra
+        return out
+    # Unreachable — guarded by the kind allowlist in the route.
+    raise HTTPException(status_code=400, detail=f"unsupported kind: {kind}")
+
+
+@router.post(
+    "/pending-extractions/manual",
+    response_model=ManualCitationCreateResponse,
+)
+async def create_manual_pending_extraction(
+    body: ManualCitationCreateBody,
+) -> ManualCitationCreateResponse:
+    """Stage a clinician-authored citation as a new pending row.
+
+    Validates the kind, geometry, and per-kind required fields up front
+    (400 on any failure), constructs an IntakeFormField payload that
+    matches what the LLM extractor would have produced, and writes it
+    via the same ``stage_intake_field`` helper the extractor uses. The
+    new row goes through the standard approve/reject flow.
+
+    Manual rows are tagged with ``provenance: "manual"`` at the payload
+    root (frontend renders a 'Manual entry' pill); their citations use
+    a deterministic ``manual-{patient}-{kind}-{ts}`` field_or_chunk_id
+    so they're easy to grep in audits.
+    """
+    import uuid as _uuid
+    from observations import writer as _obs_writer
+
+    rid = request_id_var.get()
+    t0 = time.perf_counter()
+    provider_id, _role = _require_mutating_role()
+
+    if body.kind not in _MANUAL_KINDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"kind must be one of: {sorted(_MANUAL_KINDS)}",
+        )
+    _validate_bbox_or_400(body.bbox, body.page)
+    if not body.value or not body.value.strip():
+        raise HTTPException(status_code=400, detail="value must not be empty")
+    if not body.patient_id.strip():
+        raise HTTPException(status_code=400, detail="patient_id must not be empty")
+    if not body.document_reference_id.strip():
+        raise HTTPException(
+            status_code=400, detail="document_reference_id must not be empty"
+        )
+
+    # Build the synthetic citation. field_or_chunk_id prefix lets us
+    # spot manual rows by ID alone in any downstream audit.
+    cit_id = f"manual-{_uuid.uuid4().hex[:12]}"
+    citation = {
+        "source_type": "document",
+        "source_id": body.document_reference_id,
+        "page_or_section": str(body.page),
+        "field_or_chunk_id": cit_id,
+        "quote_or_value": body.value.strip(),
+        "page": int(body.page),
+        "bbox": list(body.bbox),
+        "polygon": None,
+        "verification": None,
+        "nearest_label": None,
+    }
+
+    payload = _build_manual_payload(body.kind, body.value.strip(),
+                                    (body.extra or "").strip() or None, citation)
+
+    # Document id used by stage_intake_field is numeric in the typical
+    # path (`copilot:439` → 439). Strip the prefix when present; fall
+    # back to a hash of the doc-ref for non-numeric refs.
+    doc_ref = body.document_reference_id
+    doc_id_int: int
+    if doc_ref.startswith("copilot:"):
+        try:
+            doc_id_int = int(doc_ref.split(":", 1)[1])
+        except (IndexError, ValueError):
+            doc_id_int = abs(hash(doc_ref)) % (10**9)
+    else:
+        doc_id_int = abs(hash(doc_ref)) % (10**9)
+
+    # Index distinguishes multiple manual rows of the same kind on the
+    # same document. We stamp a timestamp suffix so two manuals never
+    # collide on target_resource_id.
+    field_index = int(time.time() * 1000) % 1_000_000
+
+    try:
+        pending_id = await _obs_writer.stage_intake_field(
+            document_id=str(doc_id_int),
+            patient_id=body.patient_id,
+            file_batch_id=body.file_batch_id,
+            document_reference_id=body.document_reference_id,
+            field_kind=body.kind,
+            field_index=field_index,
+            payload=payload,
+            locator=cit_id,
+            source_format="pdf",
+            request_id=rid,
+            provider_id=provider_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface as 500
+        agent_staging_endpoint_total.labels(
+            endpoint="manual_create", outcome="error"
+        ).inc()
+        _logger.error(
+            "manual_pending_create_failed",
+            extra={
+                "request_id": rid,
+                "kind": body.kind,
+                "document_reference_id": body.document_reference_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(status_code=500, detail="manual citation stage failed") from exc
+    finally:
+        agent_staging_endpoint_duration_seconds.labels(
+            endpoint="manual_create"
+        ).observe(max(0.0, time.perf_counter() - t0))
+
+    target_resource_id = (
+        f"copilot-{doc_id_int}-intake-{body.kind}-{field_index}"
+    )
+    agent_staging_endpoint_total.labels(
+        endpoint="manual_create", outcome="success"
+    ).inc()
+    _logger.info(
+        "manual_pending_created",
+        extra={
+            "request_id": rid,
+            "pending_id": pending_id,
+            "kind": body.kind,
+            "page": body.page,
+            "bbox": list(body.bbox),
+            "field_or_chunk_id": cit_id,
+            "document_reference_id": body.document_reference_id,
+        },
+    )
+    return ManualCitationCreateResponse(
+        pending_id=pending_id,
+        target_resource_id=target_resource_id,
+        kind=body.kind,
+        page=body.page,
+        bbox=list(body.bbox),
+    )
+
+
 # Reference the Request import so importlinter sees the FastAPI surface as
 # explicitly used (router endpoints rely on it via dependency injection in
 # future slices).

@@ -36,6 +36,7 @@ import {
 import {
   approveBatch,
   approveOne,
+  createManualCitation,
   patchCitationBbox,
   fetchDocumentBinary,
   fetchDocxParagraphs,
@@ -43,6 +44,7 @@ import {
   getPendingOne,
   rejectOne,
   type DocxParagraphPayload,
+  type ManualCitationKind,
   type PendingExtractionRow,
   type PostApprovalContext,
 } from '../api';
@@ -314,15 +316,20 @@ function _normalizeCitationDict(c: unknown): {
   const bbox = Array.isArray(obj.bbox) && obj.bbox.length === 4
     ? (obj.bbox as [number, number, number, number])
     : null;
-  // DOCX citations carry a synthetic `para=N` (or `para=N|run=M`) locator in
-  // page_or_section instead of a numeric page. Extract para N when present so
-  // the docx preview branch can map the citation to its real paragraph index.
+  // DOCX citations carry a synthetic `para=N` (or `para=N|run=M`) locator. Per
+  // the prose-extractor contract (intake_form_prose.py:41-45) it's emitted in
+  // `field_or_chunk_id`; `page_or_section` carries the section name. Older
+  // ingests may have emitted it in either field, so we accept both. Extract
+  // para N when present so the docx preview branch can map citation → paragraph.
   let paraIdx: number | null = null;
-  const rawLoc = typeof obj.page_or_section === 'string' ? obj.page_or_section : null;
-  if (rawLoc) {
-    const m = /\bpara=(\d+)/.exec(rawLoc);
-    if (m) paraIdx = parseInt(m[1], 10);
-  }
+  const _matchPara = (s: string | null): number | null => {
+    if (!s) return null;
+    const m = /\bpara=(\d+)/.exec(s);
+    return m ? parseInt(m[1], 10) : null;
+  };
+  paraIdx =
+    _matchPara(fieldOrChunkId) ??
+    _matchPara(typeof obj.page_or_section === 'string' ? obj.page_or_section : null);
   return { page: pageNum, bbox, fieldOrChunkId, quote, paraIdx };
 }
 
@@ -489,6 +496,17 @@ export default function DocumentReviewPanel(
   const [editedBboxes, setEditedBboxes] = useState<
     Record<string, [number, number, number, number]>
   >({});
+
+  // Feature A — manual citation create. ``creatingMode`` switches the
+  // doc-stage into draw-a-rectangle mode; on mouse-up the rectangle is
+  // captured into ``creatingDraft`` and the create-form modal opens.
+  // Submit fires POST /pending-extractions/manual and the new row is
+  // prepended to ``rows`` so the rail card appears immediately.
+  const [creatingMode, setCreatingMode] = useState(false);
+  const [creatingDraft, setCreatingDraft] = useState<{
+    bbox: [number, number, number, number];
+    page: number;
+  } | null>(null);
 
   // PDF page navigation. The user can drive this with prev/next OR by
   // clicking a field whose citation lives on a different page.
@@ -855,6 +873,57 @@ export default function DocumentReviewPanel(
     [baseUrl, cards],
   );
 
+  // ── Manual citation creation (Feature A) ──────────────────────────────
+  const onCreateDraftFromDrag = useCallback(
+    (bbox: [number, number, number, number], page: number) => {
+      setCreatingDraft({ bbox, page });
+      setCreatingMode(false);
+    },
+    [],
+  );
+
+  const onCreateCancel = useCallback(() => {
+    setCreatingDraft(null);
+    setCreatingMode(false);
+  }, []);
+
+  const onCreateSubmit = useCallback(
+    async (form: {
+      kind: ManualCitationKind;
+      value: string;
+      extra?: string;
+    }) => {
+      if (!creatingDraft) return;
+      try {
+        const resp = await createManualCitation(baseUrl, {
+          patient_id: patientId,
+          document_reference_id: documentReferenceId,
+          file_batch_id: fileBatchId,
+          kind: form.kind,
+          value: form.value,
+          extra: form.extra,
+          page: creatingDraft.page,
+          bbox: creatingDraft.bbox,
+        });
+        // Fetch the freshly-staged row so the rail picks it up. We
+        // append rather than refetch all so existing card state
+        // (active highlight, in-flight approves) isn't disturbed.
+        const newRow = await getPendingOne(baseUrl, resp.pending_id);
+        setRows((prev) => [
+          ...prev,
+          { row: newRow, state: _initialState(newRow) },
+        ]);
+        setCreatingDraft(null);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[manual-create] failed', err);
+        // Keep the draft open so the operator can edit + retry.
+        throw err;
+      }
+    },
+    [baseUrl, creatingDraft, documentReferenceId, fileBatchId, patientId],
+  );
+
   // ── Bulk actions ───────────────────────────────────────────────────────
   const liveRows = useMemo(
     () => rows.filter((r) => r.state.status !== 'done'),
@@ -1084,6 +1153,9 @@ export default function DocumentReviewPanel(
           onBboxOptimistic={onBboxOptimistic}
           onBboxCommit={onBboxCommit}
           readOnly={readOnly}
+          creatingMode={creatingMode}
+          setCreatingMode={setCreatingMode}
+          onCreateDraftFromDrag={onCreateDraftFromDrag}
         />
 
         <aside className="cdr-rail">
@@ -1164,6 +1236,14 @@ export default function DocumentReviewPanel(
           )}
         </aside>
       </div>
+
+      {creatingDraft && (
+        <ManualCreateForm
+          draft={creatingDraft}
+          onCancel={onCreateCancel}
+          onSubmit={onCreateSubmit}
+        />
+      )}
     </div>
   );
 }
@@ -1203,6 +1283,12 @@ interface DocViewerProps {
     deltaPx: { dx: number; dy: number; dw: number; dh: number },
   ) => Promise<void>;
   readOnly: boolean;
+  creatingMode: boolean;
+  setCreatingMode: (next: boolean) => void;
+  onCreateDraftFromDrag: (
+    bbox: [number, number, number, number],
+    page: number,
+  ) => void;
 }
 
 interface PageGeometry {
@@ -1237,6 +1323,9 @@ function DocViewer(p: DocViewerProps): ReactElement {
     onBboxOptimistic,
     onBboxCommit,
     readOnly,
+    creatingMode,
+    setCreatingMode,
+    onCreateDraftFromDrag,
   } = p;
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1378,15 +1467,32 @@ function DocViewer(p: DocViewerProps): ReactElement {
             <ZoomInIcon />
           </button>
           {!readOnly && (
-            <button
-              type="button"
-              className={`cdr-btn cdr-btn-edit-toggle${editMode ? ' cdr-btn-edit-toggle-active' : ''}`}
-              onClick={() => setEditMode(!editMode)}
-              title="Reshape citation boxes (E)"
-              aria-pressed={editMode}
-            >
-              {editMode ? 'Done' : 'Edit boxes'}
-            </button>
+            <>
+              <button
+                type="button"
+                className={`cdr-btn cdr-btn-edit-toggle${editMode ? ' cdr-btn-edit-toggle-active' : ''}`}
+                onClick={() => {
+                  setEditMode(!editMode);
+                  setCreatingMode(false);
+                }}
+                title="Reshape citation boxes (E)"
+                aria-pressed={editMode}
+              >
+                {editMode ? 'Done' : 'Edit boxes'}
+              </button>
+              <button
+                type="button"
+                className={`cdr-btn cdr-btn-create-toggle${creatingMode ? ' cdr-btn-create-toggle-active' : ''}`}
+                onClick={() => {
+                  setCreatingMode(!creatingMode);
+                  setEditMode(false);
+                }}
+                title="Add a manual citation"
+                aria-pressed={creatingMode}
+              >
+                {creatingMode ? 'Cancel' : '+ Add field'}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -1416,6 +1522,13 @@ function DocViewer(p: DocViewerProps): ReactElement {
                   editedBboxes={editedBboxes}
                   onBboxOptimistic={onBboxOptimistic}
                   onBboxCommit={onBboxCommit}
+                />
+              )}
+              {pageGeom && creatingMode && (
+                <CreateLayer
+                  geom={pageGeom}
+                  page={activePage}
+                  onCreated={onCreateDraftFromDrag}
                 />
               )}
             </div>
@@ -1451,6 +1564,13 @@ function DocViewer(p: DocViewerProps): ReactElement {
                   editedBboxes={editedBboxes}
                   onBboxOptimistic={onBboxOptimistic}
                   onBboxCommit={onBboxCommit}
+                />
+              )}
+              {pageGeom && creatingMode && (
+                <CreateLayer
+                  geom={pageGeom}
+                  page={activePage}
+                  onCreated={onCreateDraftFromDrag}
                 />
               )}
             </div>
@@ -1803,6 +1923,303 @@ function CitationBox(p: CitationBoxProps): ReactElement {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// CreateLayer — drag-to-draw a new bbox for a manual citation
+// ────────────────────────────────────────────────────────────────────────────
+
+interface CreateLayerProps {
+  geom: PageGeometry;
+  page: number;
+  onCreated: (
+    bbox: [number, number, number, number],
+    page: number,
+  ) => void;
+}
+
+function CreateLayer(p: CreateLayerProps): ReactElement {
+  const { geom, page, onCreated } = p;
+  const sx = geom.renderWidth / geom.sourceWidth;
+  const sy = geom.renderHeight / geom.sourceHeight;
+  // Internal CSS-pixel rect tracked from pointer events. We convert to
+  // PDF points only on commit; intermediate frames stay in canvas-px
+  // for cheap rendering.
+  const [draft, setDraft] = useState<{
+    sxp: number;
+    syp: number;
+    expx: number;
+    eypx: number;
+  } | null>(null);
+
+  const layerRef = useRef<HTMLDivElement | null>(null);
+
+  const localFromEvent = (e: React.PointerEvent<HTMLDivElement>): { x: number; y: number } | null => {
+    const layer = layerRef.current;
+    if (!layer) return null;
+    const r = layer.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+
+  const onDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    e.preventDefault();
+    const local = localFromEvent(e);
+    if (!local) return;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    setDraft({ sxp: local.x, syp: local.y, expx: local.x, eypx: local.y });
+  };
+
+  const onMove = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (!draft) return;
+    const local = localFromEvent(e);
+    if (!local) return;
+    setDraft({ ...draft, expx: local.x, eypx: local.y });
+  };
+
+  const onUp = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (!draft) return;
+    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    const xPx = Math.min(draft.sxp, draft.expx);
+    const yPx = Math.min(draft.syp, draft.eypx);
+    const wPx = Math.abs(draft.expx - draft.sxp);
+    const hPx = Math.abs(draft.eypx - draft.syp);
+    setDraft(null);
+    // Convert px → PDF points; bail if the rectangle is below the
+    // backend's 5pt floor so the operator doesn't get a 400.
+    const xPt = xPx / sx;
+    const yPt = yPx / sy;
+    const wPt = wPx / sx;
+    const hPt = hPx / sy;
+    if (wPt < _BBOX_MIN_PT || hPt < _BBOX_MIN_PT) return;
+    onCreated(
+      [
+        Number(xPt.toFixed(3)),
+        Number(yPt.toFixed(3)),
+        Number(wPt.toFixed(3)),
+        Number(hPt.toFixed(3)),
+      ],
+      page,
+    );
+  };
+
+  // Live preview rect (in CSS px relative to the doc-page).
+  const previewLeft = draft ? Math.min(draft.sxp, draft.expx) : 0;
+  const previewTop = draft ? Math.min(draft.syp, draft.eypx) : 0;
+  const previewW = draft ? Math.abs(draft.expx - draft.sxp) : 0;
+  const previewH = draft ? Math.abs(draft.eypx - draft.syp) : 0;
+
+  return (
+    <div
+      ref={layerRef}
+      className="cdr-create-layer"
+      onPointerDown={onDown}
+      onPointerMove={onMove}
+      onPointerUp={onUp}
+      role="presentation"
+    >
+      {draft && previewW > 0 && previewH > 0 && (
+        <div
+          className="cdr-create-preview"
+          style={{
+            left: previewLeft,
+            top: previewTop,
+            width: previewW,
+            height: previewH,
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// ManualCreateForm — modal that captures kind + value for a hand-drawn box
+// ────────────────────────────────────────────────────────────────────────────
+
+interface ManualCreateFormProps {
+  draft: { bbox: [number, number, number, number]; page: number };
+  onCancel: () => void;
+  onSubmit: (form: {
+    kind: ManualCitationKind;
+    value: string;
+    extra?: string;
+  }) => Promise<void>;
+}
+
+function ManualCreateForm(p: ManualCreateFormProps): ReactElement {
+  const { draft, onCancel, onSubmit } = p;
+  const [kind, setKind] = useState<ManualCitationKind>('medication');
+  const [value, setValue] = useState('');
+  const [extra, setExtra] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const extraLabel = (() => {
+    switch (kind) {
+      case 'medication': return 'Dose (optional)';
+      case 'allergy': return 'Reaction (optional)';
+      case 'family_history': return 'Relation (Father / Mother / Sibling)';
+      case 'other': return 'Note (optional)';
+      default: return '';
+    }
+  })();
+  const showExtra = extraLabel !== '';
+  const valueLabel = (() => {
+    switch (kind) {
+      case 'medication': return 'Medication name';
+      case 'allergy': return 'Substance';
+      case 'family_history': return 'Condition';
+      case 'chief_concern': return 'Reason for visit';
+      case 'code_status': return 'Code status';
+      case 'other': return 'Description';
+    }
+  })();
+
+  const submit = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
+    e.preventDefault();
+    setError(null);
+    if (!value.trim()) {
+      setError('Please enter a value.');
+      return;
+    }
+    if (kind === 'family_history' && !extra.trim()) {
+      setError('Family history rows need a relation (Father, Mother, Sibling, …).');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await onSubmit({
+        kind,
+        value: value.trim(),
+        extra: extra.trim() || undefined,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Create failed.');
+      setSubmitting(false);
+      return;
+    }
+    setSubmitting(false);
+  };
+
+  return (
+    <div
+      className="cdr-modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Add manual citation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !submitting) onCancel();
+      }}
+    >
+      <form className="cdr-modal" onSubmit={submit}>
+        <div className="cdr-modal-header">
+          <span className="cdr-modal-title">Add manual citation</span>
+          <button
+            type="button"
+            className="cdr-btn cdr-btn-ghost cdr-btn-icon"
+            onClick={onCancel}
+            disabled={submitting}
+            aria-label="Cancel"
+          >
+            <CloseIcon />
+          </button>
+        </div>
+        <div className="cdr-modal-meta">
+          Page {draft.page} · {Math.round(draft.bbox[2])} × {Math.round(draft.bbox[3])} pt
+          at ({Math.round(draft.bbox[0])}, {Math.round(draft.bbox[1])})
+        </div>
+
+        <div className="cdr-modal-body">
+          <label className="cdr-modal-label">
+            <span>Field type</span>
+            <select
+              className="cdr-field-input"
+              value={kind}
+              disabled={submitting}
+              onChange={(e) => setKind(e.target.value as ManualCitationKind)}
+            >
+              <option value="medication">Medication</option>
+              <option value="allergy">Allergy</option>
+              <option value="family_history">Family history</option>
+              <option value="chief_concern">Chief concern</option>
+              <option value="code_status">Code status</option>
+              <option value="other">Other / Custom</option>
+            </select>
+          </label>
+
+          <label className="cdr-modal-label">
+            <span>{valueLabel}</span>
+            {kind === 'chief_concern' || kind === 'other' ? (
+              <textarea
+                className="cdr-field-input"
+                value={value}
+                disabled={submitting}
+                rows={3}
+                autoFocus
+                onChange={(e) => setValue(e.target.value)}
+              />
+            ) : kind === 'code_status' ? (
+              <select
+                className="cdr-field-input"
+                value={value || 'full_code'}
+                disabled={submitting}
+                onChange={(e) => setValue(e.target.value)}
+              >
+                <option value="full_code">full_code</option>
+                <option value="DNR">DNR</option>
+                <option value="DNI">DNI</option>
+                <option value="comfort_care">comfort_care</option>
+                <option value="POLST">POLST</option>
+                <option value="unknown">unknown</option>
+              </select>
+            ) : (
+              <input
+                type="text"
+                className="cdr-field-input"
+                value={value}
+                disabled={submitting}
+                autoFocus
+                onChange={(e) => setValue(e.target.value)}
+              />
+            )}
+          </label>
+
+          {showExtra && (
+            <label className="cdr-modal-label">
+              <span>{extraLabel}</span>
+              <input
+                type="text"
+                className="cdr-field-input"
+                value={extra}
+                disabled={submitting}
+                onChange={(e) => setExtra(e.target.value)}
+              />
+            </label>
+          )}
+
+          {error && <div role="alert" className="cdr-modal-error">{error}</div>}
+        </div>
+
+        <div className="cdr-modal-footer">
+          <button
+            type="button"
+            className="cdr-btn"
+            onClick={onCancel}
+            disabled={submitting}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="cdr-btn cdr-btn-action-approve"
+            disabled={submitting}
+          >
+            {submitting ? 'Saving…' : 'Add citation'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // DocxParagraphList — DOCX fallback inside the doc-page frame
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -1883,6 +2300,7 @@ function FieldCard(p: FieldCardProps): ReactElement {
   const lr = card.parent;
   const status = lr.state.status;
   const decision = lr.state.decision;
+  const isManual = _isManualRow(lr.row);
   const cardClasses = [
     'cdr-field',
     active ? 'cdr-field-active' : '',
@@ -1890,6 +2308,7 @@ function FieldCard(p: FieldCardProps): ReactElement {
     status === 'done' && decision === 'rejected' ? 'cdr-field-rejected' : '',
     status === 'error' ? 'cdr-field-error' : '',
     readOnly ? 'cdr-field-readonly' : '',
+    isManual ? 'cdr-field-manual' : '',
   ].filter(Boolean).join(' ');
 
   const inputDisabled = readOnly || busy || status === 'busy' || status === 'done';
@@ -1915,6 +2334,11 @@ function FieldCard(p: FieldCardProps): ReactElement {
     >
       <div className="cdr-field-row-1">
         <span className="cdr-field-label">{labelText}</span>
+        {isManual && (
+          <span className="cdr-field-manual-pill" title="Clinician-added citation">
+            Manual
+          </span>
+        )}
         <span className="cdr-field-citation">{citationChip}</span>
       </div>
 
@@ -1992,8 +2416,42 @@ function FieldEditor(p: FieldEditorInnerProps): ReactElement {
     case 'family_history': return <FamilyHistoryInputs {...p} />;
     case 'code_status': return <CodeStatusInputs {...p} />;
     case 'lab': return <LabInputs {...p} />;
+    case 'other': return <OtherInputs {...p} />;
     default: return <RawJsonInputs {...p} />;
   }
+}
+
+function OtherInputs(p: FieldEditorInnerProps): ReactElement {
+  const payload = p.lr.row.payload as Record<string, unknown>;
+  const initialValue = typeof payload.value === 'string' ? payload.value : '';
+  const initialNote = typeof payload.note === 'string' ? payload.note : '';
+  const [val, setVal] = useState(initialValue);
+  const [note, setNote] = useState(initialNote);
+  useEffect(() => {
+    const next: Record<string, unknown> = { ...payload, value: val, note };
+    p.onValueChange(p.lr.row.id, next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [val, note]);
+  return (
+    <>
+      <textarea
+        className="cdr-field-input"
+        rows={2}
+        value={val}
+        placeholder="Description"
+        disabled={p.disabled}
+        onChange={(e) => setVal(e.target.value)}
+      />
+      <textarea
+        className="cdr-field-input"
+        rows={2}
+        value={note}
+        placeholder="Note (optional)"
+        disabled={p.disabled}
+        onChange={(e) => setNote(e.target.value)}
+      />
+    </>
+  );
 }
 
 function _emitIntake(
@@ -2270,8 +2728,14 @@ function _labelFor(row: PendingExtractionRow): string {
       const code = row.payload as { code?: { coding?: Array<{ display?: string }> } };
       return code.code?.coding?.[0]?.display ?? 'Lab Value';
     }
+    case 'other': return 'Custom Entry';
     default: return row.target_resource_type;
   }
+}
+
+function _isManualRow(row: PendingExtractionRow): boolean {
+  const p = row.payload as { provenance?: unknown };
+  return p.provenance === 'manual';
 }
 
 function _confidenceFor(row: PendingExtractionRow): { level: 'high' | 'med' | 'low'; label: string } | null {
@@ -2715,6 +3179,132 @@ const REVIEW_CSS = `
   background: var(--warn);
   color: #fff;
   border-color: var(--warn);
+}
+
+/* Feature A — manual citation create */
+.cdr-btn-create-toggle {
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  background: var(--surface);
+  color: var(--accent);
+  font-weight: 500;
+  margin-left: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cdr-btn-create-toggle:hover { background: var(--accent-soft); }
+.cdr-btn-create-toggle-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.cdr-create-layer {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  background: rgba(28, 61, 46, 0.04);
+  z-index: 3;
+}
+.cdr-create-preview {
+  position: absolute;
+  border: 2px dashed var(--accent);
+  background: rgba(28, 61, 46, 0.10);
+  pointer-events: none;
+}
+
+/* Manual entry pill on the rail card */
+.cdr-field-manual-pill {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+}
+.cdr-field-manual {
+  border-left: 3px solid var(--accent);
+}
+
+/* Modal — manual create form */
+.cdr-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.cdr-modal {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 48px rgba(15, 23, 42, 0.25);
+  overflow: hidden;
+}
+.cdr-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.cdr-modal-title {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--ink);
+  flex: 1;
+}
+.cdr-modal-meta {
+  padding: 8px 18px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-tint);
+}
+.cdr-modal-body {
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cdr-modal-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+.cdr-modal-error {
+  font-size: 12px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--danger);
+}
+.cdr-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-tint);
 }
 
 .cdr-docx-list {
