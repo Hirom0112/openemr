@@ -1143,7 +1143,7 @@ export default function DocumentReviewPanel(
             </button>
             <ChevronIcon />
             <span className="cdr-breadcrumb-current">
-              {fileBatchId ? `Batch ${_truncate(fileBatchId, 12)}` : 'Document'}
+              {_documentLabel(rows) ?? (fileBatchId ? `Batch ${_truncate(fileBatchId, 12)}` : 'Document')}
             </span>
           </nav>
           <span className="cdr-doc-meta">
@@ -2989,6 +2989,51 @@ function _confidenceFor(row: PendingExtractionRow): { level: 'high' | 'med' | 'l
 function _truncate(s: string, n: number): string {
   if (s.length <= n) return s;
   return `${s.slice(0, n - 1)}…`;
+}
+
+/**
+ * Build a human breadcrumb label like "Whitaker Lab Report" or
+ * "Reyes Intake Form" from the loaded rows. Walks demographics for
+ * the patient's last name; falls back to extraction-kind shape when
+ * no demographics card is present. Returns null when there's nothing
+ * useful to render — caller falls back to the opaque "Batch …" string.
+ */
+function _documentLabel(rows: LoadedRow[]): string | null {
+  if (rows.length === 0) return null;
+  let lastName = '';
+  for (const r of rows) {
+    if (_kindFromRow(r.row) !== 'demographics') continue;
+    const p = r.row.payload as {
+      demographics?: { name?: { value?: unknown } };
+    };
+    const fullName = _str(p.demographics?.name?.value);
+    if (!fullName) continue;
+    // "WHITAKER, JAMES" → "Whitaker", "Margaret Chen" → "Chen",
+    // "MARGARET L. CHEN" → "Chen".
+    const comma = fullName.indexOf(',');
+    if (comma > 0) {
+      lastName = fullName.slice(0, comma).trim();
+    } else {
+      const parts = fullName.trim().split(/\s+/);
+      lastName = parts[parts.length - 1] ?? '';
+    }
+    break;
+  }
+  let kind: string | null = null;
+  for (const r of rows) {
+    const k = _kindFromRow(r.row);
+    if (k === 'lab') { kind = 'Lab Report'; break; }
+    if (k !== 'demographics' && k !== 'other') {
+      kind = 'Intake Form';
+      break;
+    }
+  }
+  if (!kind) kind = 'Document';
+  if (lastName) {
+    const titled = lastName.charAt(0).toUpperCase() + lastName.slice(1).toLowerCase();
+    return `${titled} ${kind}`;
+  }
+  return kind;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
