@@ -1,7 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, type ReactElement } from 'react';
 import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff, refreshCensus, fetchPostIngestContext, sendDocumentChatMessage } from '../api';
-import type { HandoffSummaryPayload, GuidelineSnippet, PostApprovalContext, SynthesisOutput, FactCitation } from '../api';
+import type { HandoffSummaryPayload, GuidelineSnippet, PostApprovalContext, SynthesisOutput, FactCitation, CitationIndexEntry } from '../api';
 import PostIngestContextCard from './PostIngestContextCard';
+import GuidelineSnippetModal, { type GuidelineSnippetModalData } from './GuidelineSnippetModal';
 import type { AgentResponse, CensusPatient, ErrorClass, HandoffData, HandoffPatient } from '../types';
 import ResponseRenderer from './ResponseRenderer';
 import { RED, AMB, NEU, BRAND, SURFACE, cardStyle, secondaryButtonStyle } from '../styles/tokens';
@@ -562,6 +563,10 @@ export default function ChatSurface({
     pdfUrl?: string;
     pdfBytes?: ArrayBuffer;
   } | null>(null);
+  // Drill-in modal for guideline:* citation chips on the synthesis card.
+  // Resolved via metadata.citation_index emitted by /post-approval-context.
+  const [guidelineModalSnippet, setGuidelineModalSnippet] =
+    useState<GuidelineSnippetModalData | null>(null);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
@@ -656,12 +661,39 @@ export default function ChatSurface({
       }
       return out;
     })();
+    // Build a fallback citation list from the post-approval-context
+    // `fact_citations` map. This works whether or not the session has a
+    // docChatContextRef stash — the ref is only populated on fresh-upload
+    // flows, so approvals from the DocumentsTab on already-pending docs
+    // would otherwise have no citations to render. Filter to document /
+    // observation source types — guideline citations have no PDF bbox so
+    // they don't belong in the W2 chip recap.
+    const factCitationsMap = ctx.fact_citations ?? {};
+    const factDerivedCitations: W2Citation[] = Object.values(factCitationsMap)
+      .filter((fc) => fc.source_type === 'document' || fc.source_type === 'observation')
+      .map((fc) => ({
+        source_type: fc.source_type as 'document' | 'observation',
+        source_id: fc.source_id,
+        page_or_section: fc.page_or_section ?? '',
+        field_or_chunk_id: fc.field_or_chunk_id ?? '',
+        quote_or_value: fc.quote_or_value ?? '',
+        ...(fc.page != null ? { page: fc.page } : {}),
+        ...(fc.bbox != null ? { bbox: fc.bbox } : {}),
+        label: fc.quote_or_value ?? undefined,
+      }) as W2Citation);
+    // Prefer ref-derived citations when present — they include richer
+    // fields like polygon and label decoration from
+    // decorateCitationsWithLabels. fact_citations is the no-session-ref
+    // fallback (DocumentsTab approvals on already-pending docs).
+    const refDerivedDocCitations = (extForMeta?.citations ?? [])
+      .filter((c) => c.source_type === 'document' || c.source_type === 'observation');
+    const allMsgACitations: W2Citation[] = refDerivedDocCitations.length > 0
+      ? refDerivedDocCitations
+      : factDerivedCitations;
     // Gate: only emit the chip-recap message when there are document-scoped
     // citations to render. Otherwise the chip block returns null and we'd
     // be inserting an empty assistant bubble.
-    const hasUsefulCitations = !!extForMeta
-      && Array.isArray(extForMeta.citations)
-      && extForMeta.citations.some((c) => (c.source_type === 'document' || c.source_type === 'observation'));
+    const hasUsefulCitations = allMsgACitations.length > 0;
     setMessages((prev) => {
       // Find the prior post-ingest message for this refKey so we can copy
       // its staging metadata (file_batch_id + pending_extraction_ids) onto
@@ -687,6 +719,25 @@ export default function ChatSurface({
       // can route to the right bbox / read-only panel without a speculative
       // match against the row_id.
       const factCitations = ctx.fact_citations;
+      // citation_index is the unified chip-resolution map (fact:* + guideline:*).
+      // Lives on metadata.citation_index per the post-approval-context contract;
+      // narrow defensively because metadata is typed as Record<string, unknown>.
+      const citationIndex: Record<string, CitationIndexEntry> | undefined = (() => {
+        const raw = (ctx.metadata as { citation_index?: unknown } | undefined)?.citation_index;
+        if (!raw || typeof raw !== 'object') return undefined;
+        return raw as Record<string, CitationIndexEntry>;
+      })();
+      // When extForMeta is null (no fresh-upload session ref) the chip block
+      // gets a synthetic extraction carrying just the citations derived from
+      // fact_citations. ocr_layout / pdf_url / pdf_bytes are absent in that
+      // case — chip clicks then route via canOpenReadOnlyReview when
+      // stagingMeta resolved, or fall through to setViewerSource without a
+      // bbox overlay. The chips still RENDER and convey the citations even
+      // if click is incomplete; that's the accepted v1 degradation when
+      // there's no session ref.
+      const msgAExtraction: ExtractionPayload = extForMeta
+        ? { ...extForMeta, citations: allMsgACitations }
+        : { citations: allMsgACitations };
       const msgA = hasUsefulCitations
         ? {
             id: `assistant-post-approval-chips-${refKey}-${now}`,
@@ -698,9 +749,10 @@ export default function ChatSurface({
               citations: [],
               metadata: {
                 no_auto_collapse: true,
-                ...(extForMeta ? { extraction: extForMeta } : {}),
+                extraction: msgAExtraction,
                 ...(stagingMeta ? { staging: stagingMeta } : {}),
                 ...(factCitations ? { fact_citations: factCitations } : {}),
+                ...(citationIndex ? { citation_index: citationIndex } : {}),
               },
             },
           }
@@ -733,6 +785,10 @@ export default function ChatSurface({
             // Authoritative citation resolution map (preferred over the
             // speculative source_id == row_id match in the click handler).
             ...(factCitations ? { fact_citations: factCitations } : {}),
+            // Unified citation index: includes fact:* entries (mirrors
+            // fact_citations) plus guideline:* entries with full chunk
+            // content for the GuidelineSnippetModal drill-in.
+            ...(citationIndex ? { citation_index: citationIndex } : {}),
           },
         },
       };
@@ -1942,6 +1998,11 @@ export default function ChatSurface({
                           | { fact_citations?: Record<string, FactCitation> }
                           | undefined
                       )?.fact_citations;
+                      const citationIndexMap = (
+                        msg.response?.metadata as
+                          | { citation_index?: Record<string, CitationIndexEntry> }
+                          | undefined
+                      )?.citation_index;
                       const handleSynthesisCitationClick = (citationId: string): void => {
                         const firstColon = citationId.indexOf(':');
                         if (firstColon === -1) {
@@ -1952,7 +2013,32 @@ export default function ChatSurface({
                         const remainder = citationId.slice(firstColon + 1);
                         const resolved: FactCitation | undefined = factCitationMap?.[citationId];
                         if (prefix === 'guideline') {
-                          // No-op; chip exposes the chunk_id via title.
+                          // Drill-in modal: look up the rich entry from
+                          // metadata.citation_index. The fact_citations map
+                          // also has guideline:* entries but they truncate
+                          // content to 200 chars (chip-tooltip path) — the
+                          // modal needs the full chunk text. When the index
+                          // is absent (older agent-api builds) fall back to
+                          // exposing the chunk_id only.
+                          const entry = citationIndexMap?.[citationId];
+                          if (entry && entry.kind === 'guideline') {
+                            setGuidelineModalSnippet({
+                              chunk_id: entry.chunk_id,
+                              document_title: entry.document_title,
+                              section: entry.section,
+                              page_number: entry.page_number,
+                              content: entry.content,
+                            });
+                          } else {
+                            const chunkId = remainder;
+                            setGuidelineModalSnippet({
+                              chunk_id: chunkId,
+                              document_title: null,
+                              section: null,
+                              page_number: null,
+                              content: null,
+                            });
+                          }
                           return;
                         }
                         if (prefix === 'fact') {
@@ -2346,6 +2432,12 @@ export default function ChatSurface({
           onActiveIndexChange={(idx) => setViewerSource((cur) => (cur ? { ...cur, activeIndex: idx } : cur))}
           bboxLayout={viewerSource.bboxLayout}
           onClose={() => setViewerSource(null)}
+        />
+      )}
+      {guidelineModalSnippet && (
+        <GuidelineSnippetModal
+          snippet={guidelineModalSnippet}
+          onClose={() => setGuidelineModalSnippet(null)}
         />
       )}
       {/* Phase 2: ApprovalModal mount lifted to App.tsx so DocumentsTab can

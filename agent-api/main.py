@@ -4549,6 +4549,28 @@ async def document_post_approval_context(
             },
         )
 
+        # Build citation_index for the synthesis-card chip-click flow. This is
+        # a sibling to ``fact_citations`` (same fact:* keys, identical shape)
+        # plus a richer, modal-ready record for guideline:* keys carrying the
+        # full chunk content + section/page/title (the modal renders these
+        # without a 200-char truncation). Kept under metadata.* per the
+        # post-approval spec so the UI has a single discoverable surface for
+        # chip → bbox / chip → modal routing.
+        citation_index: dict[str, dict[str, Any]] = {}
+        for _cid, _entry in fact_citations.items():
+            if _cid.startswith("fact:"):
+                citation_index[_cid] = dict(_entry)
+        for snippet in guideline_snippets:
+            citation_index[f"guideline:{snippet.chunk_id}"] = {
+                "kind": "guideline",
+                "chunk_id": snippet.chunk_id,
+                "source_id": snippet.source_id or None,
+                "document_title": snippet.document_title or None,
+                "section": snippet.section or None,
+                "page_number": snippet.page_number,
+                "content": snippet.content or None,
+            }
+
         return {
             "summary": summary,
             "query_used": query,
@@ -4562,6 +4584,7 @@ async def document_post_approval_context(
                 "synthesis_cache": outcome.cache,
                 "synthesis_attempts": outcome.attempts,
                 "synthesis_fallback_reason": outcome.fallback_reason,
+                "citation_index": citation_index,
             },
         }
     except Exception:

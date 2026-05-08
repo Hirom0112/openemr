@@ -1179,6 +1179,33 @@ export interface FactCitation {
   bbox?: [number, number, number, number] | null;
 }
 
+/**
+ * Discriminated union for entries in
+ * {@link PostIngestContextResponse.metadata.citation_index}. fact:* entries
+ * mirror the W2 Citation shape (no `kind` discriminator); guideline:* entries
+ * carry the full chunk content + section/page/title for the snippet modal.
+ */
+export type CitationIndexEntry =
+  | {
+      kind?: undefined;
+      source_type: string;
+      source_id: string;
+      page_or_section?: string | null;
+      field_or_chunk_id?: string | null;
+      quote_or_value?: string | null;
+      page?: number | null;
+      bbox?: [number, number, number, number] | null;
+    }
+  | {
+      kind: 'guideline';
+      chunk_id: string;
+      source_id: string | null;
+      document_title: string | null;
+      section: string | null;
+      page_number: number | null;
+      content: string | null;
+    };
+
 export interface PostIngestContextResponse {
   summary: string;
   query_used: string;
