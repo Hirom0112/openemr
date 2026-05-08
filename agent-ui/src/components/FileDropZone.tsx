@@ -34,6 +34,7 @@ import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactEle
 import {
   IngestStructuredError,
   ingestDocumentWithResult,
+  type DuplicateIngestPayload,
   type IngestResponse,
   type IngestResult,
   type QuarantineIngestPayload,
@@ -80,6 +81,13 @@ export interface FileDropZoneProps {
   onStaged?: (staging: StagingMetadata, response: IngestResponse, file: File) => void;
   /** Slice 9.8: notified when the server quarantined the upload (HTTP 202). */
   onQuarantined?: (payload: QuarantineIngestPayload, file: File) => void;
+  /**
+   * Notified when the server reports a content-hash duplicate (HTTP 202 with
+   * `status: "processing"`) — the document was already ingested for this
+   * patient, no quarantine, no new work. ChatSurface mounts an info card
+   * pointing the operator to the Documents tab.
+   */
+  onDuplicate?: (payload: DuplicateIngestPayload, file: File) => void;
   disabled?: boolean;
   docTypeHint?: string;
 }
@@ -97,6 +105,7 @@ export type DropzoneState =
   | 'committed'
   | 'staged'
   | 'quarantined'
+  | 'duplicate'
   | 'failed';
 
 /**
@@ -170,7 +179,7 @@ function _copyForError(err: unknown): string {
 }
 
 export default function FileDropZone(props: FileDropZoneProps): ReactElement {
-  const { baseUrl, patientId, onExtraction, onStaged, onQuarantined, disabled, docTypeHint } = props;
+  const { baseUrl, patientId, onExtraction, onStaged, onQuarantined, onDuplicate, disabled, docTypeHint } = props;
   const [isDragOver, setIsDragOver] = useState(false);
   const [state, setState] = useState<DropzoneState>('idle');
   const [stateNote, setStateNote] = useState<string | null>(null);
@@ -259,10 +268,16 @@ export default function FileDropZone(props: FileDropZoneProps): ReactElement {
           // outside this surface.
           onExtraction(result.response, file);
         }
-      } else {
+      } else if (result.kind === 'quarantined') {
         setState('quarantined');
         record({ name: 'dropzone_upload_outcome', outcome: 'quarantined', filename_hash: filenameHash, duration_ms: elapsed, reason_code: result.payload.reason_code });
         if (onQuarantined) onQuarantined(result.payload, file);
+      } else {
+        // result.kind === 'duplicate' — content-hash collision; the document
+        // is already ingested (or in flight) for this patient.
+        setState('duplicate');
+        record({ name: 'dropzone_upload_outcome', outcome: 'duplicate', filename_hash: filenameHash, duration_ms: elapsed });
+        if (onDuplicate) onDuplicate(result.payload, file);
       }
     } catch (err: unknown) {
       stillUploading = false;
@@ -280,7 +295,7 @@ export default function FileDropZone(props: FileDropZoneProps): ReactElement {
         reason_code: err instanceof IngestStructuredError ? (err.subCode ?? `http_${err.status}`) : 'exception',
       });
     }
-  }, [baseUrl, patientId, docTypeHint, onExtraction, onStaged, onQuarantined]);
+  }, [baseUrl, patientId, docTypeHint, onExtraction, onStaged, onQuarantined, onDuplicate]);
 
   // Document-level dragover/drop listeners so the overlay catches drops
   // anywhere inside the chat surface (not just on the small pill). Without
@@ -375,6 +390,7 @@ export default function FileDropZone(props: FileDropZoneProps): ReactElement {
       case 'committed': return 'Document ingested';
       case 'staged': return 'Staged for approval';
       case 'quarantined': return 'Held for manual review';
+      case 'duplicate': return 'Already in patient record';
       case 'failed': return 'Upload failed';
       case 'idle':
       default:

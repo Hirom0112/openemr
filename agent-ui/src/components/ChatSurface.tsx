@@ -14,8 +14,9 @@ import DocumentViewer from './DocumentViewer';
 import FileDropZone from './FileDropZone';
 import ApprovalModal from './ApprovalModal';
 import QuarantineCard from './QuarantineCard';
+import DuplicateDocumentCard from './DuplicateDocumentCard';
 import { laneFromFilename } from './LaneChip';
-import type { IngestResponse, QuarantineIngestPayload, StagingMetadata } from '../api';
+import type { DuplicateIngestPayload, IngestResponse, QuarantineIngestPayload, StagingMetadata } from '../api';
 import type { Lane } from '../styles/tokens';
 import type { Citation as W2Citation, BboxLayoutBlock, SoftWarn } from '../types/citation';
 
@@ -580,6 +581,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   // header can render the matching LaneChip.
   const [pendingApproval, setPendingApproval] = useState<{ staging: StagingMetadata; lane: Lane | null } | null>(null);
   const [pendingQuarantine, setPendingQuarantine] = useState<{ payload: QuarantineIngestPayload; lane: Lane | null } | null>(null);
+  const [pendingDuplicate, setPendingDuplicate] = useState<{ payload: DuplicateIngestPayload; lane: Lane | null } | null>(null);
 
   const handleStaged = useCallback((staging: StagingMetadata, _resp: IngestResponse, file: File): void => {
     setPendingApproval({ staging, lane: laneFromFilename(file.name) });
@@ -587,6 +589,10 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
 
   const handleQuarantined = useCallback((payload: QuarantineIngestPayload, file: File): void => {
     setPendingQuarantine({ payload, lane: laneFromFilename(file.name) });
+  }, []);
+
+  const handleDuplicate = useCallback((payload: DuplicateIngestPayload, file: File): void => {
+    setPendingDuplicate({ payload, lane: laneFromFilename(file.name) });
   }, []);
 
   // When a NEW finalized assistant message arrives, collapse all prior assistant messages.
@@ -1783,6 +1789,7 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
             onExtraction={handleIngestExtraction}
             onStaged={handleStaged}
             onQuarantined={handleQuarantined}
+            onDuplicate={handleDuplicate}
           />
         </div>
 
@@ -1852,6 +1859,26 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
             payload={pendingQuarantine.payload}
             lane={pendingQuarantine.lane}
             onClose={() => setPendingQuarantine(null)}
+          />
+        </div>
+      )}
+      {/* Duplicate-upload notice — content-hash collision, document already
+          ingested for this patient. Distinct from quarantine: no Match/Reject,
+          info color, single "Open Documents tab" affordance. */}
+      {pendingDuplicate && (
+        <div
+          style={{
+            position: 'fixed',
+            right: 16,
+            bottom: 16,
+            zIndex: 1050,
+            width: 'min(420px, calc(100% - 32px))',
+          }}
+        >
+          <DuplicateDocumentCard
+            payload={pendingDuplicate.payload}
+            lane={pendingDuplicate.lane}
+            onClose={() => setPendingDuplicate(null)}
           />
         </div>
       )}

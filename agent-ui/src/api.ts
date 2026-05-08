@@ -633,6 +633,20 @@ export interface QuarantineIngestPayload {
   expires_at: string;
 }
 
+/**
+ * Duplicate / already-ingested response payload (HTTP 202). Emitted by
+ * `agent-api/main.py:1685-1692` when the content-hash claim is held by another
+ * worker — i.e. this same `(document_reference_id, content_sha256)` pair has
+ * already been submitted for this patient. Distinguishable from
+ * `QuarantineIngestPayload` by `status: "processing"` (vs `"quarantined"`)
+ * and the absence of `quarantine_id`.
+ */
+export interface DuplicateIngestPayload {
+  status: 'processing';
+  document_reference_id: string;
+  extraction_id: number;
+}
+
 /** Staging metadata block carried on a 200 response when rows were staged. */
 export interface StagingMetadata {
   file_batch_id: string;
@@ -649,14 +663,17 @@ export interface ParseSummary {
  * Discriminated union returned by the FileDropZone wrapper. Branching is
  * status-code + metadata-shape driven so callers don't pattern-match on
  * server prose:
- *   - 202 → `quarantined`
+ *   - 202 + `status: "quarantined"` → `quarantined`
+ *   - 202 + `status: "processing"` → `duplicate` (content-hash collision —
+ *     document already ingested or in-flight for this patient)
  *   - 200 + metadata.staging present → `staged`
  *   - 200 otherwise → `committed` (legacy synchronous-write path)
  */
 export type IngestResult =
   | { kind: 'committed'; response: IngestResponse }
   | { kind: 'staged'; response: IngestResponse; staging: StagingMetadata; parseSummary?: ParseSummary }
-  | { kind: 'quarantined'; payload: QuarantineIngestPayload };
+  | { kind: 'quarantined'; payload: QuarantineIngestPayload }
+  | { kind: 'duplicate'; payload: DuplicateIngestPayload };
 
 // ── Pending extractions (Slice 9.3) ─────────────────────────────────────────
 
@@ -941,8 +958,33 @@ export async function ingestDocumentWithResult(
   });
 
   if (res.status === 202) {
-    const payload = (await res.json()) as QuarantineIngestPayload;
-    return { kind: 'quarantined', payload };
+    // Two distinct 202 shapes share this status code:
+    //   1. quarantine: { status: "quarantined", quarantine_id, ... }
+    //   2. duplicate / in-flight claim: { status: "processing",
+    //        document_reference_id, extraction_id }  (main.py:1685-1692)
+    // Discriminate on the `status` field — `quarantine_id` presence is a
+    // secondary safety check so a future server change adding the field to the
+    // duplicate branch wouldn't silently fall back to the quarantine card.
+    const raw = (await res.json()) as
+      | QuarantineIngestPayload
+      | DuplicateIngestPayload
+      | { status?: string; quarantine_id?: string };
+    const status = (raw as { status?: string }).status;
+    const hasQuarantineId =
+      typeof (raw as { quarantine_id?: unknown }).quarantine_id === 'string'
+      && ((raw as { quarantine_id: string }).quarantine_id.length > 0);
+    if (status === 'quarantined' && hasQuarantineId) {
+      return { kind: 'quarantined', payload: raw as QuarantineIngestPayload };
+    }
+    if (status === 'processing') {
+      return { kind: 'duplicate', payload: raw as DuplicateIngestPayload };
+    }
+    // Defensive default: if the status is missing/unknown, treat as duplicate
+    // rather than rendering an empty quarantine card. The duplicate card is
+    // a no-op affordance (informational + link), so misclassifying a true
+    // quarantine here is recoverable; misclassifying a duplicate as a
+    // quarantine surfaces broken Match/Reject buttons.
+    return { kind: 'duplicate', payload: raw as DuplicateIngestPayload };
   }
   if (!res.ok) {
     const body = await res.text().catch(() => '');

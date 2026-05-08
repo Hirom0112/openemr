@@ -34,7 +34,7 @@ export type TelemetryEventName =
   | 'quarantine_open'
   | 'quarantine_action';
 
-export type IngestOutcome = 'committed' | 'staged' | 'quarantined' | 'failed';
+export type IngestOutcome = 'committed' | 'staged' | 'quarantined' | 'duplicate' | 'failed';
 
 export type SizeBucket = 'lt_1mb' | '1_5mb' | '5_25mb' | 'gt_25mb';
 
