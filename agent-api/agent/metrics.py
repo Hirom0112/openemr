@@ -439,3 +439,26 @@ agent_document_ingest_dispatch_total = Counter(
     "Document ingest MIME dispatcher decisions, labelled by detected format",
     ["format", "outcome"],
 )
+
+# ── Phase 2 Step 1 — post-approval RAG synthesis ─────────────────────────────
+# Pair-of-pairs covering the synthesis coroutine in ``agent.synthesis``.
+# Paired 1:1 with the ``synthesis_completed`` / ``synthesis_failed`` structured
+# log events emitted via ``observability.tool_logging.log_tool_outcome`` per
+# the CLAUDE.md "Observability — verifiable latency claims" rule.
+agent_synthesis_total = Counter(
+    "agent_synthesis_total",
+    "Post-approval synthesis call outcomes.",
+    labelnames=("outcome",),  # success | error | cached | fallback
+)
+
+agent_synthesis_latency_seconds = Histogram(
+    "agent_synthesis_latency_seconds",
+    "Wall-clock duration of the synthesis coroutine, including retries.",
+    buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0),
+)
+
+agent_synthesis_retries_total = Counter(
+    "agent_synthesis_retries_total",
+    "Synthesis retry counts terminal outcome.",
+    labelnames=("outcome",),  # success | failed | fallback
+)
