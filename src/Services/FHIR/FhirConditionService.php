@@ -49,6 +49,18 @@ class FhirConditionService extends FhirServiceBase implements IResourceUSCIGProf
         $this->addMappedService(new FhirConditionEncounterDiagnosisService());
         $this->addMappedService(new FhirConditionProblemListItemService());
         $this->addMappedService(new FhirConditionHealthConcernService());
+
+        // Co-Pilot FHIR sub-service registration.
+        // OpenEMR's FhirConditionService does not expose a plugin
+        // hook for sub-service contributions, so this single
+        // registration line is the documented exception to the
+        // "no core edits" rule. See agent-api/CLAUDE.md for the
+        // rationale. Sibling exception: FhirObservationService.php
+        // registers FhirObservationCopilotService (the original
+        // documented case); this is the second exception, same
+        // pattern, no architectural drift.
+        $this->addMappedService(new \OpenEMR\Modules\ClinicalCopilot\FHIR\FhirConditionCopilotService());
+
         $this->conditionService = new ConditionService();
     }
 
