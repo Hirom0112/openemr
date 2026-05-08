@@ -105,6 +105,22 @@ def lookup_loinc(normalized_test_name: str) -> tuple[str, str]:
     return (_LOINC_FALLBACK[0], display or _LOINC_FALLBACK[1])
 
 
+def _resolve_loinc_for_lab(lab_value: LabValue) -> tuple[str, str]:
+    """Return ``(code, display)`` for a ``LabValue``.
+
+    Prefers ``lab_value.loinc_code`` when set (e.g. carried through from
+    HL7 OBX-3.1) — the carried code is authoritative, and we only use the
+    name-based ``lookup_loinc`` for the display string. Otherwise fall back
+    to name-based lookup. This prevents the UPSERT collapse where multiple
+    HL7 OBX rows whose normalised names all resolve to ``LP-UNKNOWN`` would
+    share one ``deterministic_observation_id``.
+    """
+    if lab_value.loinc_code:
+        _, display = lookup_loinc(lab_value.normalized_test_name)
+        return lab_value.loinc_code, display
+    return lookup_loinc(lab_value.normalized_test_name)
+
+
 def deterministic_observation_id(document_id: str | int, loinc_code: str) -> str:
     """Deterministic id: ``copilot-{document_id}-{loinc_code}``.
 
@@ -220,7 +236,7 @@ async def write_observation(
     Callers MUST swallow the exception and surface a soft-warn — see
     ``main.document_ingest``.
     """
-    code, display = lookup_loinc(lab_value.normalized_test_name)
+    code, display = _resolve_loinc_for_lab(lab_value)
     if observation_id is None:
         observation_id = deterministic_observation_id(document_id, code)
 
@@ -441,7 +457,7 @@ async def stage_observation(
     """
     from staging import store as _staging_store  # local — keep cycle-free
 
-    code, display = lookup_loinc(lab_value.normalized_test_name)
+    code, display = _resolve_loinc_for_lab(lab_value)
     if observation_id is None:
         observation_id = deterministic_observation_id(document_id, code)
     if _ID_PATTERN.match(observation_id) is None:

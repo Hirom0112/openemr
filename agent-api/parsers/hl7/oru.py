@@ -208,6 +208,13 @@ def parse_oru_r01(
                     normalized_test_name=normalized,
                     value=value,
                     unit=unit,
+                    # OBX-3.1 LOINC carried through (extracted at the top of
+                    # this loop via ``_build_obx_citations``). Without this,
+                    # ``observations.writer`` would name-lookup a fallback
+                    # ``LP-UNKNOWN`` for every OBX whose normalised test
+                    # name isn't in the local table, collapsing all of them
+                    # into one ``deterministic_observation_id`` at UPSERT.
+                    loinc_code=(loinc or None),
                     normalized_unit=unit,
                     reference_range=ref_range,
                     collection_date=collection_date,

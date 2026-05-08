@@ -94,6 +94,12 @@ class LabValue(BaseModel):
     normalized_test_name: str
     value: str
     unit: Optional[str] = None
+    # Carried through from sources that name the LOINC directly
+    # (e.g. HL7 OBX-3.1, FHIR Observation.code.coding.code). When set,
+    # ``observations.writer`` uses it as the authoritative code so that
+    # multiple rows with distinct LOINCs yield distinct
+    # ``deterministic_observation_id``s and don't collapse via UPSERT.
+    loinc_code: Optional[str] = None
     normalized_unit: Optional[str] = None
     reference_range: Optional[str] = None
     collection_date: Optional[date] = None
