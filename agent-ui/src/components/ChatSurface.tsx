@@ -590,10 +590,24 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   // additional refresh-key plumbing needed.
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  // When the user uploads a fresh document, surface the just-staged batch
+  // at the top of the inbox under "From this upload" so they can review
+  // what they just submitted in context. Cleared on patient change or when
+  // the sidebar is dismissed; stale highlights from prior uploads aren't
+  // useful and would mislead.
+  const [highlightBatchId, setHighlightBatchId] = useState<string | null>(null);
 
   const handleStaged = useCallback((staging: StagingMetadata, _resp: IngestResponse, file: File): void => {
     setPendingApproval({ staging, lane: laneFromFilename(file.name) });
+    setHighlightBatchId(staging.file_batch_id);
+    setSidebarOpen(true);
   }, []);
+
+  // Clear highlight when the active patient changes — a batch_id from
+  // patient A is meaningless against patient B's pending list.
+  useEffect(() => {
+    setHighlightBatchId(null);
+  }, [ingestPatientId]);
 
   const handleQuarantined = useCallback((payload: QuarantineIngestPayload, file: File): void => {
     setPendingQuarantine({ payload, lane: laneFromFilename(file.name) });
@@ -1902,9 +1916,13 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
         baseUrl={ingestBaseUrl}
         patientId={ingestPatientId}
         open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
+        onClose={() => {
+          setSidebarOpen(false);
+          setHighlightBatchId(null);
+        }}
         onReview={(staging, lane) => setPendingApproval({ staging, lane })}
         onCountChange={setPendingCount}
+        highlightBatchId={highlightBatchId}
       />
       {/* Toggle tab — small fixed-position handle on the right edge that
           opens the inbox. Hidden while the panel is open. */}

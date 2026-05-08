@@ -44,12 +44,18 @@ interface Props {
   /** Reported on every successful list response so the parent can render
    *  a badge on its toggle button. */
   onCountChange: (count: number) => void;
+  /** When set, rows whose file_batch_id matches surface in a "From this
+   *  upload" section at the top; everything else falls under "Earlier
+   *  pending" and is rendered with a quieter treatment. Set by the parent
+   *  immediately after a fresh upload so the operator can review what they
+   *  just submitted in context. */
+  highlightBatchId?: string | null;
 }
 
 type RowBusy = 'approve' | 'reject' | null;
 
 export default function PendingExtractionsSidebar(props: Props): ReactElement | null {
-  const { baseUrl, patientId, open, onClose, onReview, onCountChange } = props;
+  const { baseUrl, patientId, open, onClose, onReview, onCountChange, highlightBatchId } = props;
 
   const [rows, setRows] = useState<PendingExtractionRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -147,6 +153,21 @@ export default function PendingExtractionsSidebar(props: Props): ReactElement | 
     });
   }, [rows]);
 
+  // When the parent has flagged a freshly-uploaded batch, split the list
+  // into the just-uploaded rows and everything else so we can render two
+  // sections with different visual weights.
+  const { freshRows, earlierRows } = useMemo(() => {
+    if (!highlightBatchId) {
+      return { freshRows: [] as PendingExtractionRow[], earlierRows: sortedRows };
+    }
+    const fresh: PendingExtractionRow[] = [];
+    const earlier: PendingExtractionRow[] = [];
+    for (const r of sortedRows) {
+      (r.file_batch_id === highlightBatchId ? fresh : earlier).push(r);
+    }
+    return { freshRows: fresh, earlierRows: earlier };
+  }, [sortedRows, highlightBatchId]);
+
   if (!open) return null;
 
   return (
@@ -242,16 +263,36 @@ export default function PendingExtractionsSidebar(props: Props): ReactElement | 
           <div style={emptyStateStyle}>No pending extractions for this patient.</div>
         )}
 
-        {sortedRows.map((row) => (
-          <RowCard
-            key={row.id}
-            row={row}
-            busy={busyByRow[row.id] ?? null}
-            onApprove={() => void onApproveRow(row)}
-            onReject={() => void onRejectRow(row)}
-            onReview={() => onReviewRow(row)}
-          />
-        ))}
+        {freshRows.length > 0 && (
+          <>
+            <div style={sectionHeaderStyle}>From this upload</div>
+            {freshRows.map((row) => (
+              <RowCard
+                key={row.id}
+                row={row}
+                busy={busyByRow[row.id] ?? null}
+                onApprove={() => void onApproveRow(row)}
+                onReject={() => void onRejectRow(row)}
+                onReview={() => onReviewRow(row)}
+              />
+            ))}
+          </>
+        )}
+        {earlierRows.length > 0 && freshRows.length > 0 && (
+          <div style={sectionHeaderStyle}>Earlier pending</div>
+        )}
+        <div style={earlierRows.length > 0 && freshRows.length > 0 ? earlierGroupStyle : undefined}>
+          {earlierRows.map((row) => (
+            <RowCard
+              key={row.id}
+              row={row}
+              busy={busyByRow[row.id] ?? null}
+              onApprove={() => void onApproveRow(row)}
+              onReject={() => void onRejectRow(row)}
+              onReview={() => onReviewRow(row)}
+            />
+          ))}
+        </div>
       </div>
     </aside>
   );
@@ -355,6 +396,19 @@ function derivedDocName(row: PendingExtractionRow): string {
   const ref = row.document_reference_id || '(no ref)';
   return ref.length > 22 ? `${ref.slice(0, 20)}…` : ref;
 }
+
+const sectionHeaderStyle: React.CSSProperties = {
+  padding: '8px 14px 4px',
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: SURFACE.muted,
+};
+
+const earlierGroupStyle: React.CSSProperties = {
+  opacity: 0.7,
+};
 
 const emptyStateStyle: React.CSSProperties = {
   padding: '14px 16px',
