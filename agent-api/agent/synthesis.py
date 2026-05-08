@@ -76,7 +76,7 @@ logger = logging.getLogger(__name__)
 PROMPT_VERSION: Final[int] = 1
 
 _MODEL: Final[str] = "claude-sonnet-4-6"
-_MAX_TOKENS: Final[int] = 1024
+_MAX_TOKENS: Final[int] = 2048
 _CACHE_TTL_SECONDS: Final[int] = 3600  # Phase 1 Decision 4: 1 hour.
 _TOOL_NAME: Final[str] = "produce_synthesis"
 _MAX_ATTEMPTS: Final[int] = 3
@@ -635,6 +635,7 @@ async def synthesize(
     )
 
     last_exc_class: str = "UnknownError"
+    last_exc_msg: str = ""
     attempt = 0
 
     # 3) Retry loop.
@@ -655,9 +656,11 @@ async def synthesize(
             )
         except SynthesisError as exc:  # pragma: no cover, defensive
             last_exc_class = type(exc).__name__
+            last_exc_msg = str(exc)[:120]
             break
         except Exception as exc:  # noqa: BLE001, retry/terminate decision below
             last_exc_class = type(exc).__name__
+            last_exc_msg = str(exc)[:120]
             if generation is not None:
                 try:
                     generation.end(level="ERROR")
@@ -674,6 +677,7 @@ async def synthesize(
             output = _parse_tool_block(tool_input, inp)
         except SynthesisError as exc:
             last_exc_class = type(exc).__name__
+            last_exc_msg = str(exc)[:120]
             if generation is not None:
                 try:
                     generation.end(level="ERROR")
@@ -712,6 +716,11 @@ async def synthesize(
 
     # 4) Terminal failure path.
     duration_ms = (time.perf_counter() - started) * 1000.0
+    # PHI-safe by construction: every SynthesisError raise site uses static
+    # templates with index numbers only (no claim text, no value_repr).
+    fallback_reason = (
+        f"{last_exc_class}: {last_exc_msg}" if last_exc_msg else last_exc_class
+    )
     agent_synthesis_total.labels(outcome="error").inc()
     agent_synthesis_latency_seconds.observe(duration_ms / 1000.0)
     agent_synthesis_retries_total.labels(outcome="failed").inc(attempt or 1)
@@ -721,7 +730,7 @@ async def synthesize(
             **log_extra,
             "attempts": attempt,
             "duration_ms": int(duration_ms),
-            "fallback_reason": last_exc_class,
+            "fallback_reason": fallback_reason,
         },
     )
     log_tool_outcome(
@@ -732,13 +741,13 @@ async def synthesize(
             **log_extra,
             "outcome": "error",
             "attempts": attempt,
-            "fallback_reason": last_exc_class,
+            "fallback_reason": fallback_reason,
         },
     )
     return SynthesisOutcome(
         output=None,
         cache="miss",
-        fallback_reason=last_exc_class,
+        fallback_reason=fallback_reason,
         attempts=attempt or 1,
         duration_ms=duration_ms,
     )
