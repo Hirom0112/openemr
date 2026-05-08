@@ -1,11 +1,20 @@
-import { useEffect, useState } from 'react';
-import { fetchHealth } from './api';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { fetchHealth, getPending } from './api';
+import type { PendingExtractionRow, StagingMetadata } from './api';
 import ChatSurface from './components/ChatSurface';
+import DocumentsTab from './components/DocumentsTab';
+import ApprovalModal from './components/ApprovalModal';
+import { BRAND, NEU, SURFACE } from './styles/tokens';
+import type { Lane } from './styles/tokens';
 import type { CopilotConfig } from './types';
 
 interface AppProps {
   config: CopilotConfig;
 }
+
+type TabKey = 'chat' | 'documents';
+
+const PENDING_POLL_MS = 30_000;
 
 export default function App({ config }: AppProps) {
   const sessionId = config.sessionId ?? `session-${Date.now()}`;
@@ -13,12 +22,81 @@ export default function App({ config }: AppProps) {
   const providerName: string = config.providerName ?? '';
 
   const [agentOnline, setAgentOnline] = useState<boolean | null>(null);
+  const [activeTab, setActiveTab] = useState<TabKey>('chat');
+
+  // Lifted from ChatSurface so DocumentsTab can also trigger the modal.
+  // The ApprovalModal mount lives at App-level so it overlays both tabs.
+  const [pendingApproval, setPendingApproval] = useState<{
+    staging: StagingMetadata;
+    lane: Lane | null;
+  } | null>(null);
+
+  // Pending-extractions polling. Lifted out of the (now-deleted) sidebar so
+  // both the tab badge and DocumentsTab consume the same source of truth.
+  const [pendingRows, setPendingRows] = useState<PendingExtractionRow[]>([]);
+  const inFlight = useRef(false);
+
+  const ingestPatientId: string | null = patientIds.length > 0 ? patientIds[0] : null;
+  const ingestBaseUrl: string =
+    (window.__COPILOT_CONFIG__?.agentApiUrl as string | undefined) ?? '';
 
   useEffect(() => {
     fetchHealth()
       .then((h) => setAgentOnline(h.status === 'ok'))
       .catch(() => setAgentOnline(false));
   }, []);
+
+  const refetchPending = useCallback(async (): Promise<void> => {
+    if (!ingestPatientId || !ingestBaseUrl) {
+      setPendingRows([]);
+      return;
+    }
+    if (inFlight.current) return;
+    inFlight.current = true;
+    try {
+      const resp = await getPending(ingestBaseUrl, {
+        patient_id: ingestPatientId,
+        state: 'pending',
+      });
+      setPendingRows(resp.rows);
+    } catch {
+      // Swallow — count just won't update this tick. Surfacing a banner here
+      // would be noise; the DocumentsTab can show a retry affordance later.
+    } finally {
+      inFlight.current = false;
+    }
+  }, [ingestBaseUrl, ingestPatientId]);
+
+  // Refetch on patient change.
+  useEffect(() => {
+    void refetchPending();
+  }, [refetchPending]);
+
+  // Poll while patient is selected. Pauses while the page is hidden.
+  useEffect(() => {
+    if (!ingestPatientId) return;
+    const id = window.setInterval(() => {
+      if (document.hidden) return;
+      void refetchPending();
+    }, PENDING_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [ingestPatientId, refetchPending]);
+
+  // After the modal closes (approve/reject lands), refresh the inbox so the
+  // count + DocumentsTab card reflect the new state.
+  const handleApprovalClose = useCallback(() => {
+    setPendingApproval(null);
+    void refetchPending();
+  }, [refetchPending]);
+
+  const triggerApproval = useCallback(
+    (staging: StagingMetadata, lane: Lane | null) => {
+      setPendingApproval({ staging, lane });
+    },
+    [],
+  );
+
+  const pendingCount = pendingRows.length;
 
   return (
     <div style={styles.root}>
@@ -44,6 +122,21 @@ export default function App({ config }: AppProps) {
         </span>
       </div>
 
+      {/* Tab strip */}
+      <div role="tablist" aria-label="Co-Pilot views" style={styles.tabStrip}>
+        <TabButton
+          label="Chat"
+          active={activeTab === 'chat'}
+          onClick={() => setActiveTab('chat')}
+        />
+        <TabButton
+          label={pendingCount > 0 ? `Documents (${pendingCount})` : 'Documents'}
+          active={activeTab === 'documents'}
+          onClick={() => setActiveTab('documents')}
+          emphasize={pendingCount > 0}
+        />
+      </div>
+
       <div style={styles.body}>
         {agentOnline === false ? (
           <div style={styles.offline}>
@@ -52,14 +145,90 @@ export default function App({ config }: AppProps) {
         ) : agentOnline === null ? (
           <div style={styles.spinner}>Connecting…</div>
         ) : (
-          <ChatSurface
-            sessionId={sessionId}
-            patientIds={patientIds}
-            providerName={providerName}
-          />
+          <>
+            <div
+              role="tabpanel"
+              hidden={activeTab !== 'chat'}
+              style={{
+                display: activeTab === 'chat' ? 'flex' : 'none',
+                flex: 1,
+                minHeight: 0,
+                flexDirection: 'column',
+              }}
+            >
+              <ChatSurface
+                sessionId={sessionId}
+                patientIds={patientIds}
+                providerName={providerName}
+                pendingCount={pendingCount}
+                onSwitchToDocumentsTab={() => setActiveTab('documents')}
+                onTriggerApproval={triggerApproval}
+              />
+            </div>
+            <div
+              role="tabpanel"
+              hidden={activeTab !== 'documents'}
+              style={{
+                display: activeTab === 'documents' ? 'flex' : 'none',
+                flex: 1,
+                minHeight: 0,
+                flexDirection: 'column',
+              }}
+            >
+              <DocumentsTab
+                rows={pendingRows}
+                patientId={ingestPatientId}
+                onTriggerApproval={triggerApproval}
+              />
+            </div>
+          </>
         )}
       </div>
+
+      {/* App-level ApprovalModal — overlays both tabs so DocumentsTab card
+          clicks and post-upload triggers from ChatSurface route to the same
+          surface. */}
+      {pendingApproval && (
+        <ApprovalModal
+          baseUrl={ingestBaseUrl}
+          staging={pendingApproval.staging}
+          lane={pendingApproval.lane}
+          onClose={handleApprovalClose}
+        />
+      )}
     </div>
+  );
+}
+
+interface TabButtonProps {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  emphasize?: boolean;
+}
+
+function TabButton({ label, active, onClick, emphasize }: TabButtonProps) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      style={{
+        background: 'transparent',
+        border: 'none',
+        borderBottom: active ? `2px solid ${BRAND.base}` : '2px solid transparent',
+        padding: '8px 16px',
+        fontSize: 13,
+        fontFamily: 'inherit',
+        fontWeight: active ? 600 : 500,
+        color: active ? BRAND.base : (emphasize ? BRAND.base : SURFACE.fg),
+        cursor: 'pointer',
+        transition: 'border-color 0.15s, color 0.15s',
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -95,6 +264,14 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '2px 10px',
     fontSize: 11,
     border: '1px solid rgba(255,255,255,0.4)',
+  },
+  tabStrip: {
+    display: 'flex',
+    gap: 4,
+    padding: '0 12px',
+    background: SURFACE.bg,
+    borderBottom: `1px solid ${NEU.border}`,
+    flex: '0 0 auto',
   },
   body: {
     flex: 1,

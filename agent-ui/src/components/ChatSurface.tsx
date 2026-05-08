@@ -12,10 +12,8 @@ import SoftWarnBanner from './SoftWarnBanner';
 import CitationChip from './CitationChip';
 import DocumentViewer from './DocumentViewer';
 import FileDropZone from './FileDropZone';
-import ApprovalModal from './ApprovalModal';
 import QuarantineCard from './QuarantineCard';
 import DuplicateDocumentCard from './DuplicateDocumentCard';
-import PendingExtractionsSidebar from './PendingExtractionsSidebar';
 import { laneFromFilename } from './LaneChip';
 import type { DuplicateIngestPayload, IngestResponse, QuarantineIngestPayload, StagingMetadata } from '../api';
 import type { Lane } from '../styles/tokens';
@@ -506,9 +504,27 @@ interface ChatSurfaceProps {
   sessionId: string;
   patientIds: string[];
   providerName?: string;
+  /** Live count of pending HITL extractions for the current patient.
+   *  Polled at App-level; used here to render the "N documents need review"
+   *  banner above the message list. */
+  pendingCount: number;
+  /** Switches the iframe's tab strip to the Documents tab. Wired into the
+   *  banner click handler. */
+  onSwitchToDocumentsTab: () => void;
+  /** Phase 2 — opens the App-level ApprovalModal preloaded with the staging
+   *  batch. Used by the post-upload flow (`handleStaged`); DocumentsTab
+   *  calls the same setter independently. */
+  onTriggerApproval: (staging: StagingMetadata, lane: Lane | null) => void;
 }
 
-export default function ChatSurface({ sessionId, patientIds, providerName }: ChatSurfaceProps) {
+export default function ChatSurface({
+  sessionId,
+  patientIds,
+  providerName,
+  pendingCount,
+  onSwitchToDocumentsTab,
+  onTriggerApproval,
+}: ChatSurfaceProps) {
   const displayName = (providerName && providerName.trim()) || 'Doctor';
   const greeting = `Good day, ${displayName}. Ready for your census.`;
 
@@ -577,37 +593,16 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
   const ingestPatientId: string | null = patientIds.length > 0 ? patientIds[0] : null;
   const ingestBaseUrl: string = (window.__COPILOT_CONFIG__?.agentApiUrl as string | undefined) ?? '';
 
-  // Slice 9.8 — root-level state for the new approval / quarantine surfaces.
-  // Each captures the lane from the originating upload so the modal/card
-  // header can render the matching LaneChip.
-  const [pendingApproval, setPendingApproval] = useState<{ staging: StagingMetadata; lane: Lane | null } | null>(null);
+  // Slice 9.8 — root-level state for quarantine / duplicate surfaces. The
+  // pendingApproval state was lifted to App.tsx in Phase 2 so DocumentsTab
+  // can also trigger the modal; ChatSurface receives `onTriggerApproval` as
+  // a prop and routes the post-upload flow through it.
   const [pendingQuarantine, setPendingQuarantine] = useState<{ payload: QuarantineIngestPayload; lane: Lane | null } | null>(null);
   const [pendingDuplicate, setPendingDuplicate] = useState<{ payload: DuplicateIngestPayload; lane: Lane | null } | null>(null);
 
-  // Persistent inbox — same setPendingApproval entry point as the post-upload
-  // modal, just reachable from a fixed-position rail at any time. The
-  // sidebar's own polling + per-action refetch keep its rows fresh; no
-  // additional refresh-key plumbing needed.
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [pendingCount, setPendingCount] = useState(0);
-  // When the user uploads a fresh document, surface the just-staged batch
-  // at the top of the inbox under "From this upload" so they can review
-  // what they just submitted in context. Cleared on patient change or when
-  // the sidebar is dismissed; stale highlights from prior uploads aren't
-  // useful and would mislead.
-  const [highlightBatchId, setHighlightBatchId] = useState<string | null>(null);
-
   const handleStaged = useCallback((staging: StagingMetadata, _resp: IngestResponse, file: File): void => {
-    setPendingApproval({ staging, lane: laneFromFilename(file.name) });
-    setHighlightBatchId(staging.file_batch_id);
-    setSidebarOpen(true);
-  }, []);
-
-  // Clear highlight when the active patient changes — a batch_id from
-  // patient A is meaningless against patient B's pending list.
-  useEffect(() => {
-    setHighlightBatchId(null);
-  }, [ingestPatientId]);
+    onTriggerApproval(staging, laneFromFilename(file.name));
+  }, [onTriggerApproval]);
 
   const handleQuarantined = useCallback((payload: QuarantineIngestPayload, file: File): void => {
     setPendingQuarantine({ payload, lane: laneFromFilename(file.name) });
@@ -1579,6 +1574,36 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           ref={scrollContainerRef}
           style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 14px' }}
         >
+          {pendingCount > 0 && (
+            <button
+              type="button"
+              onClick={onSwitchToDocumentsTab}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+                marginBottom: 12,
+                padding: '8px 12px',
+                background: BRAND.tint,
+                border: `1px solid ${BRAND.base}`,
+                borderRadius: 6,
+                color: BRAND.base,
+                fontSize: 12,
+                fontWeight: 600,
+                fontFamily: 'inherit',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+              aria-label={`${pendingCount} document${pendingCount === 1 ? '' : 's'} need review — switch to Documents tab`}
+            >
+              <span aria-hidden="true">📋</span>
+              <span style={{ flex: 1 }}>
+                {pendingCount} document{pendingCount === 1 ? '' : 's'} need{pendingCount === 1 ? 's' : ''} review
+              </span>
+              <span aria-hidden="true">→</span>
+            </button>
+          )}
           {messages.map((msg) => {
             if (msg.role === 'system') {
               return (
@@ -1898,68 +1923,9 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
           onClose={() => setViewerSource(null)}
         />
       )}
-      {/* Slice 9.8 — staging approval surface, mounted at root so it overlays
-          the entire chat. Sibling to PostIngestContextCard at :1603 (which
-          renders inline as part of an assistant turn). */}
-      {pendingApproval && (
-        <ApprovalModal
-          baseUrl={ingestBaseUrl}
-          staging={pendingApproval.staging}
-          lane={pendingApproval.lane}
-          onClose={() => setPendingApproval(null)}
-        />
-      )}
-      {/* Persistent inbox — pending HITL extractions for the current patient.
-          The sidebar component is always mounted (so polling keeps the badge
-          count fresh); ``open`` controls panel visibility. */}
-      <PendingExtractionsSidebar
-        baseUrl={ingestBaseUrl}
-        patientId={ingestPatientId}
-        open={sidebarOpen}
-        onClose={() => {
-          setSidebarOpen(false);
-          setHighlightBatchId(null);
-        }}
-        onReview={(staging, lane) => setPendingApproval({ staging, lane })}
-        onCountChange={setPendingCount}
-        highlightBatchId={highlightBatchId}
-      />
-      {/* Toggle tab — small fixed-position handle on the right edge that
-          opens the inbox. Hidden while the panel is open. */}
-      {!sidebarOpen && ingestPatientId && (
-        <button
-          type="button"
-          onClick={() => setSidebarOpen(true)}
-          aria-label={`Open pending extractions inbox (${pendingCount} pending)`}
-          style={{
-            position: 'fixed',
-            right: 0,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            zIndex: 1070,
-            background: pendingCount > 0 ? BRAND.base : SURFACE.bg,
-            color: pendingCount > 0 ? BRAND.onBrand : SURFACE.fg,
-            border: `1px solid ${pendingCount > 0 ? BRAND.base : SURFACE.borderStrong}`,
-            borderRight: 'none',
-            borderTopLeftRadius: 6,
-            borderBottomLeftRadius: 6,
-            padding: '10px 8px',
-            fontSize: 11,
-            fontWeight: 600,
-            cursor: 'pointer',
-            boxShadow: '-2px 2px 8px rgba(15,23,42,0.10)',
-            fontFamily: 'inherit',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 4,
-            writingMode: 'vertical-rl' as const,
-            textOrientation: 'mixed' as const,
-          }}
-        >
-          <span>Pending {pendingCount > 0 ? `· ${pendingCount}` : ''}</span>
-        </button>
-      )}
+      {/* Phase 2: ApprovalModal mount lifted to App.tsx so DocumentsTab can
+          also trigger it. The post-upload flow now calls
+          `onTriggerApproval(staging, lane)` from `handleStaged`. */}
       {/* Slice 9.8 — quarantine card, mounted at root as a sticky bottom-right
           panel-style notice. Distinct from PostIngestContextCard. */}
       {pendingQuarantine && (
