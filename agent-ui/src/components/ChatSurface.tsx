@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, type ReactElement } from 'react';
 import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff, refreshCensus, fetchPostIngestContext, sendDocumentChatMessage } from '../api';
-import type { HandoffSummaryPayload, GuidelineSnippet, PostApprovalContext, SynthesisOutput } from '../api';
+import type { HandoffSummaryPayload, GuidelineSnippet, PostApprovalContext, SynthesisOutput, FactCitation } from '../api';
 import PostIngestContextCard from './PostIngestContextCard';
 import type { AgentResponse, CensusPatient, ErrorClass, HandoffData, HandoffPatient } from '../types';
 import ResponseRenderer from './ResponseRenderer';
@@ -682,6 +682,11 @@ export default function ChatSurface({
         }
       }
       const now = Date.now();
+      // Authoritative resolution map for synthesis-card chip clicks. Lives
+      // alongside `extraction` on the synthesis message so the click handler
+      // can route to the right bbox / read-only panel without a speculative
+      // match against the row_id.
+      const factCitations = ctx.fact_citations;
       const msgA = hasUsefulCitations
         ? {
             id: `assistant-post-approval-chips-${refKey}-${now}`,
@@ -695,6 +700,7 @@ export default function ChatSurface({
                 no_auto_collapse: true,
                 ...(extForMeta ? { extraction: extForMeta } : {}),
                 ...(stagingMeta ? { staging: stagingMeta } : {}),
+                ...(factCitations ? { fact_citations: factCitations } : {}),
               },
             },
           }
@@ -725,6 +731,9 @@ export default function ChatSurface({
             // citations stay invisible there — fact:obs only surfaces via
             // the synthesis chip.
             ...(extForMeta ? { extraction: extForMeta } : {}),
+            // Authoritative citation resolution map (preferred over the
+            // speculative source_id == row_id match in the click handler).
+            ...(factCitations ? { fact_citations: factCitations } : {}),
           },
         },
       };
@@ -1925,6 +1934,15 @@ export default function ChatSurface({
                       const stagedBatchId: string = typeof respMeta.staging?.file_batch_id === 'string'
                         ? respMeta.staging!.file_batch_id!
                         : '';
+                      // Authoritative resolution map produced by
+                      // /document/{id}/post-approval-context (commit
+                      // 163f6f009). Falls back to the speculative match
+                      // path below when absent (older agent-api builds).
+                      const factCitationMap = (
+                        msg.response?.metadata as
+                          | { fact_citations?: Record<string, FactCitation> }
+                          | undefined
+                      )?.fact_citations;
                       const handleSynthesisCitationClick = (citationId: string): void => {
                         const firstColon = citationId.indexOf(':');
                         if (firstColon === -1) {
@@ -1933,6 +1951,7 @@ export default function ChatSurface({
                         }
                         const prefix = citationId.slice(0, firstColon);
                         const remainder = citationId.slice(firstColon + 1);
+                        const resolved: FactCitation | undefined = factCitationMap?.[citationId];
                         if (prefix === 'guideline') {
                           // No-op; chip exposes the chunk_id via title.
                           return;
@@ -1947,13 +1966,18 @@ export default function ChatSurface({
                           const value = remainder.slice(secondColon + 1);
                           if (kind === 'intake') {
                             if (stagedDocRef.length > 0 && stagedRowIds.length > 0) {
+                              // Prefer the resolved field_or_chunk_id from
+                              // fact_citations (authoritative); fall back to
+                              // the raw token suffix when the map is absent.
+                              const activeFieldId =
+                                resolved?.field_or_chunk_id ?? value;
                               onTriggerRichReview(
                                 stagedDocRef,
                                 stagedBatchId,
                                 stagedRowIds,
                                 {
                                   readOnly: true,
-                                  initialActiveCitationFieldId: value,
+                                  initialActiveCitationFieldId: activeFieldId,
                                 },
                               );
                               return;
@@ -1964,6 +1988,61 @@ export default function ChatSurface({
                             return;
                           }
                           if (kind === 'obs') {
+                            // Deterministic path: fact_citations carries the
+                            // full Citation shape — synthesize a W2 Citation
+                            // and hand it to the bbox viewer. This avoids the
+                            // speculative `source_id == row_id` match below
+                            // which routinely missed.
+                            if (resolved) {
+                              const ext2 = readExtraction(msg.response);
+                              let bboxLayout = ext2?.ocr_layout ?? [];
+                              let pdfUrl: string | undefined = ext2?.pdf_url;
+                              let pdfBytes: ArrayBuffer | undefined = ext2?.pdf_bytes;
+                              if (bboxLayout.length === 0) {
+                                const liveExt = docChatContextRef.current?.extraction;
+                                if (liveExt && typeof liveExt === 'object') {
+                                  const le = liveExt as {
+                                    ocr_layout?: unknown;
+                                    pdf_url?: unknown;
+                                    pdf_bytes?: unknown;
+                                  };
+                                  if (Array.isArray(le.ocr_layout)) {
+                                    bboxLayout = le.ocr_layout as BboxLayoutBlock[];
+                                  }
+                                  if (typeof le.pdf_url === 'string') {
+                                    pdfUrl = le.pdf_url;
+                                  }
+                                  if (le.pdf_bytes instanceof ArrayBuffer) {
+                                    pdfBytes = le.pdf_bytes;
+                                  }
+                                }
+                              }
+                              // The W2Citation type requires source_type to
+                              // be a CitationSourceType union member. The
+                              // backend currently emits 'observation' which
+                              // is a valid member. Cast through unknown
+                              // because the FactCitation wire-shape is
+                              // intentionally looser (string source_type).
+                              const synthCitation = {
+                                source_type: resolved.source_type,
+                                source_id: resolved.source_id,
+                                page_or_section: resolved.page_or_section ?? null,
+                                field_or_chunk_id:
+                                  resolved.field_or_chunk_id ?? value,
+                                quote_or_value: resolved.quote_or_value ?? '',
+                                page: resolved.page ?? null,
+                                bbox: resolved.bbox ?? null,
+                                label: resolved.quote_or_value ?? null,
+                              } as unknown as W2Citation;
+                              setViewerSource({
+                                citations: [synthCitation],
+                                activeIndex: 0,
+                                bboxLayout,
+                                pdfUrl,
+                                pdfBytes,
+                              });
+                              return;
+                            }
                             // Pull citations + bbox/pdf metadata from this
                             // message's extraction. If absent, fall back to
                             // the live docChatContextRef stash (synthesis

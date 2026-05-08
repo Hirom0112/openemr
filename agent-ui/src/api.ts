@@ -1163,6 +1163,22 @@ export interface SynthesisOutput {
   next_steps: string[];
 }
 
+/**
+ * One entry in the {@link PostIngestContextResponse.fact_citations} map.
+ * Mirrors the W2 Citation shape on the wire — the frontend uses this to
+ * resolve synthesis-card chip clicks ({@code fact:obs:*}, {@code fact:intake:*},
+ * {@code guideline:*}) deterministically to a bbox overlay on the source.
+ */
+export interface FactCitation {
+  source_type: string;
+  source_id: string;
+  page_or_section?: string | null;
+  field_or_chunk_id?: string | null;
+  quote_or_value?: string | null;
+  page?: number | null;
+  bbox?: [number, number, number, number] | null;
+}
+
 export interface PostIngestContextResponse {
   summary: string;
   query_used: string;
@@ -1170,6 +1186,13 @@ export interface PostIngestContextResponse {
   /** Present on /post-approval-context when sonnet synthesis succeeded.
    *  Null when synthesis fell back to the deterministic recap. */
   synthesis?: SynthesisOutput | null;
+  /**
+   * Present on /post-approval-context. Map of citation_id → full W2
+   * Citation shape so the frontend can open the bbox overlay /
+   * read-only review panel deterministically on chip clicks.
+   * Absent when produced by older agent-api builds.
+   */
+  fact_citations?: Record<string, FactCitation>;
   metadata: Record<string, unknown>;
 }
 
