@@ -1663,6 +1663,19 @@ export default function ChatSurface({ sessionId, patientIds, providerName }: Cha
                       if (typeof c.summary !== 'string' || typeof c.query_used !== 'string' || !Array.isArray(c.guidelines)) {
                         return null;
                       }
+                      // Multimodal lanes (HL7/XLSX/DOCX/TIFF) yield no
+                      // summary, no guidelines, and an empty query (the
+                      // dispatcher returns extraction=null which short-
+                      // circuits the RAG search at main.py:3072). The card
+                      // is conceptually wrong for those lanes — there's
+                      // nothing to surface. Hide it entirely rather than
+                      // render an empty "Searched: ''" / "No matching
+                      // guidelines" placeholder that reads as a failure.
+                      const isEmptyContext =
+                        c.summary.trim() === ''
+                        && (c.guidelines as unknown[]).length === 0
+                        && c.query_used.trim() === '';
+                      if (isEmptyContext) return null;
                       return (
                         <PostIngestContextCard
                           summary={c.summary}
