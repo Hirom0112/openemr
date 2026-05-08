@@ -34,9 +34,9 @@ The 156-case W2 eval suite is wired into GitHub Actions and hard-fails on regres
 
 **Test counts (clean, post-fix):**
 
-- 204 W2 backend tests, 0 failures.
-- 49 agent-ui Jest tests, 0 failures.
-- 0 import-linter contract violations (`agent-api/.importlinter`).
+- **1,250 pytest tests collected across 117 test files** at submission lock — both W1 and W2. Reproduce: `cd agent-api && python3 -m pytest --collect-only -q | tail -1`. Of these, 9 pre-existing W1 baseline failures are tracked separately as inherited noise (see "Honesty section"); the W2-specific paths (W2 graph + document ingest + evidence + W2 evals) collect 221 tests via the file selector documented in the audit, all passing.
+- 49 agent-ui Jest tests, 0 failures (run `cd agent-ui && npm test`).
+- 0 import-linter contract violations (run `cd agent-api && lint-imports` against `.importlinter`).
 
 **Live verification (`scripts/verify_mvp.sh` against deploy):**
 
@@ -58,7 +58,7 @@ VERIFY: PASS
 
 | Document | Purpose |
 |---|---|
-| `W2_ARCHITECTURE.md` | Single-source-of-truth design doc (1,360 lines). |
+| `W2_ARCHITECTURE.md` | Single-source-of-truth design doc (~1,500 lines; verify with `wc -l W2_ARCHITECTURE.md`). |
 | `W2_ARCHITECTURE.md` §4.2.1 / §4.2.2 | Custom-upload deployment deviation and security tradeoff. |
 | `docs/SECURITY_TRADEOFFS.md` | Full analysis of the shared-HMAC tradeoff and reversibility plan. |
 | `docs/latency_cost_report.md` | Live `/metrics` scrape — p50/p95 latency, cost per 100 turns, 98% prompt-cache hit rate. |
