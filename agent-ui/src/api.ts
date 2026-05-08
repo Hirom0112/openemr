@@ -839,6 +839,47 @@ export async function rejectOne(baseUrl: string, pendingId: number, reason: stri
   return _jsonOrThrow<RejectResponse>(res, 'reject');
 }
 
+// ── Bbox reshape (review-panel debug feature, dev-only) ──────────────────────
+
+export interface CitationBboxPatchResponse {
+  pending_id: number;
+  field_or_chunk_id: string;
+  page: number;
+  bbox: [number, number, number, number];
+  previous_bbox: [number, number, number, number] | null;
+  previous_page: number | null;
+  n_updated: number;
+}
+
+/**
+ * PATCH /pending-extractions/{id}/citation-bbox — reshape one citation
+ * to match the bbox the clinician dragged in the review panel.
+ *
+ * Server-side gate: 503 when COPILOT_DEV_BBOX_LOG is unset (production
+ * deploys reject every reshape). Geometry validation happens server-
+ * side; the frontend should still pre-validate min-size/page-bounds
+ * to avoid round-tripping obviously bad drags.
+ */
+export async function patchCitationBbox(
+  baseUrl: string,
+  pendingId: number,
+  body: {
+    field_or_chunk_id: string;
+    page: number;
+    bbox: [number, number, number, number];
+  },
+): Promise<CitationBboxPatchResponse> {
+  const res = await fetch(
+    `${baseUrl}/pending-extractions/${pendingId}/citation-bbox`,
+    withAuth({
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+  return _jsonOrThrow<CitationBboxPatchResponse>(res, 'patch citation bbox');
+}
+
 // ── Quarantine exports ──────────────────────────────────────────────────────
 
 /** GET /document/quarantine?state=... */
@@ -1127,6 +1168,46 @@ export async function fetchDocumentBinary(
   const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
   const bytes = await res.arrayBuffer();
   return { bytes, contentType };
+}
+
+export interface DocxParagraphPayload {
+  para_idx: number;
+  text: string;
+  section: string | null;
+  style: string;
+  table_row: number | null;
+  table_col: number | null;
+}
+
+export interface DocxParagraphsResponse {
+  paragraphs: DocxParagraphPayload[];
+  meta: {
+    tracked_changes_present: boolean;
+    embedded_images_dropped: number;
+    n_paragraphs: number;
+    load_error: boolean;
+  };
+}
+
+/**
+ * Fetch the parsed paragraph list for an ingested DOCX. Backed by
+ * ``GET /document/{ref}/docx-paragraphs`` which runs python-docx server-side
+ * and returns body + table-cell paragraphs in document order. Used by the
+ * review panel's docx preview branch so the user sees the full letter
+ * (letterhead, HPI, labs, signature) instead of only the citation quotes
+ * that ``_synthesizeParagraphs`` produces from extracted rows.
+ */
+export async function fetchDocxParagraphs(
+  baseUrl: string,
+  documentReferenceId: string,
+): Promise<DocxParagraphsResponse> {
+  const url = `${baseUrl}/document/${encodeURIComponent(documentReferenceId)}/docx-paragraphs`;
+  const res = await fetch(url, withAuth({ method: 'GET' }));
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`docx paragraphs fetch failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  return (await res.json()) as DocxParagraphsResponse;
 }
 
 export interface DocumentChatResponse {

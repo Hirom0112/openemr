@@ -36,10 +36,13 @@ import {
 import {
   approveBatch,
   approveOne,
+  patchCitationBbox,
   fetchDocumentBinary,
+  fetchDocxParagraphs,
   fetchPostApprovalContext,
   getPendingOne,
   rejectOne,
+  type DocxParagraphPayload,
   type PendingExtractionRow,
   type PostApprovalContext,
 } from '../api';
@@ -109,6 +112,10 @@ interface FlatCitation {
   quote: string;
   /** Short human label e.g. "demographics" / "lisinopril" — drives the bbox badge. */
   shortLabel: string;
+  /** 1-based DOCX paragraph index, parsed from `page_or_section`'s
+   *  `para=N` locator. Null for non-DOCX citations or when the locator is
+   *  missing/unparseable; the docx preview falls back to quote-matching. */
+  paraIdx: number | null;
 }
 
 /**
@@ -284,6 +291,7 @@ function _normalizeCitationDict(c: unknown): {
   bbox: [number, number, number, number] | null;
   fieldOrChunkId: string;
   quote: string;
+  paraIdx: number | null;
 } | null {
   if (!c || typeof c !== 'object') return null;
   const obj = c as Record<string, unknown>;
@@ -306,7 +314,16 @@ function _normalizeCitationDict(c: unknown): {
   const bbox = Array.isArray(obj.bbox) && obj.bbox.length === 4
     ? (obj.bbox as [number, number, number, number])
     : null;
-  return { page: pageNum, bbox, fieldOrChunkId, quote };
+  // DOCX citations carry a synthetic `para=N` (or `para=N|run=M`) locator in
+  // page_or_section instead of a numeric page. Extract para N when present so
+  // the docx preview branch can map the citation to its real paragraph index.
+  let paraIdx: number | null = null;
+  const rawLoc = typeof obj.page_or_section === 'string' ? obj.page_or_section : null;
+  if (rawLoc) {
+    const m = /\bpara=(\d+)/.exec(rawLoc);
+    if (m) paraIdx = parseInt(m[1], 10);
+  }
+  return { page: pageNum, bbox, fieldOrChunkId, quote, paraIdx };
 }
 
 /** Pull the first/primary citation off a row payload. */
@@ -315,6 +332,7 @@ function _primaryCitation(row: PendingExtractionRow): {
   bbox: [number, number, number, number] | null;
   fieldOrChunkId: string;
   quote: string;
+  paraIdx: number | null;
 } | null {
   const v = _payloadValue(row);
   // Try root.citations / value.citations first; fall back to a depth-walk
@@ -456,9 +474,21 @@ export default function DocumentReviewPanel(
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
+  const [docxParagraphs, setDocxParagraphs] = useState<DocxParagraphPayload[] | null>(null);
 
   // Active row drives the bbox highlight + scroll-into-view in the rail.
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
+
+  // Feature B — bbox reshape mode. ``editMode`` toggles 8 resize handles
+  // on every citation; ``editedBboxes`` holds the current optimistic
+  // override per cardId so the layer stays interactive while we PATCH.
+  // The optimistic state is keyed by cardId because a single staging
+  // row can have N citations (demographics splits 5 ways) — keying on
+  // rowId would conflate them. A 'failed' patch reverts the override.
+  const [editMode, setEditMode] = useState(false);
+  const [editedBboxes, setEditedBboxes] = useState<
+    Record<string, [number, number, number, number]>
+  >({});
 
   // PDF page navigation. The user can drive this with prev/next OR by
   // clicking a field whose citation lives on a different page.
@@ -472,16 +502,27 @@ export default function DocumentReviewPanel(
   // Inject Google Fonts once for the lifetime of the panel.
   useEffect(() => _injectFonts(), []);
 
-  // Esc to close.
+  // Esc to close, `e` toggles bbox edit mode.
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         if (!bulkBusy) onClose();
+        return;
       }
+      if (e.key !== 'e' && e.key !== 'E') return;
+      // Don't toggle while typing into an input/textarea.
+      const tgt = e.target as HTMLElement | null;
+      if (tgt) {
+        const tag = tgt.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        if (tgt.isContentEditable) return;
+      }
+      if (readOnly) return;
+      setEditMode((m) => !m);
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose, bulkBusy]);
+  }, [onClose, bulkBusy, readOnly]);
 
   // Load pending rows.
   useEffect(() => {
@@ -547,6 +588,29 @@ export default function DocumentReviewPanel(
     };
   }, [baseUrl, documentReferenceId]);
 
+  // Fetch parsed DOCX paragraphs once the preview kind is known to be docx.
+  // Server-side parsing keeps the locator grammar (para=N) consistent with
+  // what the extractor cited; falling back to synthesizedParagraphs when the
+  // fetch fails preserves the v1 behavior.
+  useEffect(() => {
+    let cancelled = false;
+    setDocxParagraphs(null);
+    if (!documentReferenceId || previewKind !== 'docx') return;
+    void (async () => {
+      try {
+        const { paragraphs } = await fetchDocxParagraphs(baseUrl, documentReferenceId);
+        if (cancelled) return;
+        setDocxParagraphs(paragraphs);
+      } catch {
+        if (cancelled) return;
+        setDocxParagraphs(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [baseUrl, documentReferenceId, previewKind]);
+
   // Image blob URL plumbing.
   useEffect(() => {
     if (previewKind !== 'image' || !previewBytes) {
@@ -586,6 +650,7 @@ export default function DocumentReviewPanel(
                   fieldOrChunkId: s.citation.fieldOrChunkId,
                   quote: s.citation.quote,
                   shortLabel: _shortLabelForSubfield(s.subfield, s.value),
+                  paraIdx: s.citation.paraIdx,
                 }
               : null,
             category: 'Demographics',
@@ -610,6 +675,7 @@ export default function DocumentReviewPanel(
                 fieldOrChunkId: c.fieldOrChunkId,
                 quote: c.quote,
                 shortLabel: _shortLabelFor(lr.row),
+                paraIdx: c.paraIdx,
               }
             : null,
           category: _categoryFor(lr.row),
@@ -727,6 +793,67 @@ export default function DocumentReviewPanel(
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }, []);
+
+  // ── Bbox reshape (Feature B) ───────────────────────────────────────────
+  // Optimistic-update during drag: set the override on every mouse-move
+  // tick. On mouse-up, the layer calls onBboxCommit which PATCHes the
+  // backend and logs the same payload to the browser console. On
+  // failure, the override is cleared so the rendered bbox snaps back to
+  // the citation's source-of-truth value.
+  const onBboxOptimistic = useCallback(
+    (cardId: string, bbox: [number, number, number, number]) => {
+      setEditedBboxes((prev) => ({ ...prev, [cardId]: bbox }));
+    },
+    [],
+  );
+
+  const onBboxCommit = useCallback(
+    async (
+      cardId: string,
+      newBbox: [number, number, number, number],
+      before: [number, number, number, number],
+      page: number,
+      deltaPx: { dx: number; dy: number; dw: number; dh: number },
+    ) => {
+      const card = cards.find((c) => c.id === cardId);
+      if (!card || !card.citation) return;
+      const cit = card.citation;
+      const evt = {
+        cardId,
+        rowId: cit.rowId,
+        page,
+        before,
+        after: newBbox,
+        deltaPx,
+        deltaPdfPoints: [
+          Number((newBbox[0] - before[0]).toFixed(3)),
+          Number((newBbox[1] - before[1]).toFixed(3)),
+          Number((newBbox[2] - before[2]).toFixed(3)),
+          Number((newBbox[3] - before[3]).toFixed(3)),
+        ],
+      };
+      // eslint-disable-next-line no-console
+      console.log('[bbox-edit]', evt);
+      try {
+        const resp = await patchCitationBbox(baseUrl, cit.rowId, {
+          field_or_chunk_id: cit.fieldOrChunkId,
+          page,
+          bbox: newBbox,
+        });
+        // eslint-disable-next-line no-console
+        console.log('[bbox-edit] PATCH ok', resp);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[bbox-edit] PATCH failed — reverting', err);
+        setEditedBboxes((prev) => {
+          const next = { ...prev };
+          delete next[cardId];
+          return next;
+        });
+      }
+    },
+    [baseUrl, cards],
+  );
 
   // ── Bulk actions ───────────────────────────────────────────────────────
   const liveRows = useMemo(
@@ -942,6 +1069,7 @@ export default function DocumentReviewPanel(
           previewBytes={previewBytes}
           imageBlobUrl={imageBlobUrl}
           synthesizedParagraphs={_synthesizeParagraphs(rows)}
+          docxParagraphs={docxParagraphs}
           activePage={activePage}
           setActivePage={setActivePage}
           zoom={zoom}
@@ -950,6 +1078,12 @@ export default function DocumentReviewPanel(
           activePageCitations={activePageCitations}
           onBboxClick={onBboxClick}
           totalPages={totalCitationPages}
+          editMode={editMode}
+          setEditMode={setEditMode}
+          editedBboxes={editedBboxes}
+          onBboxOptimistic={onBboxOptimistic}
+          onBboxCommit={onBboxCommit}
+          readOnly={readOnly}
         />
 
         <aside className="cdr-rail">
@@ -1045,6 +1179,7 @@ interface DocViewerProps {
   previewBytes: ArrayBuffer | null;
   imageBlobUrl: string | null;
   synthesizedParagraphs: string[];
+  docxParagraphs: DocxParagraphPayload[] | null;
   activePage: number;
   setActivePage: (n: number) => void;
   zoom: number;
@@ -1053,6 +1188,21 @@ interface DocViewerProps {
   activePageCitations: FlatCitation[];
   onBboxClick: (cardId: string) => void;
   totalPages: number;
+  editMode: boolean;
+  setEditMode: (next: boolean) => void;
+  editedBboxes: Record<string, [number, number, number, number]>;
+  onBboxOptimistic: (
+    cardId: string,
+    bbox: [number, number, number, number],
+  ) => void;
+  onBboxCommit: (
+    cardId: string,
+    newBbox: [number, number, number, number],
+    before: [number, number, number, number],
+    page: number,
+    deltaPx: { dx: number; dy: number; dw: number; dh: number },
+  ) => Promise<void>;
+  readOnly: boolean;
 }
 
 interface PageGeometry {
@@ -1072,6 +1222,7 @@ function DocViewer(p: DocViewerProps): ReactElement {
     previewBytes,
     imageBlobUrl,
     synthesizedParagraphs,
+    docxParagraphs,
     activePage,
     setActivePage,
     zoom,
@@ -1080,6 +1231,12 @@ function DocViewer(p: DocViewerProps): ReactElement {
     activePageCitations,
     onBboxClick,
     totalPages,
+    editMode,
+    setEditMode,
+    editedBboxes,
+    onBboxOptimistic,
+    onBboxCommit,
+    readOnly,
   } = p;
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1220,6 +1377,17 @@ function DocViewer(p: DocViewerProps): ReactElement {
           >
             <ZoomInIcon />
           </button>
+          {!readOnly && (
+            <button
+              type="button"
+              className={`cdr-btn cdr-btn-edit-toggle${editMode ? ' cdr-btn-edit-toggle-active' : ''}`}
+              onClick={() => setEditMode(!editMode)}
+              title="Reshape citation boxes (E)"
+              aria-pressed={editMode}
+            >
+              {editMode ? 'Done' : 'Edit boxes'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1244,6 +1412,10 @@ function DocViewer(p: DocViewerProps): ReactElement {
                   citations={activePageCitations}
                   activeCardId={activeCardId}
                   onBboxClick={onBboxClick}
+                  editMode={editMode}
+                  editedBboxes={editedBboxes}
+                  onBboxOptimistic={onBboxOptimistic}
+                  onBboxCommit={onBboxCommit}
                 />
               )}
             </div>
@@ -1275,30 +1447,63 @@ function DocViewer(p: DocViewerProps): ReactElement {
                   citations={activePageCitations}
                   activeCardId={activeCardId}
                   onBboxClick={onBboxClick}
+                  editMode={editMode}
+                  editedBboxes={editedBboxes}
+                  onBboxOptimistic={onBboxOptimistic}
+                  onBboxCommit={onBboxCommit}
                 />
               )}
             </div>
           </div>
         )}
 
-        {previewKind === 'docx' && !previewLoading && !previewError && (
-          <div className="cdr-doc-page-wrap">
-            <div className="cdr-doc-page cdr-doc-page-docx">
-              <DocxParagraphList
-                paragraphs={synthesizedParagraphs}
-                activeIndex={
-                  activeCardId == null
-                    ? null
-                    : activePageCitations.findIndex((c) => c.cardId === activeCardId)
-                }
-                onClick={(idx) => {
-                  const target = activePageCitations[idx];
-                  if (target) onBboxClick(target.cardId);
-                }}
-              />
+        {previewKind === 'docx' && !previewLoading && !previewError && (() => {
+          // Prefer the real DOCX paragraph list (full letter body) when the
+          // backend has returned it; fall back to the citation-quote synth
+          // while loading or on fetch failure so the preview is never blank.
+          const useReal = docxParagraphs != null && docxParagraphs.length > 0;
+          const paragraphs = useReal
+            ? docxParagraphs!.map((p) => p.text)
+            : synthesizedParagraphs;
+          let activeIndex: number | null = null;
+          if (activeCardId != null) {
+            const activeCit = activePageCitations.find((c) => c.cardId === activeCardId);
+            if (useReal && activeCit?.paraIdx != null) {
+              // paraIdx is 1-based in the loader contract; docxParagraphs
+              // entries are also document-order, so subtract 1.
+              const idx = docxParagraphs!.findIndex((p) => p.para_idx === activeCit.paraIdx);
+              activeIndex = idx >= 0 ? idx : null;
+            } else if (!useReal) {
+              const idx = activePageCitations.findIndex((c) => c.cardId === activeCardId);
+              activeIndex = idx >= 0 ? idx : null;
+            }
+          }
+          return (
+            <div className="cdr-doc-page-wrap">
+              <div className="cdr-doc-page cdr-doc-page-docx">
+                <DocxParagraphList
+                  paragraphs={paragraphs}
+                  activeIndex={activeIndex}
+                  onClick={(idx) => {
+                    if (useReal) {
+                      // Map docx paragraph index → citation whose paraIdx
+                      // matches; surface its card if any.
+                      const para = docxParagraphs![idx];
+                      if (!para) return;
+                      const target = activePageCitations.find(
+                        (c) => c.paraIdx === para.para_idx,
+                      );
+                      if (target) onBboxClick(target.cardId);
+                    } else {
+                      const target = activePageCitations[idx];
+                      if (target) onBboxClick(target.cardId);
+                    }
+                  }}
+                />
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {previewKind === 'unknown' && !previewLoading && previewBytes && (
           <div className="cdr-state-msg">
@@ -1319,47 +1524,280 @@ interface BboxLayerProps {
   citations: FlatCitation[];
   activeCardId: string | null;
   onBboxClick: (cardId: string) => void;
+  editMode: boolean;
+  editedBboxes: Record<string, [number, number, number, number]>;
+  onBboxOptimistic: (
+    cardId: string,
+    bbox: [number, number, number, number],
+  ) => void;
+  onBboxCommit: (
+    cardId: string,
+    newBbox: [number, number, number, number],
+    before: [number, number, number, number],
+    page: number,
+    deltaPx: { dx: number; dy: number; dw: number; dh: number },
+  ) => Promise<void>;
 }
 
+const _BBOX_MIN_PT = 5.0;
+
+type _Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'body';
+
 function BboxLayer(p: BboxLayerProps): ReactElement {
-  const { geom, citations, activeCardId, onBboxClick } = p;
+  const {
+    geom,
+    citations,
+    activeCardId,
+    onBboxClick,
+    editMode,
+    editedBboxes,
+    onBboxOptimistic,
+    onBboxCommit,
+  } = p;
   const sx = geom.renderWidth / geom.sourceWidth;
   const sy = geom.renderHeight / geom.sourceHeight;
   return (
-    <div className="cdr-bbox-layer" aria-hidden="false">
+    <div
+      className={`cdr-bbox-layer${editMode ? ' cdr-bbox-layer-edit' : ''}`}
+      aria-hidden="false"
+    >
       {citations.map((c) => {
-        if (!c.bbox) return null;
-        const [x, y, w, h] = c.bbox;
-        const left = x * sx;
-        const top = y * sy;
-        const width = w * sx;
-        const height = h * sy;
-        const active = c.cardId === activeCardId;
+        const effective = editedBboxes[c.cardId] ?? c.bbox;
+        if (!effective) return null;
         return (
-          <button
-            type="button"
+          <CitationBox
             key={c.cardId}
-            className={`cdr-citation-box${active ? ' cdr-citation-box-active' : ''}`}
-            style={{ left, top, width, height }}
+            citation={c}
+            bbox={effective}
+            sx={sx}
+            sy={sy}
+            active={c.cardId === activeCardId}
+            editMode={editMode}
             onClick={() => onBboxClick(c.cardId)}
-            title={c.quote || c.shortLabel}
-          >
-            {/* Default state: a small number-only badge that doesn't
-                obscure document text. On hover OR when the row is
-                active, the badge expands to show #N + short label. */}
-            <span
-              className="cdr-citation-badge"
-              data-ordinal={c.ordinal}
-            >
-              <span className="cdr-citation-badge-number">{c.ordinal}</span>
-              <span className="cdr-citation-badge-detail">
-                {' '}
-                {c.shortLabel}
-              </span>
-            </span>
-          </button>
+            onOptimistic={onBboxOptimistic}
+            onCommit={onBboxCommit}
+          />
         );
       })}
+    </div>
+  );
+}
+
+interface CitationBoxProps {
+  citation: FlatCitation;
+  bbox: [number, number, number, number];
+  sx: number;
+  sy: number;
+  active: boolean;
+  editMode: boolean;
+  onClick: () => void;
+  onOptimistic: (
+    cardId: string,
+    bbox: [number, number, number, number],
+  ) => void;
+  onCommit: (
+    cardId: string,
+    newBbox: [number, number, number, number],
+    before: [number, number, number, number],
+    page: number,
+    deltaPx: { dx: number; dy: number; dw: number; dh: number },
+  ) => Promise<void>;
+}
+
+function CitationBox(p: CitationBoxProps): ReactElement {
+  const { citation, bbox, sx, sy, active, editMode, onClick, onOptimistic, onCommit } = p;
+  const dragRef = useRef<{
+    handle: _Handle;
+    startMouseX: number;
+    startMouseY: number;
+    startBbox: [number, number, number, number];
+    committedBefore: [number, number, number, number];
+  } | null>(null);
+
+  const [x, y, w, h] = bbox;
+  const left = x * sx;
+  const top = y * sy;
+  const width = w * sx;
+  const height = h * sy;
+
+  const handlePointerDown = useCallback(
+    (handle: _Handle) =>
+      (e: React.PointerEvent<HTMLDivElement>) => {
+        if (!editMode) return;
+        e.preventDefault();
+        e.stopPropagation();
+        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+        dragRef.current = {
+          handle,
+          startMouseX: e.clientX,
+          startMouseY: e.clientY,
+          startBbox: [...bbox],
+          committedBefore: [...bbox],
+        };
+      },
+    [editMode, bbox],
+  );
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const dxPx = e.clientX - drag.startMouseX;
+      const dyPx = e.clientY - drag.startMouseY;
+      const dxPdf = dxPx / sx;
+      const dyPdf = dyPx / sy;
+      const [sx0, sy0, sw0, sh0] = drag.startBbox;
+      let nx = sx0,
+        ny = sy0,
+        nw = sw0,
+        nh = sh0;
+      switch (drag.handle) {
+        case 'body':
+          nx = sx0 + dxPdf;
+          ny = sy0 + dyPdf;
+          break;
+        case 'nw':
+          nx = sx0 + dxPdf;
+          ny = sy0 + dyPdf;
+          nw = sw0 - dxPdf;
+          nh = sh0 - dyPdf;
+          break;
+        case 'n':
+          ny = sy0 + dyPdf;
+          nh = sh0 - dyPdf;
+          break;
+        case 'ne':
+          ny = sy0 + dyPdf;
+          nw = sw0 + dxPdf;
+          nh = sh0 - dyPdf;
+          break;
+        case 'e':
+          nw = sw0 + dxPdf;
+          break;
+        case 'se':
+          nw = sw0 + dxPdf;
+          nh = sh0 + dyPdf;
+          break;
+        case 's':
+          nh = sh0 + dyPdf;
+          break;
+        case 'sw':
+          nx = sx0 + dxPdf;
+          nw = sw0 - dxPdf;
+          nh = sh0 + dyPdf;
+          break;
+        case 'w':
+          nx = sx0 + dxPdf;
+          nw = sw0 - dxPdf;
+          break;
+      }
+      // Constrain min size + non-negative origin.
+      if (nw < _BBOX_MIN_PT) {
+        if (drag.handle === 'nw' || drag.handle === 'sw' || drag.handle === 'w') {
+          nx = sx0 + sw0 - _BBOX_MIN_PT;
+        }
+        nw = _BBOX_MIN_PT;
+      }
+      if (nh < _BBOX_MIN_PT) {
+        if (drag.handle === 'nw' || drag.handle === 'ne' || drag.handle === 'n') {
+          ny = sy0 + sh0 - _BBOX_MIN_PT;
+        }
+        nh = _BBOX_MIN_PT;
+      }
+      if (nx < 0) {
+        if (drag.handle !== 'body') nw += nx;
+        nx = 0;
+      }
+      if (ny < 0) {
+        if (drag.handle !== 'body') nh += ny;
+        ny = 0;
+      }
+      const next: [number, number, number, number] = [
+        Number(nx.toFixed(3)),
+        Number(ny.toFixed(3)),
+        Number(nw.toFixed(3)),
+        Number(nh.toFixed(3)),
+      ];
+      onOptimistic(citation.cardId, next);
+    },
+    [sx, sy, onOptimistic, citation.cardId],
+  );
+
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const drag = dragRef.current;
+      dragRef.current = null;
+      if (!drag) return;
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+      const before = drag.committedBefore;
+      // bbox at this point is the latest optimistic state (parent state).
+      // Skip a no-op commit when nothing changed.
+      if (
+        before[0] === bbox[0] &&
+        before[1] === bbox[1] &&
+        before[2] === bbox[2] &&
+        before[3] === bbox[3]
+      ) {
+        return;
+      }
+      void onCommit(
+        citation.cardId,
+        bbox,
+        before,
+        citation.page,
+        {
+          dx: Math.round(e.clientX - drag.startMouseX),
+          dy: Math.round(e.clientY - drag.startMouseY),
+          dw: Number(((bbox[2] - before[2]) * sx).toFixed(1)),
+          dh: Number(((bbox[3] - before[3]) * sy).toFixed(1)),
+        },
+      );
+    },
+    [bbox, sx, sy, onCommit, citation.cardId, citation.page],
+  );
+
+  return (
+    <div
+      className={[
+        'cdr-citation-box',
+        active ? 'cdr-citation-box-active' : '',
+        editMode ? 'cdr-citation-box-edit' : '',
+      ].filter(Boolean).join(' ')}
+      style={{ left, top, width, height }}
+      onClick={(e) => {
+        if (editMode) return;
+        e.stopPropagation();
+        onClick();
+      }}
+      onPointerDown={editMode ? handlePointerDown('body') : undefined}
+      onPointerMove={editMode ? handlePointerMove : undefined}
+      onPointerUp={editMode ? handlePointerUp : undefined}
+      title={citation.quote || citation.shortLabel}
+    >
+      <span
+        className="cdr-citation-badge"
+        data-ordinal={citation.ordinal}
+      >
+        <span className="cdr-citation-badge-number">{citation.ordinal}</span>
+        <span className="cdr-citation-badge-detail">
+          {' '}
+          {citation.shortLabel}
+        </span>
+      </span>
+      {editMode && (
+        <>
+          {(['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const).map((h) => (
+            <div
+              key={h}
+              className={`cdr-bbox-handle cdr-bbox-handle-${h}`}
+              onPointerDown={handlePointerDown(h)}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              role="presentation"
+            />
+          ))}
+        </>
+      )}
     </div>
   );
 }
@@ -2235,6 +2673,49 @@ const REVIEW_CSS = `
   opacity: 1;
 }
 .cdr-citation-box-active .cdr-citation-badge { background: var(--warn); }
+
+/* Feature B — bbox reshape mode. Boxes get a grab cursor + 8 handles
+   on the corners and edge midpoints. */
+.cdr-bbox-layer-edit .cdr-citation-box { cursor: grab; }
+.cdr-bbox-layer-edit .cdr-citation-box:active { cursor: grabbing; }
+.cdr-citation-box-edit { border-style: dashed; }
+.cdr-bbox-handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  background: var(--warn);
+  border: 1px solid #fff;
+  border-radius: 1px;
+  z-index: 2;
+}
+.cdr-bbox-handle-nw { top: -5px; left: -5px; cursor: nw-resize; }
+.cdr-bbox-handle-n  { top: -5px; left: 50%; margin-left: -5px; cursor: n-resize; }
+.cdr-bbox-handle-ne { top: -5px; right: -5px; cursor: ne-resize; }
+.cdr-bbox-handle-e  { top: 50%; right: -5px; margin-top: -5px; cursor: e-resize; }
+.cdr-bbox-handle-se { bottom: -5px; right: -5px; cursor: se-resize; }
+.cdr-bbox-handle-s  { bottom: -5px; left: 50%; margin-left: -5px; cursor: s-resize; }
+.cdr-bbox-handle-sw { bottom: -5px; left: -5px; cursor: sw-resize; }
+.cdr-bbox-handle-w  { top: 50%; left: -5px; margin-top: -5px; cursor: w-resize; }
+
+/* Edit-mode toggle button */
+.cdr-btn-edit-toggle {
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-weight: 500;
+  margin-left: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cdr-btn-edit-toggle:hover { border-color: var(--ink-muted); color: var(--ink); }
+.cdr-btn-edit-toggle-active {
+  background: var(--warn);
+  color: #fff;
+  border-color: var(--warn);
+}
 
 .cdr-docx-list {
   display: flex;
