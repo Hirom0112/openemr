@@ -480,6 +480,11 @@ _FIELD_ANCHOR_HINTS: dict[str, tuple[str, ...]] = {
     "medication": ("MEDICATION", "MEDS", "RX"),
     "allergy": ("ALLERG", "NKDA"),
     "family": ("FAMILY",),
+    # Problem-list / PMH section labels seen in real intake forms.
+    # ``CONDITION`` is the column header most extractors return as
+    # ``nearest_label`` for individual rows; the broader section terms
+    # cover whole-block anchors.
+    "problem_list": ("PROBLEM", "CONDITION", "DIAGNOS", "PMH", "PAST MEDICAL", "MEDICAL HISTORY"),
 }
 
 
@@ -1379,6 +1384,18 @@ def _hydrate_intake_form_citations(
         )
         cits = _tighten_citations_list(cits, f.condition, pdf_bytes)
         fam.append(f.model_copy(update={"citations": cits}))
+    problems = []
+    for pl in form.problem_list:
+        cits = _repoint_citations_list(
+            pl.citations,
+            pl.condition,
+            blocks,
+            block_index,
+            field_name="problem_list",
+            anchors=anchors,
+        )
+        cits = _tighten_citations_list(cits, pl.condition, pdf_bytes)
+        problems.append(pl.model_copy(update={"citations": cits}))
     code_status = form.code_status
     if code_status is not None:
         cits = _hydrate_citations_list(code_status.citations, block_index)
@@ -1392,6 +1409,7 @@ def _hydrate_intake_form_citations(
             "current_medications": meds,
             "allergies": allergies,
             "family_history": fam,
+            "problem_list": problems,
             "code_status": code_status,
         }
     )
