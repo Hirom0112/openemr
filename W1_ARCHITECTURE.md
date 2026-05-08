@@ -391,6 +391,12 @@ This classification is documentation-only — routes are not split across
 router modules. The dispatcher's W1 surface and the W2 graph share a
 single FastAPI app instance.
 
+### 4.7 [W2] Deployment deviation: FHIR Binary fallback chain
+
+Document writes on the deployed Railway build do not flow through OpenEMR's FHIR `Binary` POST. The `Binary` route returns 404 on this OpenEMR build, the legacy REST `/api/patient/.../document` route returns 401 unrelated to OAuth scope, and ingestion falls through to a custom JWT-protected upload endpoint (`oe-module-clinical-copilot/public/upload.php`). FHIR `DocumentReference` GET also returns `total=0` because OpenEMR's `DocumentService::search` calls `can_access($_SESSION['authUser'])` and OAuth-bearer requests don't bind `authUser` into the session on this build. The provenance chain (Observation → DocumentReference → documents) holds end-to-end via the agent-api response envelope and direct `copilot_observations` MySQL queries; v2 bridges into OpenEMR's standard FHIR read controllers without rewriting v1.
+
+Full analysis: `W2_ARCHITECTURE.md §4.2.1` (DocumentReference 404), `W2_ARCHITECTURE.md §4.2.2` (security tradeoff of the shared-HMAC custom path), `W2_ARCHITECTURE.md §4.2.4` (Observation write deviation), `docs/SECURITY_TRADEOFFS.md` (full reversibility plan). The deviation is gated by an environment variable (`COPILOT_JWT_SECRET`) — unsetting it disables both custom tiers cleanly.
+
 ---
 
 ## 5. Observability
