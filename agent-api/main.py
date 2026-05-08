@@ -3910,7 +3910,7 @@ def _build_rag_query_from_approved_facts(
 
 
 _APPROVED_INTAKE_SQL = (
-    "SELECT id, payload FROM copilot_pending_extractions "
+    "SELECT id, target_resource_id, payload FROM copilot_pending_extractions "
     "WHERE document_reference_id = $1 "
     # IntakeFormField rows go pending → approved → written (the writer
     # short-circuits to 'written' immediately because there's no FHIR write
@@ -3983,6 +3983,14 @@ async def document_post_approval_context(
                         except Exception:
                             payload = None
                     if isinstance(payload, dict):
+                        # Stash the row's target_resource_id on the payload
+                        # so the synthesis-citation loop below can derive a
+                        # human-readable label per kind, with positional
+                        # fallback. Underscore prefix avoids colliding with
+                        # any payload key the extractor might emit.
+                        payload["__copilot_target_resource_id"] = (
+                            row["target_resource_id"]
+                        )
                         intake_payloads.append(payload)
         except Exception as exc:  # noqa: BLE001 — soft path
             logger.warning(
@@ -4095,11 +4103,44 @@ async def document_post_approval_context(
                     value_repr=_safe_value_repr_for_obs(row),
                 )
             )
+        # Kind-aware label extractor for intake citations. Real intake
+        # payloads carry the meaningful identifier under shape-specific keys
+        # (medication.name, allergy.substance, problem_list.condition,
+        # family_history.relation, chief_concern.value, code_status.value),
+        # never under target_resource_field/field_name. Falls back to the
+        # trailing kind-idx of target_resource_id ("medication-2") when no
+        # value-bearing key is present, so chips stay disambiguated even
+        # for sparsely-extracted rows.
+        import re as _re
+
+        def _slugify_label(s: str) -> str:
+            s = (s or "").strip().lower()
+            s = _re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+            return s[:40] or "x"
+
+        def _intake_field_name(payload: dict[str, Any]) -> str:
+            for key in ("name", "substance", "condition", "relation"):
+                v = payload.get(key)
+                if isinstance(v, str) and v.strip():
+                    return _slugify_label(v)
+            for key in ("value",):
+                v = payload.get(key)
+                if isinstance(v, dict):  # TextField shape: {value, citations}
+                    v = v.get("value")
+                if isinstance(v, str) and v.strip():
+                    return _slugify_label(v)
+            tid = payload.get("__copilot_target_resource_id")
+            if isinstance(tid, str):
+                m = _re.search(r"intake-([a-z_]+)-(\d+)$", tid)
+                if m:
+                    return f"{m.group(1).replace('_', '-')}-{m.group(2)}"
+            return "unknown"
+
         for payload in intake_payloads:
             field_name = (
                 payload.get("target_resource_field")
                 or payload.get("field_name")
-                or "unknown"
+                or _intake_field_name(payload)
             )
             approved_facts.append(
                 ApprovedFact(

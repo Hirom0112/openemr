@@ -74,24 +74,28 @@ function renderCitations(
   ids: string[],
   onCitationClick?: (citationId: string) => void,
 ): ReactNode {
-  return ids.map((id) => {
-    if (onCitationClick) {
-      const title = id.startsWith('guideline:')
-        ? id.slice('guideline:'.length)
-        : undefined;
-      return (
-        <SynthesisCitationChip
-          key={id}
-          citationId={id}
-          onClick={onCitationClick}
-          title={title}
-        />
-      );
-    }
-    return (
+  // A leading space before each chip ensures the chip reads as a separate
+  // word in plain-text contexts (copy-paste, screen readers, narrow text
+  // selections). The chip's CSS marginLeft adds visual breathing room on
+  // top in rendered DOM. Both layers cover their respective failure modes.
+  return ids.map((id, i) => {
+    const chip = onCitationClick ? (
+      <SynthesisCitationChip
+        key={id}
+        citationId={id}
+        onClick={onCitationClick}
+        title={id.startsWith('guideline:') ? id.slice('guideline:'.length) : undefined}
+      />
+    ) : (
       <span key={id} style={CITATION_CHIP_STYLE}>
         {id}
       </span>
+    );
+    return (
+      <Fragment key={`chip-${i}-${id}`}>
+        {' '}
+        {chip}
+      </Fragment>
     );
   });
 }
