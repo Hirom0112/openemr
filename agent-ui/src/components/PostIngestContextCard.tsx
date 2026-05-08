@@ -1,6 +1,7 @@
-import { useState, type ReactElement, type ReactNode } from 'react';
+import { Fragment, useState, type ReactElement, type ReactNode } from 'react';
 import type { GuidelineSnippet, SynthesisOutput } from '../api';
 import { BRAND, SURFACE } from '../styles/tokens';
+import { parseCitationTokens } from '../utils/citationParser';
 import SynthesisCitationChip from './SynthesisCitationChip';
 
 /**
@@ -44,6 +45,31 @@ const CITATION_CHIP_STYLE: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+/**
+ * Render a narrative string with embedded citation tokens
+ * (`[fact:obs:*]`, `[fact:intake:*]`, `[guideline:*]`) parsed into
+ * clickable chips when `onCitationClick` is provided. Falls back to plain
+ * text when no handler is wired (defensive — preserves existing reads).
+ */
+function renderProse(
+  text: string,
+  onCitationClick?: (citationId: string) => void,
+  keyPrefix = 'p',
+): ReactNode {
+  if (!onCitationClick) return text;
+  const parts = parseCitationTokens(text, (id) => (
+    <SynthesisCitationChip
+      key={`${keyPrefix}-chip-${id}`}
+      citationId={id}
+      onClick={onCitationClick}
+      title={id.startsWith('guideline:') ? id.slice('guideline:'.length) : undefined}
+    />
+  ));
+  return parts.map((node, i) => (
+    <Fragment key={`${keyPrefix}-${i}`}>{node}</Fragment>
+  ));
+}
+
 function renderCitations(
   ids: string[],
   onCitationClick?: (citationId: string) => void,
@@ -79,7 +105,7 @@ function SynthesisSection(props: {
     <div style={{ marginBottom: 10 }}>
       {synthesis.approved_facts.trim() && (
         <p style={{ margin: '0 0 10px 0', lineHeight: 1.45 }}>
-          {synthesis.approved_facts}
+          {renderProse(synthesis.approved_facts, onCitationClick, 'af')}
         </p>
       )}
 
@@ -99,7 +125,7 @@ function SynthesisSection(props: {
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
             {synthesis.clinical_signals.map((s, i) => (
               <li key={i} style={{ padding: '4px 0', lineHeight: 1.45 }}>
-                {s.claim}
+                {renderProse(s.claim, onCitationClick, `cs-${i}`)}
                 {renderCitations(s.citation_ids, onCitationClick)}
               </li>
             ))}
@@ -123,7 +149,7 @@ function SynthesisSection(props: {
           <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
             {synthesis.guideline_mappings.map((m, i) => (
               <li key={i} style={{ padding: '4px 0', lineHeight: 1.45 }}>
-                {m.claim}
+                {renderProse(m.claim, onCitationClick, `gm-${i}`)}
                 {renderCitations([`guideline:${m.chunk_id}`], onCitationClick)}
               </li>
             ))}
@@ -147,7 +173,7 @@ function SynthesisSection(props: {
           <ul style={{ paddingLeft: 18, margin: 0 }}>
             {synthesis.next_steps.map((step, i) => (
               <li key={i} style={{ padding: '2px 0', lineHeight: 1.45 }}>
-                {step}
+                {renderProse(step, onCitationClick, `ns-${i}`)}
               </li>
             ))}
           </ul>
