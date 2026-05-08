@@ -50,38 +50,46 @@ Useful entry points:
 ## Known drift (re-verify; do not trust this list as eternal)
 
 Verified against code at the time of writing. Drift accumulates — re-check
-with `grep` before citing.
+with `grep` before citing. Many of the entries below have been actively
+reconciled in the W1/W2 docs; see `DOCS-DRIFT-AUDIT.md` at the repo root
+for the systematic pass. Re-grep before treating any entry as still
+outstanding.
 
-- ARCH §4.5 lists 5 tools; registry has 6. `get_triage_rationale` is defined
-  at `agent/tools/__init__.py:1091` and registered as direct-call only in
-  `agent/tool_registry.py` (`DIRECT_TOOL_REGISTRY`, line 34) — intentionally
-  excluded from the dispatcher's `TOOL_REGISTRY`.
-- ARCH §6.1 says "47 test cases organized into five categories" with no
-  marker language. Reality: `tests/conftest.py:21` enforces
-  `REQUIRED_MARKERS = {"hard_failure", "clinical_accuracy"}` and fails
-  collection on any unmarked test (`conftest.py:49-67`). `pytest.ini:9-10`
-  declares both gates (100% / 95%). The latency category in §6.1 has no
-  corresponding marker in code.
-- ARCH §4 ends at §4.5 — there is no §4.6. The two canonical agent endpoints
-  are not enumerated in the doc but exist in code: `/agent/triage_rationale/
-  {patient_id}` at `main.py:811`, `/agent/query` at `main.py:836`.
-- ARCH §4.4 prohibition wording (verbatim): "All LLM calls use Anthropic's
-  tool_use response format to produce machine-parseable output. Free-text
-  prose responses are not accepted for any use case." This is the
+- W1_ARCHITECTURE §4.5 originally listed 5 tools; registry has 6.
+  `get_triage_rationale` is defined at `agent/tools/__init__.py:1091` and
+  registered as direct-call only in `agent/tool_registry.py`
+  (`DIRECT_TOOL_REGISTRY`, line 34) — intentionally excluded from the
+  dispatcher's `TOOL_REGISTRY`. **Reconciled in Item 8 of the doc-drift pass.**
+- W1_ARCHITECTURE §6.1 originally said "47 test cases organized into five
+  categories" with no marker language. Reality: `tests/conftest.py:21`
+  enforces `REQUIRED_MARKERS = {"hard_failure", "clinical_accuracy"}` and
+  fails collection on any unmarked test (`conftest.py:49-67`).
+  `pytest.ini:9-10` declares both gates (100% / 95%). The latency category
+  in §6.1 has no corresponding marker in code. **Reconciled in Item 7;
+  latency annotation in Item 17.**
+- W1_ARCHITECTURE §4.6 (HTTP Routes) now exists and enumerates 32 routes
+  (26 in `main.py` via `@app.*` decorators + 6 in `staging/router.py`
+  mounted via `app.include_router(_staging_router)` at `main.py:3657`).
+  The two canonical agent endpoints: `/agent/triage_rationale/{patient_id}`
+  at `main.py:816` and `/agent/query` at `main.py:841`. **Reconciled in
+  Item 10.**
+- W1_ARCHITECTURE §4.4 prohibition wording (verbatim): "All LLM calls use
+  Anthropic's tool_use response format to produce machine-parseable output.
+  Free-text prose responses are not accepted for any use case." This is the
   authoritative phrasing — prefer it over paraphrase.
-- ARCH §8.1 says LangGraph is a v2 trigger ("the first commit that implements
-  a second agent type"). Reality: `requirements.txt:55` pins
-  `langgraph==0.2.60` with comment "Week-2 LangGraph skeleton (Slice 3.1+)";
-  `agent-api/graph/{build.py,state.py,nodes/}` exists; TODO.md Phase 3 marks
-  the supervisor + 4 workers + critic + finalize as shipped. Both true: W1
-  dispatcher = raw Anthropic SDK + custom Checkpointer; W2 doc-ingest =
-  LangGraph. The W1 doc has not been updated to reflect the W2 split.
+- W1_ARCHITECTURE §8.1 originally said LangGraph is a v2 trigger ("the
+  first commit that implements a second agent type"). Reality:
+  `requirements.txt:62` pins `langgraph==0.2.60`;
+  `agent-api/graph/{build.py,state.py,nodes/}` exists; the W2 doc-ingest
+  graph is shipped. Both true: W1 dispatcher = raw Anthropic SDK + custom
+  Checkpointer; W2 doc-ingest = LangGraph. **Reconciled in Item 9.**
 - W2 ingestion uses custom JWT-protected upload + custom Observation
   `derivedFrom` endpoints (`oe-module-clinical-copilot/public/upload.php`,
   `public/observation.php`) because in this OpenEMR build, FHIR `Binary` POST
   returns 404 (resource not registered) and legacy REST
   `/api/patient/{pid}/document` returns 401 (OAuth scope drop + ACL gate).
-  W2_ARCHITECTURE.md §4.2.1 documents this v1 deviation; ARCH does not.
+  W2_ARCHITECTURE.md §4.2.1 documents this v1 deviation; W1_ARCHITECTURE
+  §4.7 now cross-references it. **Reconciled in Item 11.**
 
 ## Rules
 
