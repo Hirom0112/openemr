@@ -199,7 +199,7 @@ function _shortLabelFor(row: PendingExtractionRow): string {
     case 'medication': return _str(v.name) || 'medication';
     case 'allergy': return _str(v.substance) || 'allergy';
     case 'family_history': {
-      const rel = _str(v.relationship);
+      const rel = _str(v.relation);
       const cond = _str(v.condition);
       return rel || cond || 'family-hx';
     }
@@ -1400,17 +1400,17 @@ function AllergyInputs(p: FieldEditorInnerProps): ReactElement {
 
 function FamilyHistoryInputs(p: FieldEditorInnerProps): ReactElement {
   const v = _payloadValue(p.lr.row);
-  const [relationship, setRelationship] = useState(_str(v.relationship));
+  const [relation, setRelation] = useState(_str(v.relation));
   const [condition, setCondition] = useState(_str(v.condition));
   useEffect(() => {
-    _emitIntake(p, { relationship, condition });
+    _emitIntake(p, { relation, condition });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relationship, condition]);
+  }, [relation, condition]);
   return (
     <>
-      <input className="cdr-field-input cdr-field-input-compound" type="text" value={relationship}
-        placeholder="Relationship" disabled={p.disabled}
-        onChange={(e) => setRelationship(e.target.value)} />
+      <input className="cdr-field-input cdr-field-input-compound" type="text" value={relation}
+        placeholder="Relation" disabled={p.disabled}
+        onChange={(e) => setRelation(e.target.value)} />
       <input className="cdr-field-input" type="text" value={condition} placeholder="Condition"
         disabled={p.disabled} onChange={(e) => setCondition(e.target.value)} />
     </>
@@ -1497,7 +1497,7 @@ function _labelFor(row: PendingExtractionRow): string {
     case 'allergy': return 'Drug Allergy';
     case 'family_history': {
       const v = _payloadValue(row);
-      const rel = _str(v.relationship);
+      const rel = _str(v.relation);
       return rel ? rel.charAt(0).toUpperCase() + rel.slice(1) : 'Family History';
     }
     case 'code_status': return 'Code Status';
