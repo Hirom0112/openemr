@@ -1,21 +1,33 @@
 # Clinical Co-Pilot — Eval Suite
 
+*Scope: W2 eval suite. For W1 dispatcher tests, see `W1_ARCHITECTURE.md` §6.1.*
+
 One-page reference. Drives the PR-blocking eval gate that the MVP rubric requires.
 
 ## Golden case set
 
-- **Count: 98 cases** (counted via `grep -c "case_id" tests/fixtures/w2_eval_cases.py`)
-- **Source of truth:** [`tests/fixtures/w2_eval_cases.py`](../tests/fixtures/w2_eval_cases.py)
-- **Modality breakdown** (from `evals/baseline.json` § `per_modality`):
-  - `intake_form` — 26 cases
-  - `typed_pdf` — 15 cases
-  - `multi_column` — 12 cases
-  - `scanned_pdf` — 11 cases
-  - `table_heavy` — 11 cases
-  - `synthetic` — 9 cases
-  - (remaining cases live in adjacent fixtures: handoff, retrieval, smoke)
+- **Count: 156 cases at submission lock.** For the live count, run from `agent-api/`:
 
-> The MVP rubric calls for "50-case golden set"; this suite ships ~2× that.
+  ```bash
+  python3 -c "from tests.fixtures.w2_eval_cases import CASES; print(len(CASES))"
+  ```
+
+- **Source of truth:** [`tests/fixtures/w2_eval_cases.py`](../tests/fixtures/w2_eval_cases.py)
+- **Modality breakdown** (live runtime — `Counter(c.document_modality for c in CASES)`; cross-cuts the bucket axis used by `W2_ARCHITECTURE.md §11.1`):
+  - `typed_pdf` — 27 cases
+  - `intake_form` — 26 cases
+  - `table_heavy` — 23 cases
+  - `multi_column` — 12 cases
+  - `photo_capture` — 12 cases
+  - `scanned_pdf` — 11 cases
+  - `synthetic` — 9 cases
+  - `hl7_v2` — 8 cases
+  - `xlsx_workbook` — 8 cases
+  - `docx_referral` — 8 cases
+  - `tiff_fax` — 8 cases
+  - `unknown` — 4 cases
+
+> The MVP rubric calls for a "50-case golden set" as the floor; this suite ships ~3× that, including the Phase 9.9 multimodal expansion (HL7v2, XLSX, DOCX, TIFF, photo capture). Counts grow as the suite grows — re-run the runtime command for the current value.
 
 ## Rubrics
 
