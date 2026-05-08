@@ -78,7 +78,12 @@ def _iter_cited_items(extraction: dict) -> Iterable[dict]:
         chief = extraction.get("chief_concern")
         if isinstance(chief, dict) and "citations" in chief:
             yield chief
-        for key in ("current_medications", "allergies", "family_history"):
+        for key in (
+            "current_medications",
+            "allergies",
+            "family_history",
+            "pertinent_labs",
+        ):
             for item in extraction.get(key) or []:
                 if isinstance(item, dict):
                     yield item

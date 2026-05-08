@@ -246,7 +246,12 @@ def _iter_citations_with_bbox(extraction: Any) -> Iterable[dict]:
     pools: list[Any] = []
     kind = extraction.get("kind")
     if kind == "intake_form":
-        for key in ("current_medications", "allergies", "family_history"):
+        for key in (
+            "current_medications",
+            "allergies",
+            "family_history",
+            "pertinent_labs",
+        ):
             pools.extend(extraction.get(key) or [])
         demographics = extraction.get("demographics") or {}
         if isinstance(demographics, dict):

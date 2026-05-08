@@ -113,6 +113,57 @@ def test_citation_present_fails_when_extraction_missing() -> None:
     assert citation_present(_outcome(None)) is False
 
 
+def _intake_extraction_with_pertinent_labs(
+    *, lab_citations: list[dict] | None = None,
+) -> dict:
+    """IntakeForm shape carrying one pertinent_labs entry — the new field
+    added to capture lab values mentioned in non-LabReport documents
+    (referral letters, admission notes). citation_present must walk
+    pertinent_labs[].citations like every other intake field.
+    """
+    cit = (
+        lab_citations
+        if lab_citations is not None
+        else [
+            {
+                "source_type": "document",
+                "source_id": "doc-1",
+                "page_or_section": "Pertinent Labs",
+                "field_or_chunk_id": "para=26",
+                "quote_or_value": "LDL-C: 142 mg/dL [HIGH]",
+            }
+        ]
+    )
+    return {
+        "kind": "intake_form",
+        "schema_version": "1.0",
+        "patient_id": "pt-1",
+        "document_reference_id": "doc-1",
+        "pertinent_labs": [
+            {
+                "test_name": "LDL-C",
+                "normalized_test_name": "LDL cholesterol",
+                "value": "142",
+                "unit": "mg/dL",
+                "abnormal_flag": "high",
+                "citations": cit,
+            }
+        ],
+        "classifier_confidence": 0.9,
+        "ocr_confidence_range": [1.0, 1.0],
+        "extracted_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def test_citation_present_passes_for_intake_form_with_cited_pertinent_labs() -> None:
+    assert citation_present(_outcome(_intake_extraction_with_pertinent_labs())) is True
+
+
+def test_citation_present_fails_when_pertinent_lab_has_empty_citations() -> None:
+    bad = _intake_extraction_with_pertinent_labs(lab_citations=[])
+    assert citation_present(_outcome(bad)) is False
+
+
 # --------------------------------------------------------------------------- #
 # correct_critic_decision
 # --------------------------------------------------------------------------- #

@@ -1825,9 +1825,18 @@ _MULTIMODAL_CASES: list[W2EvalCase] = [
         chart_patient=PT_MARGARET_CHEN,
         expected_kind="intake_form",
         expected_critic_decision="pass",
-        notes="DOCX referral nominal — Chen.",
+        notes=(
+            "DOCX referral nominal — Chen. Asserts the pertinent_labs[] "
+            "lipid-panel values (LDL-C 142, total cholesterol 218) are "
+            "extracted with citations rather than silently dropped — the "
+            "regression that motivated adding pertinent_labs to IntakeForm."
+        ),
         document_modality="docx_referral",
         expected_staging=True,
+        expected_field_assertions=(
+            ("pertinent_labs[?test_name=='LDL-C'].value", "142"),
+            ("pertinent_labs[?test_name=='Total cholesterol'].value", "218"),
+        ),
     ),
     W2EvalCase(
         case_id="docx_referral_002_whitaker_intake",

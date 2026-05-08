@@ -635,7 +635,12 @@ def _first_citation_bbox(extraction: Any) -> Optional[dict]:
     elif kind == "unknown":
         pools = list(extraction.get("key_facts") or [])
     elif kind == "intake_form":
-        for key in ("current_medications", "allergies", "family_history"):
+        for key in (
+            "current_medications",
+            "allergies",
+            "family_history",
+            "pertinent_labs",
+        ):
             pools.extend(extraction.get(key) or [])
     for item in pools:
         if not isinstance(item, dict):
