@@ -97,6 +97,7 @@ _STAGING_HTTP_STATUS = {
     "not_found": 404,
     "conflict": 409,
     "invalid_reason": 400,
+    "invalid_payload": 400,
     "pool_unavailable": 503,
 }
 
@@ -495,6 +496,172 @@ async def retry_pending_extraction(pending_id: int) -> RetryResponse:
         pending_id=pending_id,
         state=final_state,  # type: ignore[arg-type]
         retry_count=int(out["retry_count"]),
+    )
+
+
+# ── Dev-only: reshape an existing citation's bbox ────────────────────────────
+#
+# Gated behind `COPILOT_DEV_BBOX_LOG=1`. When unset the endpoint returns 503
+# and writes nothing — production deploys never accept reshapes. When the
+# flag is on, every successful PATCH emits a structured `bbox_edit` log
+# event with before/after coordinates, the row's id + page + field_or_chunk_id,
+# and the deltas — so the same docker logs stream that watches the rest of
+# the pipeline shows the clinician's reshape activity.
+
+_BBOX_MAX_PT: float = 2000.0  # generous upper bound (US Letter 612, A4 595, Legal 1008)
+_BBOX_MIN_DIM_PT: float = 5.0  # standing rule: reject zero-area / pixel-thin
+
+
+class CitationBboxPatchBody(BaseModel):
+    """Body for ``PATCH /pending-extractions/{id}/citation-bbox``.
+
+    Identifies the citation to mutate by its ``field_or_chunk_id``
+    (stable across the pipeline; what the frontend already keys on)
+    rather than by index — keeps the API resilient to citation
+    re-ordering and demographics' nested layout.
+    """
+
+    field_or_chunk_id: str
+    page: int
+    bbox: list[float]
+
+
+class CitationBboxPatchResponse(BaseModel):
+    pending_id: int
+    field_or_chunk_id: str
+    page: int
+    bbox: list[float]
+    previous_bbox: list[float] | None
+    previous_page: int | None
+    n_updated: int
+
+
+def _validate_bbox_or_400(bbox: list[float], page: int) -> None:
+    if not isinstance(bbox, list) or len(bbox) != 4:
+        raise HTTPException(
+            status_code=400, detail="bbox must be a 4-element list [x, y, w, h]"
+        )
+    try:
+        x, y, w, h = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="bbox elements must be numeric")
+    if x < 0 or y < 0:
+        raise HTTPException(status_code=400, detail="bbox origin must be non-negative")
+    if w < _BBOX_MIN_DIM_PT or h < _BBOX_MIN_DIM_PT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"bbox width and height must each be at least {_BBOX_MIN_DIM_PT} PDF pt",
+        )
+    if x + w > _BBOX_MAX_PT or y + h > _BBOX_MAX_PT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"bbox extent exceeds {_BBOX_MAX_PT} PDF pt soft bound",
+        )
+    if not isinstance(page, int) or page < 1 or page > 999:
+        raise HTTPException(
+            status_code=400, detail="page must be a positive integer (1-indexed)"
+        )
+
+
+@router.patch(
+    "/pending-extractions/{pending_id}/citation-bbox",
+    response_model=CitationBboxPatchResponse,
+)
+async def patch_citation_bbox(
+    pending_id: int,
+    body: CitationBboxPatchBody,
+) -> CitationBboxPatchResponse:
+    """Reshape one citation's bbox on a pending row.
+
+    Gated behind ``COPILOT_DEV_BBOX_LOG`` — production deploys reject
+    with 503. Validates the new bbox geometry up front (4 numbers,
+    non-negative origin, ≥5pt min dim, ≤2000pt soft upper bound,
+    1-indexed page). Confirms the requested page matches the citation's
+    current page (per the standing rule — bbox edits cannot move a
+    citation across pages, only reshape it on its existing page).
+
+    Logs every successful edit at INFO with the before/after bbox so
+    the extractor pipeline can be tuned against operator-observed
+    inaccuracies.
+    """
+    # Local import keeps the gate evaluable per-call (matters for tests
+    # that flip env vars between cases).
+    from config import settings as _settings
+
+    rid = request_id_var.get()
+    t0 = time.perf_counter()
+    if not _settings.copilot_dev_bbox_log:
+        agent_staging_endpoint_total.labels(endpoint="patch_bbox", outcome="error").inc()
+        raise HTTPException(
+            status_code=503,
+            detail="bbox-edit endpoint disabled (set COPILOT_DEV_BBOX_LOG=1 in dev)",
+        )
+
+    _validate_bbox_or_400(body.bbox, body.page)
+
+    try:
+        result = await _store.update_citation_bbox(
+            pending_id,
+            field_or_chunk_id=body.field_or_chunk_id,
+            new_bbox=body.bbox,
+            new_page=body.page,
+        )
+    except _store.StagingError as exc:
+        agent_staging_endpoint_total.labels(
+            endpoint="patch_bbox", outcome="error"
+        ).inc()
+        raise _staging_to_http(exc) from exc
+    finally:
+        agent_staging_endpoint_duration_seconds.labels(
+            endpoint="patch_bbox"
+        ).observe(max(0.0, time.perf_counter() - t0))
+
+    # The store enforces the cross-page rule inside the same transaction
+    # as the UPDATE — a violating request raises StagingError before any
+    # write happens, mapped to 400 above. By this point the edit landed.
+    previous = result["previous"] or {}
+    prev_bbox: list[float] | None = (
+        list(previous["bbox"])
+        if isinstance(previous.get("bbox"), list) and len(previous["bbox"]) == 4
+        else None
+    )
+    prev_page: int | None = (
+        int(previous["page"])
+        if isinstance(previous.get("page"), int)
+        else None
+    )
+
+    delta_pdf_points: list[float] = []
+    if prev_bbox is not None:
+        delta_pdf_points = [
+            round(body.bbox[i] - prev_bbox[i], 3) for i in range(4)
+        ]
+
+    agent_staging_endpoint_total.labels(
+        endpoint="patch_bbox", outcome="success"
+    ).inc()
+    _logger.info(
+        "bbox_edit",
+        extra={
+            "request_id": rid,
+            "pending_id": pending_id,
+            "field_or_chunk_id": body.field_or_chunk_id,
+            "page": body.page,
+            "before": prev_bbox,
+            "after": list(body.bbox),
+            "delta_pdf_points": delta_pdf_points,
+            "n_citations_updated": result["n_updated"],
+        },
+    )
+
+    return CitationBboxPatchResponse(
+        pending_id=pending_id,
+        field_or_chunk_id=body.field_or_chunk_id,
+        page=body.page,
+        bbox=list(body.bbox),
+        previous_bbox=prev_bbox,
+        previous_page=prev_page,
+        n_updated=result["n_updated"],
     )
 
 

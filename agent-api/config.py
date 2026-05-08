@@ -127,6 +127,13 @@ class Settings(BaseSettings):
     # confirmation after a deploy.
     copilot_diag: str = ""
 
+    # Dev-only: enable PATCH /pending-extractions/{id}/citation-bbox so the
+    # review-panel can persist clinician-driven bbox reshapes for
+    # extractor-debug feedback. Off by default; the endpoint hard-rejects
+    # writes with 503 when this flag is unset, so production deploys
+    # never accept reshapes even if a stale frontend tries to PATCH.
+    copilot_dev_bbox_log: str = ""
+
     # OpenEMR MySQL — used by the audit module to write rows into the
     # OpenEMR `log` table for HIPAA audit trail. All settings overridable
     # via env vars (OPENEMR_DB_HOST, etc). Defaults target the docker-compose

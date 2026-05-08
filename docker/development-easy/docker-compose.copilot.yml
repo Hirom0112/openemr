@@ -64,6 +64,10 @@ services:
       TESSERACT_PSM: "${TESSERACT_PSM:-3}"
       TESSERACT_DPI: "${TESSERACT_DPI:-300}"
       PHOTO_PREPROCESS: "${PHOTO_PREPROCESS:-off}"
+      # Dev-only: enables PATCH /pending-extractions/{id}/citation-bbox
+      # for the review-panel reshape feature. Production deploys must
+      # leave this unset; the endpoint hard-rejects writes with 503.
+      COPILOT_DEV_BBOX_LOG: "${COPILOT_DEV_BBOX_LOG:-}"
     depends_on:
       redis:
         condition: service_healthy

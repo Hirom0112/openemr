@@ -316,6 +316,153 @@ async def get_pending(pending_id: int) -> dict[str, Any] | None:
     return _row_to_dict(row)
 
 
+def _walk_and_update_citations(
+    obj: Any,
+    field_or_chunk_id: str,
+    new_bbox: list[float],
+    new_page: int,
+) -> tuple[Any, int, dict[str, Any] | None]:
+    """Recursively walk a payload tree, find every citation whose
+    ``field_or_chunk_id`` matches ``field_or_chunk_id``, replace its
+    ``bbox`` + ``page`` in place, and return the updated tree + the
+    number of citations updated + a copy of the previous citation
+    (the FIRST match's pre-update value, for the audit log).
+
+    The walker is deliberately permissive about payload shape — works
+    against flat (medication / allergy / family_history) and nested
+    (demographics with per-sub-field citations) layouts. Returns
+    ``(payload, 0, None)`` when no match is found; the caller surfaces
+    that as a 404.
+    """
+    matches = 0
+    previous: dict[str, Any] | None = None
+
+    def _walk(node: Any) -> Any:
+        nonlocal matches, previous
+        if isinstance(node, list):
+            return [_walk(x) for x in node]
+        if not isinstance(node, dict):
+            return node
+        out: dict[str, Any] = {}
+        for k, v in node.items():
+            if k == "citations" and isinstance(v, list):
+                new_list: list[Any] = []
+                for c in v:
+                    if (
+                        isinstance(c, dict)
+                        and isinstance(c.get("field_or_chunk_id"), str)
+                        and c["field_or_chunk_id"] == field_or_chunk_id
+                    ):
+                        if previous is None:
+                            previous = {
+                                "bbox": c.get("bbox"),
+                                "page": c.get("page"),
+                            }
+                        nc = dict(c)
+                        nc["bbox"] = list(new_bbox)
+                        nc["page"] = int(new_page)
+                        # If the source had a polygon, drop it — a manual
+                        # reshape invalidates the polygon's faithfulness.
+                        if "polygon" in nc:
+                            nc["polygon"] = None
+                        new_list.append(nc)
+                        matches += 1
+                    else:
+                        new_list.append(_walk(c))
+                out[k] = new_list
+            else:
+                out[k] = _walk(v)
+        return out
+
+    updated = _walk(obj)
+    return updated, matches, previous
+
+
+_UPDATE_PAYLOAD_PENDING_ONLY_SQL = """
+    UPDATE copilot_pending_extractions
+       SET payload = $2::jsonb
+     WHERE id = $1
+       AND state = 'pending'
+    RETURNING id
+"""
+
+
+async def update_citation_bbox(
+    pending_id: int,
+    *,
+    field_or_chunk_id: str,
+    new_bbox: list[float],
+    new_page: int,
+) -> dict[str, Any]:
+    """Replace one citation's ``bbox`` inside a pending row's payload,
+    keyed on ``field_or_chunk_id``.
+
+    The page is validated against the citation's CURRENT page within
+    the same transaction — a request whose ``new_page`` doesn't match
+    the citation's existing page raises ``invalid_payload`` BEFORE
+    any UPDATE runs, so a 400-bound request can never leave a
+    half-mutated row behind.
+
+    Returns a dict with:
+
+    - ``row``: the updated row
+    - ``previous``: the citation's prior bbox/page (for log replay)
+    - ``n_updated``: number of citation entries actually mutated
+
+    Raises :class:`StagingError` with code ``not_found`` when the row
+    doesn't exist, ``conflict`` when it's not in ``pending`` state, and
+    ``invalid_payload`` when the payload doesn't contain a citation
+    matching ``field_or_chunk_id`` or when the requested page differs
+    from the citation's existing page.
+    """
+    pool = await _require_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(_SELECT_ONE_SQL, pending_id)
+            if row is None:
+                raise StagingError("not_found", f"row {pending_id} not found")
+            row_dict = _row_to_dict(row)
+            if row_dict.get("state") != "pending":
+                raise StagingError(
+                    "conflict",
+                    f"row {pending_id} is in state '{row_dict.get('state')}', "
+                    f"only 'pending' rows accept bbox edits",
+                )
+            payload = row_dict.get("payload")
+            if not isinstance(payload, dict):
+                raise StagingError("invalid_payload", "payload is not a dict")
+            updated, n, previous = _walk_and_update_citations(
+                payload, field_or_chunk_id, list(new_bbox), int(new_page)
+            )
+            if n == 0 or previous is None:
+                raise StagingError(
+                    "invalid_payload",
+                    f"no citation with field_or_chunk_id={field_or_chunk_id!r}",
+                )
+            current_page = previous.get("page")
+            if isinstance(current_page, int) and int(new_page) != current_page:
+                raise StagingError(
+                    "invalid_payload",
+                    f"citation lives on page {current_page}; bbox edits cannot "
+                    f"move it to page {new_page}",
+                )
+            upd = await conn.fetchrow(
+                _UPDATE_PAYLOAD_PENDING_ONLY_SQL,
+                pending_id,
+                _coerce_jsonb(updated),
+            )
+            if upd is None:
+                raise StagingError(
+                    "conflict",
+                    f"row {pending_id} state changed during update",
+                )
+            return {
+                "row": {**row_dict, "payload": updated},
+                "previous": previous,
+                "n_updated": n,
+            }
+
+
 async def list_pending(
     *,
     patient_id: str,
