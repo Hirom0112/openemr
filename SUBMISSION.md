@@ -2,6 +2,8 @@
 
 **A multi-agent clinical agent that reads documents, cites every fact to a real source with verified value-to-bbox fidelity, refuses cleanly when uncertain, surfaces conflicts rather than silently resolving them, and is gated by a 156-case CI suite[^1] — so the user's morning brief sees the messy half of the chart she would otherwise be assembling herself.**
 
+> **Repository:** Per program convention, the source-of-truth repository is the Gauntlet internal GitLab fork. The deployed application is built and pushed via the public GitHub mirror at `https://github.com/Hirom0112/openemr/tree/clinical-copilot` because Railway requires GitHub for its build pipeline. Both repositories are kept in sync.
+
 ---
 
 ## Live URLs
