@@ -4208,7 +4208,7 @@ def _parse_citations_from_answer(text: str) -> list[str]:
     return out
 
 
-@app.post("/document/{document_reference_id}/chat")
+@app.post("/document/{document_reference_id:path}/chat")
 async def document_chat(
     document_reference_id: str,
     body: DocumentChatRequest,
