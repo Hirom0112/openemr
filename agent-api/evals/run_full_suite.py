@@ -1011,6 +1011,7 @@ def main(argv: list[str] | None = None) -> int:
         "safe_refusal",
         "no_phi_in_logs",
         "provenance_chain",
+        "synthesis_grounded",
         "critic_false_positive_rate",
         "keyword_match_in_citation",
     )
