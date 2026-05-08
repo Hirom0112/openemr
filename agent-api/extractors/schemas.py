@@ -127,6 +127,15 @@ class LabReport(BaseModel):
     document_reference_id: str
     collection_facility: Optional[str] = None
     values: List[LabValue]
+    # Patient demographics printed on the lab report itself (Whitaker / DOB
+    # / MRN at the top of the document). Reuses the same `Demographics`
+    # model the intake-form path uses, so the review panel renders one
+    # card per surfaced sub-field via the existing `'demographics'` UI
+    # editor branch — no UI change required. The `Demographics` model is
+    # forward-declared earlier in this file (used by `IntakeForm`); the
+    # forward reference resolves cleanly at module import. Optional and
+    # additive — older payloads without this field still validate.
+    patient_demographics: Optional["Demographics"] = None
     classifier_confidence: float
     ocr_confidence_range: Tuple[float, float]
     extracted_at: datetime

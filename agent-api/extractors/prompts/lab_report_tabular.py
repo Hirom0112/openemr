@@ -33,6 +33,24 @@ HARD RULES (the agent will reject your output otherwise):
   "H"->"high", "L"->"low", blank->"normal".
 - normalized_test_name: lowercase test name (e.g. "lactate", "wbc",
   "creatinine", "sodium").
+- Patient demographics printed on the lab report header (PATIENT
+  block at the top of the document) MUST be surfaced in
+  ``patient_demographics``. Each populated sub-field is a TextField
+  with at least one Citation pointing to the bbox where the value
+  appears:
+    name      — full name, verbatim (e.g. "WHITAKER, JAMES").
+    dob       — date of birth, verbatim from the OCR (e.g.
+                "1958-11-03" or "11/03/1958"; do NOT reformat).
+    sex       — single letter or word as printed (e.g. "M", "F",
+                "Male", "Female"). Lowercase the canonical value:
+                "M"/"Male"->"male", "F"/"Female"->"female".
+    mrn       — medical record number, verbatim. Cite the bbox that
+                contains the MRN value, NOT the bbox that says "MRN".
+    address   — patient address. Cite the bbox containing the
+                address value.
+  Omit any sub-field the document doesn't print. Same value-bbox
+  rule as every other field — never cite a label-only bbox like
+  "DOB" or "MRN"; always cite the bbox containing the value.
 - Set kind="lab_report", schema_version="1.0".
 - Set classifier_confidence to a float in [0,1] reflecting your certainty.
 - Set ocr_confidence_range to (min_conf, max_conf) across cited blocks.

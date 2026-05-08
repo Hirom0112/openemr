@@ -2860,6 +2860,39 @@ async def document_ingest(
                     }
                 )
 
+        # Patient demographics printed on the lab report header — name +
+        # DOB + MRN at the top of the document. Stage as one
+        # IntakeFormField row (same pattern intake_form.demographics uses)
+        # so the review panel renders one card per surfaced sub-field via
+        # the existing Demographics editor branch. The whole demographics
+        # blob lives on a single staged row keyed
+        # 'copilot-{doc}-intake-demographics-0'.
+        _demo = getattr(extraction, "patient_demographics", None)
+        if _demo is not None:
+            try:
+                _src = ("png" if (format_hint or "").lower() == "png" else "pdf")
+                pending_extraction_ids.append(
+                    await _obs_writer.stage_intake_field(
+                        document_id=_doc_id_int,
+                        patient_id=patient_id,
+                        file_batch_id=file_batch_id,
+                        document_reference_id=write_result.document_reference_id,
+                        field_kind="demographics",
+                        field_index=0,
+                        payload={"demographics": _demo.model_dump(mode="json")},
+                        source_format=_src,
+                        request_id=rid,
+                        provider_id=provider_id,
+                    )
+                )
+            except Exception as stage_exc:  # noqa: BLE001
+                logger.warning(
+                    "intake_field_stage_soft_failed",
+                    extra={"request_id": rid, "field_kind": "demographics",
+                           "from": "lab_report",
+                           "error_type": type(stage_exc).__name__},
+                )
+
     elif extraction.kind == "intake_form":
         from observations import writer as _obs_writer
 
@@ -3735,6 +3768,124 @@ async def document_binary(
         media_type=content_type,
         headers={"Content-Disposition": "inline"},
     )
+
+
+@app.get("/document/{document_reference_id:path}/docx-paragraphs")
+async def document_docx_paragraphs(
+    document_reference_id: str,
+) -> dict[str, Any]:
+    """Return the parsed paragraph list for an ingested DOCX.
+
+    Reuses the same upstream PHP shim as ``/binary`` to fetch raw bytes,
+    then runs ``extract_docx_paragraphs`` so the UI preview renders the
+    actual document body — letterhead, HPI, labs, signature — instead of
+    only the citation quotes that ``_synthesizeParagraphs`` produces from
+    extracted rows.
+
+    Response shape::
+
+        {
+          "paragraphs": [
+            {"para_idx": 1, "text": "...", "section": "...", "style": "Normal",
+             "table_row": null, "table_col": null}
+          ],
+          "meta": {"tracked_changes_present": false,
+                    "embedded_images_dropped": 0,
+                    "n_paragraphs": 36,
+                    "load_error": false}
+        }
+
+    Non-DOCX bytes (PDF / PNG / etc.) return ``paragraphs: []`` with
+    ``meta.load_error: true`` so the UI can fall back gracefully.
+    """
+    import httpx as _httpx
+    import re as _re
+
+    from documents.docx_loader import extract_docx_paragraphs, is_docx
+    from documents.fhir_writer import _mint_copilot_jwt
+
+    match = _re.search(r"(\d+)$", document_reference_id or "")
+    if not match:
+        raise HTTPException(status_code=400, detail="missing_id")
+    document_id = match.group(1)
+
+    token = _mint_copilot_jwt()
+    if token is None:
+        raise HTTPException(
+            status_code=503, detail="copilot upload secret not configured"
+        )
+
+    base = settings.openemr_base_url.rstrip("/")
+    url = (
+        base
+        + "/interface/modules/custom_modules/oe-module-clinical-copilot/"
+        + "public/download.php"
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"id": document_id}
+
+    client = _httpx.AsyncClient(timeout=60)
+    try:
+        upstream = await client.get(url, headers=headers, params=params)
+    except _httpx.HTTPError as exc:
+        try:
+            await client.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning(
+            "document_docx_paragraphs_upstream_error",
+            extra={
+                "request_id": request_id_var.get(),
+                "document_id": document_id,
+                "error_class": type(exc).__name__,
+            },
+        )
+        raise HTTPException(status_code=502, detail="upstream unavailable") from exc
+
+    status = upstream.status_code
+    body_bytes = upstream.content
+    await client.aclose()
+
+    if status in (401, 404, 500):
+        raise HTTPException(status_code=status, detail="upstream_error")
+    if status != 200:
+        raise HTTPException(status_code=502, detail=f"upstream status {status}")
+
+    if not is_docx(body_bytes):
+        return {
+            "paragraphs": [],
+            "meta": {
+                "tracked_changes_present": False,
+                "embedded_images_dropped": 0,
+                "n_paragraphs": 0,
+                "load_error": True,
+            },
+        }
+
+    paragraphs, meta = extract_docx_paragraphs(body_bytes)
+    logger.info(
+        "document_docx_paragraphs_ok",
+        extra={
+            "request_id": request_id_var.get(),
+            "document_id": document_id,
+            "n_paragraphs": meta.get("n_paragraphs", 0),
+            "tracked_changes_present": meta.get("tracked_changes_present", False),
+        },
+    )
+    return {
+        "paragraphs": [
+            {
+                "para_idx": p.para_idx,
+                "text": p.text,
+                "section": p.section,
+                "style": p.style,
+                "table_row": p.table_row,
+                "table_col": p.table_col,
+            }
+            for p in paragraphs
+        ],
+        "meta": meta,
+    }
 
 
 @app.post("/document/post-ingest-context")
