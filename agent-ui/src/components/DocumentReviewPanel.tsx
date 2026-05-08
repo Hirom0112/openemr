@@ -2880,8 +2880,18 @@ function LabInputs(p: FieldEditorInnerProps): ReactElement {
     : [];
   const coding0 = codingArr[0] ?? {};
   const valueQty = (payload.valueQuantity as Record<string, unknown>) ?? {};
+  // valueQty.value is a number in FHIR Observation payloads (and that's
+  // what observations.writer._value_quantity emits). _str() only returns
+  // strings, so without this coercion the input renders empty even though
+  // the staged payload carries the value (e.g. 5.4 for WBC). Fall back
+  // through string → empty-string for the rare valueString-only path.
+  const _initValue = (raw: unknown): string => {
+    if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
+    if (typeof raw === 'string') return raw;
+    return '';
+  };
   const [display, setDisplay] = useState(_str(coding0.display));
-  const [value, setValue] = useState(_str(valueQty.value));
+  const [value, setValue] = useState(_initValue(valueQty.value));
   const [unit, setUnit] = useState(_str(valueQty.unit));
   useEffect(() => {
     const next: Record<string, unknown> = JSON.parse(JSON.stringify(payload));
