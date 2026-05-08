@@ -4318,6 +4318,99 @@ async def document_post_approval_context(
                 )
             )
 
+        # Build fact_citations: citation_id → full W2 Citation dict so the
+        # frontend can deterministically resolve synthesis-card chip clicks
+        # to a bbox overlay on the source PDF/PNG. Without this map the
+        # frontend has to do a speculative `source_id == row_id` match that
+        # routinely misses (the row_id is a postgres int but the citation
+        # source_id is a FHIR ref like "Observation/copilot-...").
+        fact_citations: dict[str, dict[str, Any]] = {}
+
+        # observations: bbox/page are not currently surfaced by
+        # ``read_observations_for_document`` (the readback SQL fetches only
+        # id+fhir_resource — the bbox lives in a separate ``citations`` column
+        # populated by ``ObservationController.php`` but never SELECTed back).
+        # We populate field_or_chunk_id with the row id so the frontend at
+        # least has a stable token; bbox/page are left null and the chip
+        # falls back to value-text-only on click.
+        for row in obs_rows:
+            row_id = row.get("id")
+            cid = f"fact:obs:{row_id}"
+            fhir_resource = row.get("fhir_resource") or {}
+            obs_fhir_id = (
+                fhir_resource.get("id")
+                if isinstance(fhir_resource, dict)
+                else None
+            )
+            value_repr = _safe_value_repr_for_obs(row)
+            display = row.get("display") or row.get("loinc_code") or ""
+            quote = (
+                f"{display}: {value_repr}".strip(": ").strip()
+                if display
+                else value_repr
+            )
+            fact_citations[cid] = {
+                "source_type": "observation",
+                "source_id": (
+                    f"Observation/{obs_fhir_id}"
+                    if isinstance(obs_fhir_id, str) and obs_fhir_id
+                    else f"copilot_observations/{row_id}"
+                ),
+                "page_or_section": None,
+                "field_or_chunk_id": str(row_id) if row_id is not None else "",
+                "quote_or_value": quote,
+                "page": None,
+                "bbox": None,
+            }
+
+        # intake: every payload carries a ``citations[]`` array (writer.py
+        # stages medications/allergies/etc with the W2 Citation shape at the
+        # root). Use citations[0] as the primary — that's the field-level
+        # source bbox the rich-review panel highlights.
+        for payload in intake_payloads:
+            field_name = (
+                payload.get("target_resource_field")
+                or payload.get("field_name")
+                or _intake_field_name(payload)
+            )
+            cid = f"fact:intake:{field_name}"
+            cits = payload.get("citations") or []
+            primary = cits[0] if isinstance(cits, list) and cits and isinstance(cits[0], dict) else {}
+            fact_citations[cid] = {
+                "source_type": primary.get("source_type") or "document",
+                "source_id": primary.get("source_id") or document_reference_id,
+                "page_or_section": primary.get("page_or_section"),
+                "field_or_chunk_id": (
+                    primary.get("field_or_chunk_id") or str(field_name)
+                ),
+                "quote_or_value": primary.get("quote_or_value"),
+                "page": primary.get("page"),
+                "bbox": primary.get("bbox"),
+            }
+
+        # guidelines: chunk_id, source_id, section, page_number, content come
+        # straight off the GuidelineSnippet. quote_or_value gets a 200-char
+        # excerpt of the chunk text so the chip tooltip can show context.
+        for snippet in guideline_snippets:
+            cid = f"guideline:{snippet.chunk_id}"
+            section = snippet.section or None
+            page_or_section: str | None
+            if section:
+                page_or_section = section
+            elif snippet.page_number is not None:
+                page_or_section = f"p{snippet.page_number}"
+            else:
+                page_or_section = None
+            fact_citations[cid] = {
+                "source_type": "guideline",
+                "source_id": snippet.source_id,
+                "page_or_section": page_or_section,
+                "field_or_chunk_id": snippet.chunk_id,
+                "quote_or_value": (snippet.content or "")[:200],
+                "page": snippet.page_number,
+                "bbox": None,
+            }
+
         synthesis_input = SynthesisInput(
             approved_facts=tuple(approved_facts),
             guidelines=tuple(guideline_snippets),
@@ -4401,6 +4494,7 @@ async def document_post_approval_context(
             "query_used": query,
             "guidelines": guideline_dicts,
             "synthesis": synthesis_payload,
+            "fact_citations": fact_citations,
             "metadata": {
                 "request_id": rid,
                 "patient_id": body.patient_id,
