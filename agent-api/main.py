@@ -58,12 +58,20 @@ from agent.metrics import (
     agent_quarantine_total,
     agent_quarantine_transitions_total,
     agent_resolver_duration_seconds,
+    agent_synthesis_total,
     agent_tool_calls_total,
     agent_tool_misroute_total,
     agent_w2_classifier_confidence,
     agent_w2_document_ingest_total,
     agent_w2_extraction_duration_seconds,
     agent_w2_ocr_confidence,
+)
+from agent.synthesis import (
+    ApprovedFact,
+    GuidelineSnippet,
+    RedisSynthesisCache,
+    SynthesisInput,
+    synthesize,
 )
 from agent.tools import (
     generate_handoff,
@@ -3940,6 +3948,97 @@ async def document_post_approval_context(
                 + ". Guidelines retrieved against the approved findings."
             )
 
+        # 5) RAG synthesis (additive). Falls back to None on terminal failure;
+        # the deterministic recap above is the always-present floor.
+        # Short representations passed into the synthesis prompt; never logged.
+        def _safe_value_repr_for_obs(row: dict[str, Any]) -> str:
+            value = row.get("value")
+            if value is None or (isinstance(value, str) and not value.strip()):
+                return "<missing>"
+            unit = row.get("unit")
+            if isinstance(unit, str) and unit.strip():
+                rendered = f"{value} {unit}".strip()
+            else:
+                rendered = str(value)
+            return rendered[:80]
+
+        def _safe_value_repr_for_intake(payload: dict[str, Any]) -> str:
+            existing = payload.get("value_repr")
+            if isinstance(existing, str) and existing.strip():
+                return existing[:80]
+            v = (
+                payload.get("value")
+                or payload.get("substance")
+                or payload.get("name")
+                or payload.get("text")
+            )
+            if v is None:
+                return "<missing>"
+            return str(v)[:80]
+
+        approved_facts: list[ApprovedFact] = []
+        for row in obs_rows:
+            row_id = row.get("id")
+            key_raw = row.get("loinc_code") or row.get("code") or "unknown"
+            approved_facts.append(
+                ApprovedFact(
+                    citation_id=f"fact:obs:{row_id}",
+                    kind="observation",
+                    key=str(key_raw),
+                    value_repr=_safe_value_repr_for_obs(row),
+                )
+            )
+        for payload in intake_payloads:
+            field_name = (
+                payload.get("target_resource_field")
+                or payload.get("field_name")
+                or "unknown"
+            )
+            approved_facts.append(
+                ApprovedFact(
+                    citation_id=f"fact:intake:{field_name}",
+                    kind="intake",
+                    key=str(field_name),
+                    value_repr=_safe_value_repr_for_intake(payload),
+                )
+            )
+
+        guideline_snippets: list[GuidelineSnippet] = []
+        for g in guideline_dicts:
+            chunk_id = str(g.get("chunk_id") or "")
+            guideline_snippets.append(
+                GuidelineSnippet(
+                    citation_id=f"guideline:{chunk_id}",
+                    chunk_id=chunk_id,
+                    source_id=str(g.get("source_id") or ""),
+                    document_title=str(g.get("document_title") or ""),
+                    section=str(g.get("section") or ""),
+                    page_number=g.get("page_number"),
+                    content=str(g.get("content") or ""),
+                    relevance_score=float(g.get("relevance_score") or 0.0),
+                )
+            )
+
+        synthesis_input = SynthesisInput(
+            approved_facts=tuple(approved_facts),
+            guidelines=tuple(guideline_snippets),
+            document_reference_id=document_reference_id,
+            patient_id=body.patient_id,
+        )
+
+        cache = RedisSynthesisCache(_redis) if _redis is not None else None
+        outcome = await synthesize(
+            synthesis_input,
+            cache=cache,
+            langfuse=_langfuse,
+        )
+
+        synthesis_payload: dict[str, Any] | None = None
+        if outcome.output is not None:
+            synthesis_payload = outcome.output.to_dict()
+        else:
+            agent_synthesis_total.labels(outcome="fallback").inc()
+
         duration_ms = int((time.perf_counter() - started) * 1000)
         logger.info(
             "post_approval_context_completed",
@@ -3957,10 +4056,14 @@ async def document_post_approval_context(
             "summary": summary,
             "query_used": query,
             "guidelines": guideline_dicts,
+            "synthesis": synthesis_payload,
             "metadata": {
                 "request_id": rid,
                 "patient_id": body.patient_id,
                 "document_reference_id": document_reference_id,
+                "synthesis_cache": outcome.cache,
+                "synthesis_attempts": outcome.attempts,
+                "synthesis_fallback_reason": outcome.fallback_reason,
             },
         }
     except Exception:
