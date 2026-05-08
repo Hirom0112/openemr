@@ -1050,6 +1050,16 @@ async def stage_pertinent_lab(
         observation_id=target_resource_id,
         loinc=(code, display),
     )
+    # `_build_observation` puts citations under `_copilot_citations` (with
+    # `bbox_id` field name), but the UI's `_findFirstCitation` walker only
+    # looks for arrays under the key `citations` (with `field_or_chunk_id`).
+    # IntakeFormField rows never POST to FHIR — `_perform_write` short-
+    # circuits to ("written", None) — so adding the canonical citations
+    # array is safe and makes the docx preview's paraIdx-based highlight
+    # resolve. Mirrors the shape that every other IntakeFormField row
+    # carries (medications, allergies, family_history all stage their
+    # `model_dump` whose `citations` array sits at the payload root).
+    body["citations"] = [c.model_dump(mode="json") for c in lab_value.citations]
     locator = (
         lab_value.citations[0].field_or_chunk_id
         if lab_value.citations
