@@ -163,6 +163,7 @@ const FONT_HREF =
 const GROUP_ORDER: ReadonlyArray<string> = [
   'Demographics',
   'Chief Concern',
+  'Problem List',
   'Current Medications',
   'Allergies',
   'Family History',
@@ -239,6 +240,7 @@ function _categoryFor(row: PendingExtractionRow): string {
   switch (_kind(row)) {
     case 'demographics': return 'Demographics';
     case 'chief_concern': return 'Chief Concern';
+    case 'problem_list': return 'Problem List';
     case 'medication': return 'Current Medications';
     case 'allergy': return 'Allergies';
     case 'family_history': return 'Family History';
@@ -260,6 +262,11 @@ function _shortLabelFor(row: PendingExtractionRow): string {
       const rel = _str(v.relation);
       const cond = _str(v.condition);
       return rel || cond || 'family-hx';
+    }
+    case 'problem_list': {
+      const cond = _str(v.condition);
+      const code = _str(v.icd10_code);
+      return cond || code || 'problem';
     }
     case 'code_status': return _str(v.status, 'code');
     case 'lab': {
@@ -2422,6 +2429,7 @@ function FieldEditor(p: FieldEditorInnerProps): ReactElement {
     case 'medication': return <MedicationInputs {...p} />;
     case 'allergy': return <AllergyInputs {...p} />;
     case 'family_history': return <FamilyHistoryInputs {...p} />;
+    case 'problem_list': return <ProblemListInputs {...p} />;
     case 'code_status': return <CodeStatusInputs {...p} />;
     case 'lab': return <LabInputs {...p} />;
     case 'other': return <OtherInputs {...p} />;
@@ -2648,6 +2656,109 @@ function FamilyHistoryInputs(p: FieldEditorInnerProps): ReactElement {
   );
 }
 
+function ProblemListInputs(p: FieldEditorInnerProps): ReactElement {
+  // problem_list payloads are flat ProblemListItem dicts: condition is
+  // required; icd10_code / snomed_code / onset_date / status are
+  // optional. The ICD-10 code may have been nulled by the runtime
+  // guardrail (extractors.intake.apply_icd10_guardrail) when it
+  // didn't ground in source — we render the input either way; an
+  // operator can hand-correct if they see the literal in the doc.
+  const v = _payloadValue(p.lr.row);
+  const [condition, setCondition] = useState(_str(v.condition));
+  const [icd10, setIcd10] = useState(_str(v.icd10_code));
+  const [snomed, setSnomed] = useState(_str(v.snomed_code));
+  const [onset, setOnset] = useState(_str(v.onset_date));
+  const [status, setStatus] = useState<string>(_str(v.status, 'active'));
+  useEffect(() => {
+    _emitIntake(p, {
+      condition,
+      icd10_code: icd10 || null,
+      snomed_code: snomed || null,
+      onset_date: onset || null,
+      status: status || null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [condition, icd10, snomed, onset, status]);
+  // Subtle indicator: green dot when an ICD-10 code is present (it
+  // survived the guardrail or the operator hand-typed it); muted dot
+  // when the field is empty (either no code in source or guardrail
+  // rejected). Never claims correctness — just shows whether a code
+  // exists on the row.
+  const codePresent = icd10.trim().length > 0;
+  return (
+    <>
+      <input
+        className="cdr-field-input cdr-field-input-compound"
+        type="text"
+        value={condition}
+        placeholder="Condition"
+        disabled={p.disabled}
+        onChange={(e) => setCondition(e.target.value)}
+      />
+      <div className="cdr-field-input-row">
+        <div style={{ position: 'relative' }}>
+          <input
+            className="cdr-field-input"
+            type="text"
+            value={icd10}
+            placeholder="ICD-10 (e.g. I48.91)"
+            disabled={p.disabled}
+            onChange={(e) => setIcd10(e.target.value)}
+            style={{ paddingLeft: 22 }}
+          />
+          <span
+            aria-hidden="true"
+            title={
+              codePresent
+                ? 'ICD-10 code present on this row'
+                : 'No ICD-10 code (either absent in source or rejected by guardrail)'
+            }
+            style={{
+              position: 'absolute',
+              left: 8,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: codePresent ? '#1c3d2e' : '#bbb',
+              pointerEvents: 'none',
+            }}
+          />
+        </div>
+        <input
+          className="cdr-field-input"
+          type="text"
+          value={snomed}
+          placeholder="SNOMED"
+          disabled={p.disabled}
+          onChange={(e) => setSnomed(e.target.value)}
+        />
+      </div>
+      <div className="cdr-field-input-row">
+        <input
+          className="cdr-field-input"
+          type="text"
+          value={onset}
+          placeholder="Onset (e.g. 2018 or '~adolescence')"
+          disabled={p.disabled}
+          onChange={(e) => setOnset(e.target.value)}
+        />
+        <select
+          className="cdr-field-input"
+          value={status}
+          disabled={p.disabled}
+          onChange={(e) => setStatus(e.target.value)}
+        >
+          <option value="active">active</option>
+          <option value="resolved">resolved</option>
+          <option value="inactive">inactive</option>
+        </select>
+      </div>
+    </>
+  );
+}
+
 function CodeStatusInputs(p: FieldEditorInnerProps): ReactElement {
   const v = _payloadValue(p.lr.row);
   const [status, setStatusValue] = useState(_str(v.status, 'full'));
@@ -2730,6 +2841,11 @@ function _labelFor(row: PendingExtractionRow): string {
       const v = _payloadValue(row);
       const rel = _str(v.relation);
       return rel ? rel.charAt(0).toUpperCase() + rel.slice(1) : 'Family History';
+    }
+    case 'problem_list': {
+      const v = _payloadValue(row);
+      const cond = _str(v.condition);
+      return cond || 'Problem';
     }
     case 'code_status': return 'Code Status';
     case 'lab': {
