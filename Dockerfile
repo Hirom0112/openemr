@@ -26,6 +26,14 @@ COPY src/        /var/www/localhost/htdocs/openemr/src/
 COPY library/    /var/www/localhost/htdocs/openemr/library/
 COPY interface/  /var/www/localhost/htdocs/openemr/interface/
 COPY templates/  /var/www/localhost/htdocs/openemr/templates/
+# composer.json was updated upstream (PR #11412, 2026-04-02) to register
+# library/global_functions.inc.php in `autoload.files`. The base image's
+# vendor/composer/autoload_files.php predates that change, so functions
+# moved out of globals.php (e.g. getLayoutRes used by interface/new/
+# new_comprehensive.php:51) end up undefined at runtime. Pull our
+# composer.json + lock and regen the autoloader so the registration takes
+# effect. composer is present in the base image.
+COPY composer.json composer.lock /var/www/localhost/htdocs/openemr/
 
 # Docker COPY creates files owned by root:root. The openemr/openemr base image
 # owns all files as apache:root, and its entrypoint only runs chmod (not chown).
@@ -36,4 +44,14 @@ RUN chown -R apache:root \
     /var/www/localhost/htdocs/openemr/src/ \
     /var/www/localhost/htdocs/openemr/library/ \
     /var/www/localhost/htdocs/openemr/interface/ \
-    /var/www/localhost/htdocs/openemr/templates/
+    /var/www/localhost/htdocs/openemr/templates/ \
+    /var/www/localhost/htdocs/openemr/composer.json \
+    /var/www/localhost/htdocs/openemr/composer.lock
+
+# Regenerate the composer autoloader so library/global_functions.inc.php
+# (and any other autoload.files entries the base image's autoloader missed)
+# are require'd at runtime. --no-dev keeps the prod-only set; --optimize
+# emits a classmap so prod has no filesystem walks per request.
+RUN cd /var/www/localhost/htdocs/openemr && composer dump-autoload --no-dev --optimize 2>&1 || \
+    (echo "composer dump-autoload failed; trying with --no-scripts" && \
+     cd /var/www/localhost/htdocs/openemr && composer dump-autoload --no-dev --optimize --no-scripts)
