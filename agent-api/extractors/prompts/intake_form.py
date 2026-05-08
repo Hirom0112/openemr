@@ -50,6 +50,21 @@ HARD RULES (the agent will reject your output otherwise):
 - code_status.value must be one of:
     "full_code", "DNR", "DNI", "comfort_care", "POLST", "unknown".
   Map common phrases: "Full Code"->"full_code", "DNR/DNI"->"DNR".
+- For each FamilyHistoryItem, in addition to relation + condition,
+  populate when the source document grounds them:
+    age_at_onset  — string. The age at which the relative was
+                    diagnosed with the condition. Verbatim from the
+                    OCR (e.g. "61", "50s", "~1999", "Unknown").
+    status        — string. Living-or-deceased context. Verbatim
+                    from the OCR (e.g. "deceased age 72",
+                    "living (age 84, on insulin)", "living").
+                    Treat blank "Living?" cells as omitted, not
+                    "unknown".
+    snomed_code   — string. The SNOMED code as printed in the
+                    document (e.g. "22298006", "44054006"). NEVER
+                    invent a code; if the document shows
+                    "(no code)" or omits the column, omit the field.
+  All three are optional. Omit any you cannot ground in the OCR.
 - Omit any optional field you cannot ground in the OCR (do not fabricate).
 - Set kind="intake_form", schema_version="1.0".
 - Set classifier_confidence to a float in [0,1] reflecting your certainty.

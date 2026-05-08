@@ -1402,17 +1402,38 @@ function FamilyHistoryInputs(p: FieldEditorInnerProps): ReactElement {
   const v = _payloadValue(p.lr.row);
   const [relation, setRelation] = useState(_str(v.relation));
   const [condition, setCondition] = useState(_str(v.condition));
+  const [ageAtOnset, setAgeAtOnset] = useState(_str(v.age_at_onset));
+  const [status, setStatus] = useState(_str(v.status));
+  const [snomed, setSnomed] = useState(_str(v.snomed_code));
   useEffect(() => {
-    _emitIntake(p, { relation, condition });
+    _emitIntake(p, {
+      relation,
+      condition,
+      age_at_onset: ageAtOnset || null,
+      status: status || null,
+      snomed_code: snomed || null,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relation, condition]);
+  }, [relation, condition, ageAtOnset, status, snomed]);
   return (
     <>
       <input className="cdr-field-input cdr-field-input-compound" type="text" value={relation}
-        placeholder="Relation" disabled={p.disabled}
+        placeholder="Relation (Father / Mother / Sibling)" disabled={p.disabled}
         onChange={(e) => setRelation(e.target.value)} />
-      <input className="cdr-field-input" type="text" value={condition} placeholder="Condition"
-        disabled={p.disabled} onChange={(e) => setCondition(e.target.value)} />
+      <input className="cdr-field-input cdr-field-input-compound" type="text" value={condition}
+        placeholder="Condition" disabled={p.disabled}
+        onChange={(e) => setCondition(e.target.value)} />
+      <div className="cdr-field-input-row">
+        <input className="cdr-field-input" type="text" value={ageAtOnset}
+          placeholder="Age at onset" disabled={p.disabled}
+          onChange={(e) => setAgeAtOnset(e.target.value)} />
+        <input className="cdr-field-input" type="text" value={status}
+          placeholder="Status (living / deceased age 72)" disabled={p.disabled}
+          onChange={(e) => setStatus(e.target.value)} />
+      </div>
+      <input className="cdr-field-input" type="text" value={snomed}
+        placeholder="SNOMED code" disabled={p.disabled}
+        onChange={(e) => setSnomed(e.target.value)} />
     </>
   );
 }

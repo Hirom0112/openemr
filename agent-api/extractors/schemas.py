@@ -217,6 +217,13 @@ class FamilyHistoryItem(BaseModel):
 
     relation: str
     condition: str
+    # Optional richer context. Strings (not ints) for age fields because
+    # source documents commonly carry imprecise values like "~1999",
+    # "50s", "Unknown". The extractor must omit any field it cannot
+    # ground in the OCR — never fabricate.
+    age_at_onset: Optional[str] = None
+    status: Optional[str] = None
+    snomed_code: Optional[str] = None
     citations: List[Citation] = Field(min_length=1)
     needs_review: bool = False
 
