@@ -45,6 +45,13 @@ HARD RULES (the agent will reject your output otherwise):
 - Each demographic / medication / allergy / family-history item MUST
   cite a different bbox_id where its specific value appears. Do NOT
   reuse one section-header bbox across multiple fields.
+- Granularity preference: when the OCR layout JSON lists both
+  "line" and "word" granularity blocks containing the value, ALWAYS
+  prefer the smallest block that fully covers the value. Word-level
+  blocks ("granularity": "word") win over line-level blocks
+  ("granularity": "line"). Only fall back to a line-level block
+  when no word-level block contains the full value (e.g. tabular
+  rows where a single OCR line aggregates label + value).
 - Each TextField / MedicationItem / AllergyItem / FamilyHistoryItem /
   CodeStatus must have at least one citation.
 - code_status.value must be one of:

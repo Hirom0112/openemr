@@ -80,6 +80,9 @@ def _layout_to_prompt_json(blocks: List[LayoutBlock]) -> str:
                 "page": b.page,
                 "text": b.text,
                 "ocr_confidence": b.ocr_confidence,
+                # Wave 2A — surface granularity so the prompt can steer
+                # the LLM toward word-level blocks (tighter citations).
+                "granularity": _block_granularity(b) or "line",
             }
             for b in blocks
         ],
@@ -1021,10 +1024,139 @@ def _repoint_citations_list(
     ]
 
 
+def _tighten_bbox_to_value(
+    pdf_bytes: Optional[bytes],
+    page: int,
+    bbox: Tuple[float, float, float, float],
+    value: Optional[str],
+) -> Optional[Tuple[float, float, float, float]]:
+    """Crop a citation bbox to the smallest rectangle covering only the
+    words that ground ``value``.
+
+    OCR line-blocks for tabular intake forms aggregate label + value
+    horizontally (e.g. one block covers "LEGAL NAME" at x≈75 PLUS
+    "Chen, Margaret L." at x≈216, all on the same y-row). Drawing the
+    full line bbox makes the citation overlay look "wide on target".
+    This helper goes back to the PDF text layer via pymupdf
+    ``page.get_text("words")`` and finds the contiguous run of words
+    inside the bbox whose concatenated text contains ``value``,
+    returning the union of those word rects.
+
+    Returns ``None`` when:
+
+    - ``pdf_bytes`` or ``value`` is empty (DOCX / image paths skip
+      tightening),
+    - the page is out of range,
+    - no word run inside the bbox matches the value above the floor.
+
+    On ``None`` the caller keeps the original bbox.
+    """
+    if not pdf_bytes or not value:
+        return None
+    nv = _normalize_for_match(value)
+    if not nv:
+        return None
+    try:
+        with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
+            if page < 1 or page > doc.page_count:
+                return None
+            words = doc[page - 1].get_text("words")
+    except Exception:
+        return None
+    bx, by, bw, bh = bbox
+    bx_max = bx + bw
+    by_max = by + bh
+    PAD = 2.0
+    in_box: List[Tuple[float, float, float, float, str]] = []
+    for w in words:
+        if len(w) < 5:
+            continue
+        x0, y0, x1, y1, text = float(w[0]), float(w[1]), float(w[2]), float(w[3]), str(w[4])
+        if y1 < by - PAD or y0 > by_max + PAD:
+            continue
+        if x1 < bx - PAD or x0 > bx_max + PAD:
+            continue
+        in_box.append((x0, y0, x1, y1, text))
+    if not in_box:
+        return None
+    # Word-membership filter: keep only words whose normalized text
+    # appears as a substring of nv. This survives multi-column layouts
+    # where contiguous reading-order would interleave the value's
+    # words with adjacent-column labels (e.g. LEGAL NAME / Chen, /
+    # DATE OF BIRTH / 1967-08-14 all on the same y-row).
+    norm_words = [_normalize_for_match(w[4]) for w in in_box]
+    selected: List[Tuple[float, float, float, float, str]] = []
+    sel_norm: List[str] = []
+    for w, nw in zip(in_box, norm_words):
+        if not nw:
+            continue
+        if nw in nv:
+            selected.append(w)
+            sel_norm.append(nw)
+    if not selected:
+        return None
+    # Coverage check: the concatenated normalized text of the kept
+    # words must reach the floor relative to the value. Without this,
+    # a 1-letter word coincidence (e.g. value contains "L." and the
+    # row's LIVING column also has an "L") would tighten the bbox to
+    # an unrelated single character.
+    coverage = sum(len(s) for s in sel_norm)
+    floor = _min_overlap_floor(len(nv))
+    if coverage < floor:
+        return None
+    xs = [w[0] for w in selected]
+    ys = [w[1] for w in selected]
+    rights = [w[2] for w in selected]
+    bottoms = [w[3] for w in selected]
+    x = min(xs)
+    y = min(ys)
+    return (float(x), float(y), float(max(rights) - x), float(max(bottoms) - y))
+
+
+def _maybe_tighten(
+    cit: Citation,
+    value: Optional[str],
+    pdf_bytes: Optional[bytes],
+) -> Citation:
+    """Apply :func:`_tighten_bbox_to_value` to the chosen citation when a
+    PDF is available. Returns the original citation when tightening is
+    a no-op or the PDF source is missing."""
+    if not pdf_bytes:
+        return cit
+    bbox = cit.bbox
+    page = cit.page
+    if bbox is None or page is None:
+        return cit
+    if len(bbox) != 4:
+        return cit
+    tight = _tighten_bbox_to_value(
+        pdf_bytes, int(page), tuple(bbox), value,  # type: ignore[arg-type]
+    )
+    if tight is None:
+        return cit
+    return cit.model_copy(update={"bbox": tight})
+
+
+def _tighten_citations_list(
+    citations: List[Citation],
+    value: Optional[str],
+    pdf_bytes: Optional[bytes],
+) -> List[Citation]:
+    return [_maybe_tighten(c, value, pdf_bytes) for c in citations]
+
+
 def _hydrate_intake_form_citations(
-    form: IntakeForm, blocks: List[LayoutBlock]
+    form: IntakeForm,
+    blocks: List[LayoutBlock],
+    pdf_bytes: Optional[bytes] = None,
 ) -> IntakeForm:
-    """Walk every cite-bearing IntakeForm field and stamp bbox/page."""
+    """Walk every cite-bearing IntakeForm field and stamp bbox/page.
+
+    When ``pdf_bytes`` is supplied (PDF/PNG ingest path), an additional
+    bbox-tightening step crops each chosen line-level bbox down to just
+    the words that ground the value. DOCX / synthetic paths pass
+    ``None`` and skip tightening.
+    """
     block_index = _index_blocks(blocks)
     anchors = _detect_section_anchors(blocks)
 
@@ -1035,88 +1167,73 @@ def _hydrate_intake_form_citations(
         for attr in ("name", "dob", "sex", "mrn", "address"):
             tf = getattr(demographics, attr, None)
             if tf is not None:
-                demo_updates[attr] = tf.model_copy(
-                    update={
-                        "citations": _repoint_citations_list(
-                            tf.citations,
-                            tf.value,
-                            blocks,
-                            block_index,
-                            field_name=attr,
-                            anchors=anchors,
-                        )
-                    }
+                cits = _repoint_citations_list(
+                    tf.citations,
+                    tf.value,
+                    blocks,
+                    block_index,
+                    field_name=attr,
+                    anchors=anchors,
                 )
+                cits = _tighten_citations_list(cits, tf.value, pdf_bytes)
+                demo_updates[attr] = tf.model_copy(update={"citations": cits})
         if demo_updates:
             demographics = demographics.model_copy(update=demo_updates)
 
     chief = form.chief_concern
     if chief is not None:
-        chief = chief.model_copy(
-            update={
-                "citations": _repoint_citations_list(
-                    chief.citations,
-                    chief.value,
-                    blocks,
-                    block_index,
-                    field_name="chief_concern",
-                    anchors=anchors,
-                )
-            }
+        cits = _repoint_citations_list(
+            chief.citations,
+            chief.value,
+            blocks,
+            block_index,
+            field_name="chief_concern",
+            anchors=anchors,
         )
+        cits = _tighten_citations_list(cits, chief.value, pdf_bytes)
+        chief = chief.model_copy(update={"citations": cits})
 
-    meds = [
-        m.model_copy(
-            update={
-                "citations": _repoint_citations_list(
-                    m.citations,
-                    m.name,
-                    blocks,
-                    block_index,
-                    field_name="medication",
-                    anchors=anchors,
-                )
-            }
+    meds = []
+    for m in form.current_medications:
+        cits = _repoint_citations_list(
+            m.citations,
+            m.name,
+            blocks,
+            block_index,
+            field_name="medication",
+            anchors=anchors,
         )
-        for m in form.current_medications
-    ]
-    allergies = [
-        a.model_copy(
-            update={
-                "citations": _repoint_citations_list(
-                    a.citations,
-                    a.substance,
-                    blocks,
-                    block_index,
-                    field_name="allergy",
-                    anchors=anchors,
-                )
-            }
+        cits = _tighten_citations_list(cits, m.name, pdf_bytes)
+        meds.append(m.model_copy(update={"citations": cits}))
+    allergies = []
+    for a in form.allergies:
+        cits = _repoint_citations_list(
+            a.citations,
+            a.substance,
+            blocks,
+            block_index,
+            field_name="allergy",
+            anchors=anchors,
         )
-        for a in form.allergies
-    ]
-    fam = [
-        f.model_copy(
-            update={
-                "citations": _repoint_citations_list(
-                    f.citations,
-                    f.condition,
-                    blocks,
-                    block_index,
-                    field_name="family",
-                    anchors=anchors,
-                )
-            }
+        cits = _tighten_citations_list(cits, a.substance, pdf_bytes)
+        allergies.append(a.model_copy(update={"citations": cits}))
+    fam = []
+    for f in form.family_history:
+        cits = _repoint_citations_list(
+            f.citations,
+            f.condition,
+            blocks,
+            block_index,
+            field_name="family",
+            anchors=anchors,
         )
-        for f in form.family_history
-    ]
+        cits = _tighten_citations_list(cits, f.condition, pdf_bytes)
+        fam.append(f.model_copy(update={"citations": cits}))
     code_status = form.code_status
     if code_status is not None:
-        code_status = code_status.model_copy(
-            update={
-                "citations": _hydrate_citations_list(code_status.citations, block_index)
-            }
-        )
+        cits = _hydrate_citations_list(code_status.citations, block_index)
+        cits = _tighten_citations_list(cits, code_status.value, pdf_bytes)
+        code_status = code_status.model_copy(update={"citations": cits})
 
     return form.model_copy(
         update={
@@ -1300,6 +1417,7 @@ async def extract_intake(
             }
         ),
         blocks,
+        pdf_bytes=pdf_bytes,
     )
     logger.info(
         "extractor_intake_ok",
