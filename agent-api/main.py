@@ -3453,6 +3453,118 @@ class PostIngestContextRequest(BaseModel):
     document_reference_id: str
 
 
+@app.get("/document/{document_reference_id:path}/binary")
+async def document_binary(
+    document_reference_id: str,
+    request: Request,
+) -> StreamingResponse:
+    """Proxy the bytes of a previously ingested document back to the UI.
+
+    Mints a single-shot ``openemr-copilot`` JWT, fetches the PHP
+    ``download.php`` shim for the underlying ``documents.id``, and re-streams
+    the response (Content-Type preserved). The agent-ui review panel uses
+    this to render the original artifact (PDF / PNG / JPEG / DOCX) in the
+    left rail of the field-editor surface.
+
+    The reference id is the staging key the dispatch loop assigns when an
+    upload lands — typically ``copilot:NNN`` where NNN is the OpenEMR
+    documents.id. Other prefixes (``rest:NNN``, bare ``NNN``) are accepted
+    and the trailing integer is what we hand to the PHP endpoint.
+
+    Status code passthrough: 200/401/404/500 are propagated; any other
+    upstream status is mapped to 502 to keep the contract narrow.
+    """
+    import httpx as _httpx
+    import re as _re
+
+    from documents.fhir_writer import _mint_copilot_jwt
+    # Avoid logging the document_reference_id at INFO if it could ever carry
+    # PHI — it's an opaque server-generated id in this code path, but treat
+    # the failure log as id-only just in case.
+
+    # Extract the trailing integer document id. Accept any "<prefix>:<int>"
+    # shape and fall back to a bare numeric id.
+    match = _re.search(r"(\d+)$", document_reference_id or "")
+    if not match:
+        raise HTTPException(status_code=400, detail="missing_id")
+    document_id = match.group(1)
+
+    token = _mint_copilot_jwt()
+    if token is None:
+        # COPILOT_JWT_SECRET unset: same skip path the upload helper uses.
+        raise HTTPException(
+            status_code=503, detail="copilot upload secret not configured"
+        )
+
+    base = settings.openemr_base_url.rstrip("/")
+    url = (
+        base
+        + "/interface/modules/custom_modules/oe-module-clinical-copilot/"
+        + "public/download.php"
+    )
+
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"id": document_id}
+
+    try:
+        client = _httpx.AsyncClient(timeout=60)
+        upstream = await client.get(url, headers=headers, params=params)
+    except _httpx.HTTPError as exc:  # network-level failure
+        try:
+            await client.aclose()
+        except Exception:  # noqa: BLE001 — best effort
+            pass
+        logger.warning(
+            "document_binary_upstream_error",
+            extra={
+                "request_id": request_id_var.get(),
+                "document_id": document_id,
+                "error_class": type(exc).__name__,
+            },
+        )
+        raise HTTPException(status_code=502, detail="upstream unavailable") from exc
+
+    status = upstream.status_code
+    content_type = upstream.headers.get("content-type", "application/octet-stream")
+
+    if status in (401, 404, 500):
+        body = upstream.content
+        await client.aclose()
+        # Pass through the small JSON envelope the PHP controller emits.
+        return StreamingResponse(
+            iter([body]),
+            status_code=status,
+            media_type=upstream.headers.get("content-type", "application/json"),
+        )
+    if status != 200:
+        await client.aclose()
+        raise HTTPException(
+            status_code=502,
+            detail=f"upstream status {status}",
+        )
+
+    body_bytes = upstream.content
+    await client.aclose()
+    # Suppress the inbound `request` parameter linting — we only declared it
+    # to align with the rest of /document/* routes.
+    _ = request
+    logger.info(
+        "document_binary_ok",
+        extra={
+            "request_id": request_id_var.get(),
+            "document_id": document_id,
+            "size_bytes": len(body_bytes),
+            "content_type": content_type,
+        },
+    )
+    return StreamingResponse(
+        iter([body_bytes]),
+        status_code=200,
+        media_type=content_type,
+        headers={"Content-Disposition": "inline"},
+    )
+
+
 @app.post("/document/post-ingest-context")
 async def document_post_ingest_context(
     body: PostIngestContextRequest,

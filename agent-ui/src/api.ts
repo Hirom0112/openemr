@@ -1103,6 +1103,30 @@ export async function fetchPostApprovalContext(
   return (await res.json()) as PostApprovalContext;
 }
 
+/**
+ * Fetch the raw bytes of an ingested document so the review panel can render
+ * the original artifact in the left rail.
+ *
+ * Backed by ``GET /document/{ref}/binary`` on agent-api, which proxies the
+ * JWT-gated PHP ``download.php`` shim. Returns the bytes plus the upstream
+ * Content-Type so the caller can pick a viewer (PDF → DocumentViewer,
+ * PNG/JPEG → <img>, DOCX → paragraph fallback).
+ */
+export async function fetchDocumentBinary(
+  baseUrl: string,
+  documentReferenceId: string,
+): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  const url = `${baseUrl}/document/${encodeURIComponent(documentReferenceId)}/binary`;
+  const res = await fetch(url, withAuth({ method: 'GET' }));
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`document binary fetch failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
+  const bytes = await res.arrayBuffer();
+  return { bytes, contentType };
+}
+
 export interface DocumentChatResponse {
   answer: string;
   citations_used: string[];

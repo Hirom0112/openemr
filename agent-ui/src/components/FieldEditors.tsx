@@ -56,67 +56,75 @@ const cardStyle: React.CSSProperties = {
   background: SURFACE.bg,
   border: `1px solid ${SURFACE.border}`,
   borderRadius: 8,
-  padding: '12px 14px',
+  padding: '15px 16px',
   display: 'flex',
   flexDirection: 'column',
-  gap: 10,
+  gap: 12,
+  boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
 };
 
 const headerStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 8,
+  gap: 10,
   flexWrap: 'wrap',
 };
 
 const kindLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 600,
-  color: SURFACE.fgStrong,
+  fontSize: 11,
+  fontWeight: 700,
+  color: BRAND.base,
   textTransform: 'uppercase',
-  letterSpacing: '0.04em',
+  letterSpacing: '0.06em',
+  background: BRAND.tint,
+  padding: '3px 8px',
+  borderRadius: 4,
 };
 
 const idChipStyle: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: 12,
   color: SURFACE.muted,
 };
 
 const sourceBtnStyle = (enabled: boolean): React.CSSProperties => ({
-  fontSize: 11,
+  fontSize: 12,
   fontFamily: 'inherit',
-  padding: '3px 8px',
-  background: BRAND.tint,
+  fontWeight: 500,
+  padding: '5px 10px',
+  background: '#fff',
   color: BRAND.base,
   border: `1px solid ${BRAND.base}`,
-  borderRadius: 4,
+  borderRadius: 5,
   cursor: enabled ? 'pointer' : 'not-allowed',
-  opacity: enabled ? 1 : 0.5,
+  opacity: enabled ? 1 : 0.45,
   marginLeft: 'auto',
 });
 
 const fieldRow: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 4,
+  gap: 5,
 };
 
 const labelStyle: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: 12,
   color: SURFACE.muted,
   fontWeight: 500,
+  letterSpacing: '0.01em',
 };
 
 const inputStyle: React.CSSProperties = {
-  fontSize: 12,
-  padding: '6px 8px',
+  fontSize: 13,
+  padding: '9px 10px',
   border: `1px solid ${NEU.border}`,
-  borderRadius: 4,
+  borderRadius: 6,
   fontFamily: 'inherit',
   background: SURFACE.bg,
   color: SURFACE.fg,
   width: '100%',
   boxSizing: 'border-box',
+  minHeight: 36,
+  lineHeight: 1.3,
 };
 
 const footerStyle: React.CSSProperties = {
@@ -124,40 +132,73 @@ const footerStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 8,
   borderTop: `1px solid ${SURFACE.border}`,
-  paddingTop: 8,
+  paddingTop: 10,
 };
 
 const approveBtnStyle = (disabled: boolean): React.CSSProperties => ({
-  fontSize: 11,
+  fontSize: 13,
   fontFamily: 'inherit',
   fontWeight: 600,
-  padding: '5px 12px',
+  padding: '7px 16px',
   background: BRAND.base,
   color: BRAND.onBrand,
   border: `1px solid ${BRAND.base}`,
-  borderRadius: 4,
+  borderRadius: 6,
   cursor: disabled ? 'not-allowed' : 'pointer',
   opacity: disabled ? 0.5 : 1,
+  minHeight: 32,
+  transition: 'filter 120ms ease-out',
 });
 
 const rejectBtnStyle = (disabled: boolean): React.CSSProperties => ({
-  fontSize: 11,
+  fontSize: 13,
   fontFamily: 'inherit',
-  padding: '5px 12px',
+  padding: '7px 14px',
   background: '#fff',
   color: RED.text,
   border: `1px solid ${RED.border}`,
-  borderRadius: 4,
+  borderRadius: 6,
   cursor: disabled ? 'not-allowed' : 'pointer',
   opacity: disabled ? 0.5 : 1,
+  minHeight: 32,
+  transition: 'background-color 120ms ease-out',
 });
 
 const statusPillStyle = (status: FieldEditorProps['status']): React.CSSProperties => {
-  if (status === 'done') return { fontSize: 11, color: '#166534', fontWeight: 600 };
-  if (status === 'error') return { fontSize: 11, color: RED.text, fontWeight: 600 };
-  if (status === 'busy') return { fontSize: 11, color: SURFACE.muted };
+  if (status === 'done') {
+    return {
+      fontSize: 12,
+      color: '#166534',
+      fontWeight: 600,
+      background: '#dcfce7',
+      padding: '3px 8px',
+      borderRadius: 12,
+      border: '1px solid #bbf7d0',
+    };
+  }
+  if (status === 'error') {
+    return {
+      fontSize: 12,
+      color: RED.text,
+      fontWeight: 600,
+      background: RED.bg,
+      padding: '3px 8px',
+      borderRadius: 12,
+      border: `1px solid ${RED.border}`,
+    };
+  }
+  if (status === 'busy') return { fontSize: 12, color: SURFACE.muted, fontStyle: 'italic' };
   return { display: 'none' };
 };
+
+function _statusGlyph(status: FieldEditorProps['status'], decisionMessage?: string | null): string {
+  if (status === 'done') {
+    if (decisionMessage === 'rejected') return '✗ rejected';
+    return '✓ approved';
+  }
+  if (status === 'error') return '✗ error';
+  return decisionMessage ?? '';
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers — read potentially-missing nested fields from FHIR-shaped payloads
@@ -238,7 +279,11 @@ function CardScaffold(p: CardScaffoldProps): ReactElement {
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{p.children}</div>
       <div style={footerStyle}>
-        <span style={statusPillStyle(p.status)}>{p.statusMessage ?? p.status}</span>
+        <span style={statusPillStyle(p.status)}>
+          {p.status === 'done' || p.status === 'error'
+            ? _statusGlyph(p.status, p.statusMessage)
+            : (p.statusMessage ?? p.status)}
+        </span>
         {!terminal && (
           <>
             <button
@@ -246,6 +291,8 @@ function CardScaffold(p: CardScaffoldProps): ReactElement {
               onClick={p.onReject}
               disabled={disabled}
               style={{ ...rejectBtnStyle(disabled), marginLeft: 'auto' }}
+              onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.backgroundColor = RED.bg; }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#fff'; }}
             >
               Reject
             </button>
@@ -254,6 +301,8 @@ function CardScaffold(p: CardScaffoldProps): ReactElement {
               onClick={p.onApprove}
               disabled={disabled}
               style={approveBtnStyle(disabled)}
+              onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.filter = 'brightness(0.93)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
             >
               Approve
             </button>
@@ -486,11 +535,11 @@ export function MedicationEditor(p: FieldEditorProps): ReactElement {
         if (reason) p.onReject(p.row.id, reason);
       }}
     >
-      <div style={fieldRow}>
-        <label style={labelStyle}>Name</label>
-        <input type="text" value={name} onChange={(e) => setName(e.target.value)} disabled={inputDisabled} style={inputStyle} />
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div style={fieldRow}>
+          <label style={labelStyle}>Name</label>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} disabled={inputDisabled} style={inputStyle} />
+        </div>
         <div style={fieldRow}>
           <label style={labelStyle}>Dose</label>
           <input type="text" value={dose} onChange={(e) => setDose(e.target.value)} disabled={inputDisabled} style={inputStyle} />
@@ -499,10 +548,10 @@ export function MedicationEditor(p: FieldEditorProps): ReactElement {
           <label style={labelStyle}>Route</label>
           <input type="text" value={route} onChange={(e) => setRoute(e.target.value)} disabled={inputDisabled} style={inputStyle} />
         </div>
-      </div>
-      <div style={fieldRow}>
-        <label style={labelStyle}>Frequency</label>
-        <input type="text" value={frequency} onChange={(e) => setFrequency(e.target.value)} disabled={inputDisabled} style={inputStyle} />
+        <div style={fieldRow}>
+          <label style={labelStyle}>Frequency</label>
+          <input type="text" value={frequency} onChange={(e) => setFrequency(e.target.value)} disabled={inputDisabled} style={inputStyle} />
+        </div>
       </div>
     </CardScaffold>
   );
@@ -574,11 +623,11 @@ export function DemographicsEditor(p: FieldEditorProps): ReactElement {
         if (reason) p.onReject(p.row.id, reason);
       }}
     >
-      <div style={fieldRow}>
-        <label style={labelStyle}>Name</label>
-        <input type="text" value={name} onChange={(e) => setName(e.target.value)} disabled={inputDisabled} style={inputStyle} />
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 10 }}>
+        <div style={fieldRow}>
+          <label style={labelStyle}>Name</label>
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} disabled={inputDisabled} style={inputStyle} />
+        </div>
         <div style={fieldRow}>
           <label style={labelStyle}>Date of birth</label>
           <input type="date" value={dob} onChange={(e) => setDob(e.target.value)} disabled={inputDisabled} style={inputStyle} />
@@ -592,19 +641,21 @@ export function DemographicsEditor(p: FieldEditorProps): ReactElement {
           </select>
         </div>
       </div>
-      <div style={fieldRow}>
-        <label style={labelStyle}>MRN</label>
-        <input type="text" value={mrn} onChange={(e) => setMrn(e.target.value)} disabled={inputDisabled} style={inputStyle} />
-      </div>
-      <div style={fieldRow}>
-        <label style={labelStyle}>Address</label>
-        <textarea
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          disabled={inputDisabled}
-          rows={2}
-          style={{ ...inputStyle, resize: 'vertical' }}
-        />
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) 3fr', gap: 10 }}>
+        <div style={fieldRow}>
+          <label style={labelStyle}>MRN</label>
+          <input type="text" value={mrn} onChange={(e) => setMrn(e.target.value)} disabled={inputDisabled} style={inputStyle} />
+        </div>
+        <div style={fieldRow}>
+          <label style={labelStyle}>Address</label>
+          <textarea
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            disabled={inputDisabled}
+            rows={2}
+            style={{ ...inputStyle, resize: 'vertical' }}
+          />
+        </div>
       </div>
     </CardScaffold>
   );

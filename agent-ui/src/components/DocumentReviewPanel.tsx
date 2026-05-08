@@ -1,42 +1,47 @@
 /**
  * Phase-3 Documents tab — two-column rich review panel.
  *
- * Replaces ApprovalModal for PDF / PNG / DOCX rows whose target_resource_type
- * is one of {Observation, IntakeFormField}. HL7/XLSX/TIFF rows continue to
- * use ApprovalModal — those formats lack the per-field structure that
- * justifies the rich editor.
+ * Replaces ApprovalModal for PDF / PNG / JPEG / DOCX rows whose
+ * target_resource_type is one of {Observation, IntakeFormField}. HL7/XLSX/TIFF
+ * rows continue to use ApprovalModal — those formats lack the per-field
+ * structure that justifies the rich editor.
  *
  * Layout:
- *   ┌───────────────────────────────────┐
- *   │ Header: doc id + close            │
- *   ├───────────────┬───────────────────┤
- *   │ Source viewer │ Editor cards      │
- *   │ (left rail)   │ (right rail)      │
- *   ├───────────────┴───────────────────┤
- *   │ Footer: Cancel · Save & Approve  │
- *   └───────────────────────────────────┘
+ *   ┌─────────────────────────────────────────────┐
+ *   │ Header: title · doc id chip · facts pill    │
+ *   ├──────────────────────┬──────────────────────┤
+ *   │ Source viewer        │ Editor cards         │
+ *   │ (left rail, white)   │ (right rail, panel)  │
+ *   ├──────────────────────┴──────────────────────┤
+ *   │ Footer: status · Cancel · Save & Approve    │
+ *   └─────────────────────────────────────────────┘
  *
- * v1 cuts:
- *   - PDF/PNG left rail is a placeholder; the staging row alone doesn't
- *     carry a reliable Binary URL. The full DocumentViewer integration
- *     can be wired when /document/{ref}/binary is exposed.
- *   - Citation deep-linking is best-effort: clicking "Source →" highlights
- *     a synthetic paragraph in the DOCX viewer when the row carries a
- *     citation reference; otherwise the click is a no-op.
+ * v1.5:
+ *   - Source preview now actually renders. PDF → pdf.js via DocumentViewer.
+ *     PNG / JPEG → <img> with citation chip strip across the top. DOCX falls
+ *     back to the synthesized-paragraph viewer because we don't (yet) parse
+ *     DOCX bytes client-side; the citation quotes are still surfaced.
+ *   - Citation chip strip across the top of the left rail lets the operator
+ *     pick a citation directly; "Source →" buttons in the editor cards drive
+ *     the same activeIndex.
+ *   - Loading + error states for the binary fetch.
  */
 
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   approveOne,
+  fetchDocumentBinary,
   fetchPostApprovalContext,
   getPendingOne,
   rejectOne,
   type PendingExtractionRow,
   type PostApprovalContext,
 } from '../api';
+import DocumentViewer from './DocumentViewer';
 import DocxParagraphsViewer from './DocxParagraphsViewer';
 import { resolveEditor, type FieldEditorProps } from './FieldEditors';
 import { BRAND, NEU, RED, SURFACE } from '../styles/tokens';
+import type { Citation, BboxLayoutBlock } from '../types/citation';
 
 export interface DocumentReviewPanelProps {
   baseUrl: string;
@@ -64,7 +69,14 @@ interface LoadedRow {
   state: RowState;
 }
 
+type ViewerKind = 'pdf' | 'image' | 'docx' | 'unknown';
+
 const ROW_LIMIT = 50;
+
+const PDF_MIME = 'application/pdf';
+const PNG_MIME = 'image/png';
+const JPEG_MIME = 'image/jpeg';
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 function _initialState(row: PendingExtractionRow): RowState {
   if (row.state === 'written' || row.state === 'approved') {
@@ -76,25 +88,72 @@ function _initialState(row: PendingExtractionRow): RowState {
   return { decision: 'pending', override: null, rejectReason: null, status: 'idle' };
 }
 
-/**
- * Synthesize a paragraph list from a row payload's citations. v1 fallback
- * for the DOCX left rail when no full-document fetch is available.
- */
+/** Pull every citation off every row's payload, in row order. */
+function _collectCitations(rows: LoadedRow[]): Citation[] {
+  const out: Citation[] = [];
+  for (const r of rows) {
+    const payload = r.row.payload as Record<string, unknown>;
+    const value =
+      payload.value && typeof payload.value === 'object' && !Array.isArray(payload.value)
+        ? (payload.value as Record<string, unknown>)
+        : payload;
+    const candidates = Array.isArray(value.citations)
+      ? value.citations
+      : Array.isArray(payload.citations)
+        ? payload.citations
+        : [];
+    for (const c of candidates) {
+      if (!c || typeof c !== 'object') continue;
+      const obj = c as Record<string, unknown>;
+      const sourceId = typeof obj.source_id === 'string' ? obj.source_id : null;
+      const fieldId =
+        (typeof obj.field_or_chunk_id === 'string' && obj.field_or_chunk_id) ||
+        (typeof obj.field_id === 'string' ? obj.field_id : null);
+      const quote =
+        (typeof obj.quote_or_value === 'string' && obj.quote_or_value) ||
+        (typeof obj.quote === 'string' && obj.quote) ||
+        (typeof obj.text === 'string' ? obj.text : '');
+      const page = typeof obj.page === 'number' ? obj.page : undefined;
+      const pageOrSection =
+        typeof obj.page_or_section === 'string' ? obj.page_or_section : null;
+      const bbox =
+        Array.isArray(obj.bbox) && obj.bbox.length === 4
+          ? (obj.bbox as [number, number, number, number])
+          : null;
+      out.push({
+        source_type: 'document',
+        source_id: sourceId ?? r.row.document_reference_id,
+        page_or_section: pageOrSection,
+        field_or_chunk_id: fieldId ?? '',
+        quote_or_value: quote || '',
+        bbox,
+        page: page ?? null,
+      });
+    }
+  }
+  return out;
+}
+
+/** Synthesize paragraphs for the DOCX fallback (no client-side .docx parse). */
 function _synthesizeParagraphs(rows: LoadedRow[]): string[] {
   const out: string[] = [];
   for (const r of rows) {
     const payload = r.row.payload as Record<string, unknown>;
-    const value = (payload.value && typeof payload.value === 'object')
-      ? (payload.value as Record<string, unknown>)
-      : payload;
+    const value =
+      payload.value && typeof payload.value === 'object' && !Array.isArray(payload.value)
+        ? (payload.value as Record<string, unknown>)
+        : payload;
     const citations = Array.isArray(value.citations)
       ? value.citations
-      : Array.isArray(payload.citations) ? payload.citations : [];
+      : Array.isArray(payload.citations)
+        ? payload.citations
+        : [];
     for (const c of citations) {
       if (c && typeof c === 'object') {
-        const q = (c as Record<string, unknown>).quote_or_value
-          ?? (c as Record<string, unknown>).quote
-          ?? (c as Record<string, unknown>).text;
+        const q =
+          (c as Record<string, unknown>).quote_or_value ??
+          (c as Record<string, unknown>).quote ??
+          (c as Record<string, unknown>).text;
         if (typeof q === 'string' && q.trim()) {
           out.push(q.trim());
         }
@@ -104,23 +163,41 @@ function _synthesizeParagraphs(rows: LoadedRow[]): string[] {
   return out;
 }
 
-function _isDocxLike(rows: LoadedRow[]): boolean {
-  // IntakeFormField rows come from documents whose source_format the staging
-  // call defaults to "pdf" but DOCX flows through the same pipeline. We treat
-  // any IntakeFormField group as DOCX-viewable; PDF/PNG with bbox layout
-  // would route to DocumentViewer (deferred to v1.5).
-  return rows.some((r) => r.row.target_resource_type === 'IntakeFormField');
+function _detectKind(contentType: string | null): ViewerKind {
+  if (!contentType) return 'unknown';
+  const t = contentType.toLowerCase();
+  if (t.includes(PDF_MIME)) return 'pdf';
+  if (t.includes(PNG_MIME) || t.includes(JPEG_MIME) || t.includes('image/')) return 'image';
+  if (t.includes(DOCX_MIME) || t.includes('officedocument.wordprocessingml')) return 'docx';
+  return 'unknown';
 }
 
 export default function DocumentReviewPanel(props: DocumentReviewPanelProps): ReactElement {
-  const { baseUrl, patientId, documentReferenceId, fileBatchId, pendingRowIds, onClose, onCompleted } = props;
+  const {
+    baseUrl,
+    patientId,
+    documentReferenceId,
+    fileBatchId,
+    pendingRowIds,
+    onClose,
+    onCompleted,
+  } = props;
 
   const [rows, setRows] = useState<LoadedRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkSummary, setBulkSummary] = useState<string | null>(null);
-  const [highlightedParagraph, setHighlightedParagraph] = useState<number | null>(null);
+
+  // Source preview state
+  const [previewBytes, setPreviewBytes] = useState<ArrayBuffer | null>(null);
+  const [previewKind, setPreviewKind] = useState<ViewerKind>('unknown');
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
+
+  // Active citation index drives the viewer (PDF + image branches).
+  const [activeCitationIndex, setActiveCitationIndex] = useState(0);
 
   // Load rows once.
   useEffect(() => {
@@ -148,37 +225,91 @@ export default function DocumentReviewPanel(props: DocumentReviewPanelProps): Re
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [baseUrl, pendingRowIds]);
 
+  // Fetch the source preview bytes once we know the documentReferenceId.
+  useEffect(() => {
+    let cancelled = false;
+    if (!documentReferenceId) return;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreviewBytes(null);
+    setPreviewKind('unknown');
+    void (async () => {
+      try {
+        const { bytes, contentType } = await fetchDocumentBinary(baseUrl, documentReferenceId);
+        if (cancelled) return;
+        setPreviewBytes(bytes);
+        setPreviewKind(_detectKind(contentType));
+      } catch (err) {
+        if (cancelled) return;
+        setPreviewError(err instanceof Error ? err.message : 'Failed to load preview.');
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [baseUrl, documentReferenceId]);
+
+  // Build / revoke image blob URL when bytes land for an image preview.
+  useEffect(() => {
+    if (previewKind !== 'image' || !previewBytes) {
+      setImageBlobUrl(null);
+      return;
+    }
+    const blob = new Blob([previewBytes.slice(0)], { type: 'image/*' });
+    const url = URL.createObjectURL(blob);
+    setImageBlobUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [previewBytes, previewKind]);
+
   const setRowState = useCallback((rowId: number, patch: Partial<RowState>) => {
-    setRows((prev) => prev.map((r) => (r.row.id === rowId ? { ...r, state: { ...r.state, ...patch } } : r)));
+    setRows((prev) =>
+      prev.map((r) => (r.row.id === rowId ? { ...r, state: { ...r.state, ...patch } } : r)),
+    );
   }, []);
 
-  const onValueChange = useCallback((rowId: number, override: Record<string, unknown> | null) => {
-    setRowState(rowId, { override });
-  }, [setRowState]);
+  const onValueChange = useCallback(
+    (rowId: number, override: Record<string, unknown> | null) => {
+      setRowState(rowId, { override });
+    },
+    [setRowState],
+  );
 
-  const onApproveRow = useCallback((rowId: number) => {
-    setRowState(rowId, { decision: 'approved' });
-  }, [setRowState]);
+  const onApproveRow = useCallback(
+    (rowId: number) => {
+      setRowState(rowId, { decision: 'approved' });
+    },
+    [setRowState],
+  );
 
-  const onRejectRow = useCallback((rowId: number, reason: string) => {
-    setRowState(rowId, { decision: 'rejected', rejectReason: reason });
-  }, [setRowState]);
+  const onRejectRow = useCallback(
+    (rowId: number, reason: string) => {
+      setRowState(rowId, { decision: 'rejected', rejectReason: reason });
+    },
+    [setRowState],
+  );
 
-  const onCitationClick = useCallback((citationFieldId: string, _page: string | null) => {
-    // For v1 (DOCX path), we surface the synthetic paragraph index that
-    // matches the row owning this citation. Look up the row by citation id
-    // → its paragraph slot in the synthesized list. Best-effort only.
-    const paragraphs = _synthesizeParagraphs(rows);
-    // Trivial heuristic: highlight the first paragraph for now. The v1.5
-    // viewer wire-up will resolve citationFieldId properly.
-    const idx = paragraphs.length > 0 ? 0 : null;
-    setHighlightedParagraph(idx);
-    // Touch the param so an unused-variable lint doesn't fire.
-    void citationFieldId;
-  }, [rows]);
+  const allCitations = useMemo(() => _collectCitations(rows), [rows]);
+  const synthesizedParagraphs = useMemo(() => _synthesizeParagraphs(rows), [rows]);
+
+  // Citation chip → set activeIndex.
+  const onCitationClick = useCallback(
+    (citationFieldId: string, _page: string | null) => {
+      const idx = allCitations.findIndex(
+        (c) => c.field_or_chunk_id === citationFieldId,
+      );
+      if (idx >= 0) setActiveCitationIndex(idx);
+      else if (allCitations.length > 0) setActiveCitationIndex(0);
+      void _page;
+    },
+    [allCitations],
+  );
 
   const liveRows = useMemo(
     () => rows.filter((r) => r.state.status === 'idle' || r.state.status === 'busy'),
@@ -192,13 +323,9 @@ export default function DocumentReviewPanel(props: DocumentReviewPanelProps): Re
     let nApproved = 0;
     let nRejected = 0;
     let nFailed = 0;
-    // Iterate sequentially — keeps the success/fail rows visually coherent
-    // and avoids slamming the writer with N parallel approves on large
-    // intake forms. The list is bounded at ROW_LIMIT.
     const liveSnapshot = rows.filter((r) => r.state.status !== 'done');
     for (const lr of liveSnapshot) {
       const id = lr.row.id;
-      // Update state via current row map so we don't fight stale closures.
       setRowState(id, { status: 'busy' });
       try {
         if (lr.state.decision === 'rejected') {
@@ -207,8 +334,6 @@ export default function DocumentReviewPanel(props: DocumentReviewPanelProps): Re
           setRowState(id, { status: 'done' });
           nRejected += 1;
         } else {
-          // Default to approve for any row not explicitly rejected. Carry
-          // the override_payload only when the editor produced one.
           await approveOne(baseUrl, id, lr.state.override ?? undefined);
           setRowState(id, { status: 'done' });
           nApproved += 1;
@@ -221,11 +346,11 @@ export default function DocumentReviewPanel(props: DocumentReviewPanelProps): Re
         nFailed += 1;
       }
     }
-    setBulkSummary(`Approved ${nApproved} · Rejected ${nRejected}${nFailed ? ` · Failed ${nFailed}` : ''}`);
+    setBulkSummary(
+      `Approved ${nApproved} · Rejected ${nRejected}${nFailed ? ` · Failed ${nFailed}` : ''}`,
+    );
     setBulkBusy(false);
 
-    // Fire the post-approval RAG once the batch lands. Errors are non-fatal
-    // — the caller still receives a null rag result and the panel closes.
     let rag: PostApprovalContext | null = null;
     if (nFailed === 0 && nApproved > 0) {
       try {
@@ -240,47 +365,122 @@ export default function DocumentReviewPanel(props: DocumentReviewPanelProps): Re
     onCompleted(documentReferenceId, rag);
   }, [baseUrl, documentReferenceId, onCompleted, patientId, rows, setRowState]);
 
-  const isDocx = useMemo(() => _isDocxLike(rows), [rows]);
-  const synthesizedParagraphs = useMemo(() => _synthesizeParagraphs(rows), [rows]);
   const allDone = rows.length > 0 && rows.every((r) => r.state.status === 'done');
+  const pendingCount = liveRows.length;
+
+  const bboxLayout: BboxLayoutBlock[] = []; // not currently surfaced from staging payload
+  const activeCitation = allCitations[activeCitationIndex];
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Review document extractions" style={overlayStyle} onClick={onClose}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Review document extractions"
+      style={overlayStyle}
+      onClick={onClose}
+    >
       <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div style={headerStyle}>
-          <h2 style={titleStyle}>Review document extractions</h2>
-          <code style={docRefStyle}>{documentReferenceId}</code>
-          <button type="button" aria-label="Close" onClick={onClose} style={closeBtnStyle}>×</button>
+          <div style={titleBlockStyle}>
+            <h2 style={titleStyle}>Review document extractions</h2>
+            <code style={docRefStyle}>{documentReferenceId}</code>
+          </div>
+          <span style={pendingPillStyle(pendingCount)}>
+            {pendingCount === 0
+              ? 'All decided'
+              : `${pendingCount} fact${pendingCount === 1 ? '' : 's'} pending`}
+          </span>
+          <button type="button" aria-label="Close" onClick={onClose} style={closeBtnStyle}>
+            ×
+          </button>
         </div>
         <div style={subHeaderStyle}>
-          Batch <code style={{ fontSize: 11 }}>{fileBatchId}</code> · {rows.length} row{rows.length === 1 ? '' : 's'}
+          Batch <code style={{ fontSize: 12 }}>{fileBatchId}</code> · {rows.length} row
+          {rows.length === 1 ? '' : 's'}
           {liveRows.length !== rows.length ? ` (${liveRows.length} live)` : ''}
         </div>
 
-        {/* Body — two columns */}
+        {/* Body — two columns (responsive). */}
         <div style={bodyStyle}>
           {/* Left rail: source viewer */}
           <div style={leftRailStyle}>
-            {isDocx ? (
-              <DocxParagraphsViewer
-                paragraphs={synthesizedParagraphs}
-                highlightedIndex={highlightedParagraph}
-              />
-            ) : (
-              <div style={pdfPlaceholderStyle}>
-                Source preview unavailable in v1; use citation chips for context.
+            {/* Citation chip strip */}
+            {allCitations.length > 0 && (
+              <div style={chipStripStyle}>
+                {allCitations.map((c, idx) => {
+                  const active = idx === activeCitationIndex;
+                  return (
+                    <button
+                      key={`${c.field_or_chunk_id}-${idx}`}
+                      type="button"
+                      onClick={() => setActiveCitationIndex(idx)}
+                      style={chipStyle(active)}
+                      title={c.quote_or_value || c.field_or_chunk_id}
+                    >
+                      {c.page ? `p${c.page} · ` : ''}
+                      {(c.quote_or_value || c.field_or_chunk_id || `#${idx + 1}`).slice(0, 40)}
+                    </button>
+                  );
+                })}
               </div>
             )}
+
+            <div style={leftRailBodyStyle}>
+              {previewLoading && (
+                <div style={previewMsgStyle}>Loading source preview…</div>
+              )}
+              {!previewLoading && previewError && (
+                <div style={previewMsgStyle}>
+                  Source preview unavailable; data still editable on the right.
+                </div>
+              )}
+              {!previewLoading && !previewError && previewBytes && previewKind === 'pdf' && (
+                <div style={pdfWrapStyle}>
+                  <DocumentViewer
+                    pdfBytes={previewBytes}
+                    citations={allCitations}
+                    activeIndex={activeCitationIndex}
+                    onActiveIndexChange={setActiveCitationIndex}
+                    bboxLayout={bboxLayout}
+                  />
+                </div>
+              )}
+              {!previewLoading && !previewError && previewKind === 'image' && imageBlobUrl && (
+                <div style={imageWrapStyle}>
+                  <img src={imageBlobUrl} alt="Source document" style={imageStyle} />
+                  {activeCitation && (
+                    <div style={citationCaptionStyle}>
+                      Citation: {activeCitation.quote_or_value || activeCitation.field_or_chunk_id}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!previewLoading && !previewError && previewKind === 'docx' && (
+                <DocxParagraphsViewer
+                  paragraphs={synthesizedParagraphs}
+                  highlightedIndex={
+                    activeCitationIndex >= 0 && activeCitationIndex < synthesizedParagraphs.length
+                      ? activeCitationIndex
+                      : null
+                  }
+                />
+              )}
+              {!previewLoading && !previewError && previewKind === 'unknown' && previewBytes && (
+                <div style={previewMsgStyle}>
+                  Source format not previewable; citations remain available above.
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Right rail: editor cards */}
           <div style={rightRailStyle}>
-            {loading && (
-              <div style={loadingStyle}>Loading staged rows…</div>
-            )}
+            {loading && <div style={loadingStyle}>Loading staged rows…</div>}
             {loadError && (
-              <div role="alert" style={errorBannerStyle}>{loadError}</div>
+              <div role="alert" style={errorBannerStyle}>
+                {loadError}
+              </div>
             )}
             {!loading && !loadError && rows.length === 0 && (
               <div style={loadingStyle}>No staged rows for this document.</div>
@@ -290,10 +490,10 @@ export default function DocumentReviewPanel(props: DocumentReviewPanelProps): Re
               if (!Editor) {
                 return (
                   <div key={lr.row.id} style={fallbackCardStyle}>
-                    <div style={{ fontSize: 12, fontWeight: 600 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>
                       #{lr.row.id} {lr.row.target_resource_type}
                     </div>
-                    <div style={{ fontSize: 11, color: SURFACE.muted, marginTop: 4 }}>
+                    <div style={{ fontSize: 12, color: SURFACE.muted, marginTop: 4 }}>
                       No editor available for this resource shape — approve as-is or skip.
                     </div>
                   </div>
@@ -308,12 +508,17 @@ export default function DocumentReviewPanel(props: DocumentReviewPanelProps): Re
                 onCitationClick,
                 status: lr.state.status,
                 statusMessage:
-                  lr.state.status === 'error' ? lr.state.error
-                  : lr.state.status === 'done'
-                    ? (lr.state.decision === 'rejected' ? 'rejected' : 'approved')
-                  : lr.state.decision === 'rejected' ? 'will reject'
-                  : lr.state.decision === 'approved' ? 'will approve'
-                  : null,
+                  lr.state.status === 'error'
+                    ? lr.state.error
+                    : lr.state.status === 'done'
+                      ? lr.state.decision === 'rejected'
+                        ? 'rejected'
+                        : 'approved'
+                      : lr.state.decision === 'rejected'
+                        ? 'will reject'
+                        : lr.state.decision === 'approved'
+                          ? 'will approve'
+                          : null,
               };
               return <Editor key={lr.row.id} {...editorProps} />;
             })}
@@ -322,13 +527,22 @@ export default function DocumentReviewPanel(props: DocumentReviewPanelProps): Re
 
         {/* Footer */}
         <div style={footerStyle}>
-          {bulkSummary && <span style={{ fontSize: 12, color: SURFACE.muted, flex: 1 }}>{bulkSummary}</span>}
+          {bulkSummary && (
+            <span style={{ fontSize: 13, color: SURFACE.muted, flex: 1 }}>{bulkSummary}</span>
+          )}
           {!bulkSummary && (
-            <span style={{ fontSize: 12, color: SURFACE.muted, flex: 1 }}>
-              {allDone ? 'All rows decided.' : `Ready to commit ${liveRows.length} row${liveRows.length === 1 ? '' : 's'}.`}
+            <span style={{ fontSize: 13, color: SURFACE.muted, flex: 1 }}>
+              {allDone
+                ? 'All rows decided.'
+                : `Ready to commit ${liveRows.length} row${liveRows.length === 1 ? '' : 's'}.`}
             </span>
           )}
-          <button type="button" onClick={onClose} disabled={bulkBusy} style={cancelBtnStyle(bulkBusy)}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={bulkBusy}
+            style={cancelBtnStyle(bulkBusy)}
+          >
             Cancel
           </button>
           <button
@@ -363,9 +577,9 @@ const overlayStyle: React.CSSProperties = {
 const panelStyle: React.CSSProperties = {
   background: SURFACE.bg,
   border: `1px solid ${SURFACE.borderStrong}`,
-  borderRadius: 10,
-  width: 'min(1200px, 100%)',
-  height: 'min(90vh, 900px)',
+  borderRadius: 12,
+  width: 'min(1280px, 100%)',
+  height: 'min(92vh, 920px)',
   display: 'flex',
   flexDirection: 'column',
   boxShadow: '0 16px 48px rgba(15, 23, 42, 0.25)',
@@ -375,36 +589,56 @@ const panelStyle: React.CSSProperties = {
 const headerStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 10,
-  padding: '14px 18px',
+  gap: 12,
+  padding: '14px 20px',
   borderBottom: `1px solid ${SURFACE.border}`,
+  background: SURFACE.bg,
+};
+
+const titleBlockStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  flex: 1,
+  minWidth: 0,
 };
 
 const titleStyle: React.CSSProperties = {
   margin: 0,
-  fontSize: 15,
+  fontSize: 16,
   fontWeight: 600,
   color: SURFACE.fgStrong,
+  whiteSpace: 'nowrap',
 };
 
 const docRefStyle: React.CSSProperties = {
-  fontSize: 11,
+  fontSize: 12,
   color: SURFACE.muted,
   background: NEU.bg,
   border: `1px solid ${NEU.border}`,
   borderRadius: 4,
-  padding: '2px 6px',
-  fontFamily: 'inherit',
-  flex: 1,
+  padding: '3px 8px',
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
+  maxWidth: 320,
 };
+
+const pendingPillStyle = (count: number): React.CSSProperties => ({
+  fontSize: 12,
+  fontWeight: 600,
+  padding: '4px 10px',
+  borderRadius: 12,
+  background: count === 0 ? '#dcfce7' : BRAND.tint,
+  color: count === 0 ? '#166534' : BRAND.base,
+  border: count === 0 ? '1px solid #bbf7d0' : `1px solid ${BRAND.base}`,
+});
 
 const closeBtnStyle: React.CSSProperties = {
   background: 'transparent',
   border: 'none',
-  fontSize: 18,
+  fontSize: 22,
   cursor: 'pointer',
   color: SURFACE.muted,
   lineHeight: 1,
@@ -412,46 +646,117 @@ const closeBtnStyle: React.CSSProperties = {
 };
 
 const subHeaderStyle: React.CSSProperties = {
-  padding: '10px 18px',
+  padding: '8px 20px',
   fontSize: 12,
   color: SURFACE.muted,
   borderBottom: `1px solid ${SURFACE.border}`,
+  background: SURFACE.panel,
 };
 
 const bodyStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
+  gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 1fr)',
   flex: 1,
   minHeight: 0,
 };
 
 const leftRailStyle: React.CSSProperties = {
   borderRight: `1px solid ${SURFACE.border}`,
-  overflowY: 'auto',
-  background: SURFACE.panel,
+  background: SURFACE.bg,
   minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+};
+
+const chipStripStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+  padding: '10px 14px',
+  borderBottom: `1px solid ${SURFACE.border}`,
+  background: SURFACE.panel,
+  maxHeight: 92,
+  overflowY: 'auto',
+};
+
+const chipStyle = (active: boolean): React.CSSProperties => ({
+  fontSize: 11,
+  padding: '4px 9px',
+  borderRadius: 12,
+  border: `1px solid ${active ? BRAND.base : SURFACE.borderStrong}`,
+  background: active ? BRAND.base : '#fff',
+  color: active ? BRAND.onBrand : SURFACE.fg,
+  fontWeight: active ? 600 : 500,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  maxWidth: 240,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+});
+
+const leftRailBodyStyle: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  position: 'relative',
+};
+
+const pdfWrapStyle: React.CSSProperties = {
+  position: 'relative',
+  width: '100%',
+  height: '100%',
+};
+
+const imageWrapStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 10,
+  padding: 16,
+};
+
+const imageStyle: React.CSSProperties = {
+  maxWidth: '100%',
+  height: 'auto',
+  border: `1px solid ${SURFACE.border}`,
+  borderRadius: 6,
+  background: '#fff',
+};
+
+const citationCaptionStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: SURFACE.muted,
+  textAlign: 'center',
+  padding: '6px 12px',
+  background: SURFACE.panel,
+  border: `1px solid ${SURFACE.border}`,
+  borderRadius: 6,
+  maxWidth: '90%',
+};
+
+const previewMsgStyle: React.CSSProperties = {
+  padding: 24,
+  fontSize: 13,
+  color: SURFACE.muted,
+  fontStyle: 'italic',
+  textAlign: 'center',
 };
 
 const rightRailStyle: React.CSSProperties = {
   overflowY: 'auto',
-  padding: 14,
+  padding: 16,
   display: 'flex',
   flexDirection: 'column',
-  gap: 10,
+  gap: 12,
   minHeight: 0,
-};
-
-const pdfPlaceholderStyle: React.CSSProperties = {
-  padding: 24,
-  fontSize: 12,
-  color: SURFACE.muted,
-  fontStyle: 'italic',
+  background: SURFACE.panel,
 };
 
 const loadingStyle: React.CSSProperties = {
   padding: 12,
   color: SURFACE.muted,
-  fontSize: 12,
+  fontSize: 13,
 };
 
 const errorBannerStyle: React.CSSProperties = {
@@ -464,24 +769,27 @@ const errorBannerStyle: React.CSSProperties = {
 };
 
 const fallbackCardStyle: React.CSSProperties = {
-  padding: '10px 12px',
+  padding: '12px 14px',
   border: `1px dashed ${SURFACE.border}`,
-  borderRadius: 6,
-  background: SURFACE.panel,
+  borderRadius: 8,
+  background: SURFACE.bg,
 };
 
 const footerStyle: React.CSSProperties = {
-  padding: '12px 18px',
+  padding: '14px 20px',
   borderTop: `1px solid ${SURFACE.border}`,
   display: 'flex',
   alignItems: 'center',
   gap: 10,
-  background: SURFACE.panel,
+  background: SURFACE.bg,
+  position: 'sticky',
+  bottom: 0,
 };
 
 const cancelBtnStyle = (busy: boolean): React.CSSProperties => ({
-  fontSize: 12,
-  padding: '6px 12px',
+  fontSize: 13,
+  fontWeight: 500,
+  padding: '8px 18px',
   borderRadius: 6,
   cursor: busy ? 'not-allowed' : 'pointer',
   background: '#fff',
@@ -489,11 +797,12 @@ const cancelBtnStyle = (busy: boolean): React.CSSProperties => ({
   border: `1px solid ${SURFACE.borderStrong}`,
   fontFamily: 'inherit',
   opacity: busy ? 0.5 : 1,
+  minHeight: 36,
 });
 
 const saveBtnStyle = (disabled: boolean): React.CSSProperties => ({
-  fontSize: 12,
-  padding: '6px 14px',
+  fontSize: 13,
+  padding: '8px 20px',
   borderRadius: 6,
   cursor: disabled ? 'not-allowed' : 'pointer',
   background: BRAND.base,
@@ -502,4 +811,6 @@ const saveBtnStyle = (disabled: boolean): React.CSSProperties => ({
   fontFamily: 'inherit',
   fontWeight: 600,
   opacity: disabled ? 0.5 : 1,
+  minHeight: 36,
+  boxShadow: disabled ? 'none' : '0 1px 2px rgba(15, 23, 42, 0.08)',
 });
