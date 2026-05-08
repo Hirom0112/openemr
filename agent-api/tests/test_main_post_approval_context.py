@@ -126,6 +126,112 @@ def test_post_approval_context_returns_fact_citations_for_obs_and_guidelines() -
     assert "Lactate" in g["quote_or_value"]
 
 
+def test_post_approval_context_hydrates_obs_bbox_from_citations_column() -> None:
+    """When the obs row carries a non-empty citations list, fact_citations
+    for that obs token must surface bbox/page/field_or_chunk_id/quote from
+    the first citation — this is what closes the loop so synthesis-card
+    fact:obs chips draw the source rectangle on the PDF.
+    """
+    _ensure_event_loop()
+    import main as main_mod
+
+    obs_rows = [
+        {
+            "id": 4242,
+            "fhir_resource": {
+                "id": "copilot-457-24323-8-alt",
+                "resourceType": "Observation",
+                "code": {
+                    "coding": [
+                        {
+                            "system": "http://loinc.org",
+                            "code": "2524-7",
+                            "display": "Lactate",
+                        }
+                    ]
+                },
+                "valueQuantity": {"value": 4.2, "unit": "mmol/L"},
+            },
+            "loinc_code": "2524-7",
+            "display": "Lactate",
+            "value": 4.2,
+            "citations": [
+                {
+                    "source_type": "document",
+                    "source_id": "DocumentReference/copilot-457",
+                    "page_or_section": "p2",
+                    "page": 2,
+                    "bbox": [0.12, 0.34, 0.56, 0.42],
+                    "field_or_chunk_id": "lactate-line-3",
+                    "quote_or_value": "Lactate 4.2 mmol/L",
+                }
+            ],
+        }
+    ]
+    snippets: list = []
+
+    obs_mock = AsyncMock(return_value=obs_rows)
+    rag_mock = AsyncMock(return_value=snippets)
+    pg_pool_mock = AsyncMock(return_value=None)
+
+    with patch("observations.writer.read_observations_for_document", new=obs_mock), \
+         patch("rag.retrieve.search", new=rag_mock), \
+         patch("audit.writer.get_pool", new=pg_pool_mock):
+        client = TestClient(main_mod.app)
+        resp = client.post(
+            "/document/copilot-457/post-approval-context",
+            json={"patient_id": "p-1"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    fc = body["fact_citations"]
+    obs_entry = fc["fact:obs:4242"]
+
+    # Routing source_type stays "observation" (chip handler routes on this).
+    assert obs_entry["source_type"] == "observation"
+    # bbox/page propagated from the citations column — this is the bug fix.
+    assert obs_entry["bbox"] == [0.12, 0.34, 0.56, 0.42]
+    assert obs_entry["page"] == 2
+    assert obs_entry["page_or_section"] == "p2"
+    # field_or_chunk_id prefers the citation's value (frontend keys the
+    # readOnly review panel by it), not the integer row id.
+    assert obs_entry["field_or_chunk_id"] == "lactate-line-3"
+    assert obs_entry["quote_or_value"] == "Lactate 4.2 mmol/L"
+
+
+def test_post_approval_context_obs_falls_back_when_citations_missing() -> None:
+    """No citations column → preserve the prior fallback shape (bbox=None,
+    page=None, field_or_chunk_id = row id as string, quote = display+value).
+    Guards regression in the path that existed before the fix.
+    """
+    _ensure_event_loop()
+    import main as main_mod
+
+    rows_no_cits = _fake_obs_rows()  # no "citations" key
+    obs_mock = AsyncMock(return_value=rows_no_cits)
+    rag_mock = AsyncMock(return_value=[])
+    pg_pool_mock = AsyncMock(return_value=None)
+
+    with patch("observations.writer.read_observations_for_document", new=obs_mock), \
+         patch("rag.retrieve.search", new=rag_mock), \
+         patch("audit.writer.get_pool", new=pg_pool_mock):
+        client = TestClient(main_mod.app)
+        resp = client.post(
+            "/document/copilot-457/post-approval-context",
+            json={"patient_id": "p-1"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    fc = resp.json()["fact_citations"]
+    obs_entry = fc["fact:obs:4242"]
+    assert obs_entry["bbox"] is None
+    assert obs_entry["page"] is None
+    assert obs_entry["field_or_chunk_id"] == "4242"
+    assert obs_entry["source_id"] == "Observation/copilot-457-24323-8-alt"
+    assert "Lactate" in obs_entry["quote_or_value"]
+
+
 def test_post_approval_context_handles_no_approved_facts() -> None:
     """When there are no approved obs/intake rows fact_citations stays empty."""
     _ensure_event_loop()

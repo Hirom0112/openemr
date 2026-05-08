@@ -4326,13 +4326,15 @@ async def document_post_approval_context(
         # source_id is a FHIR ref like "Observation/copilot-...").
         fact_citations: dict[str, dict[str, Any]] = {}
 
-        # observations: bbox/page are not currently surfaced by
-        # ``read_observations_for_document`` (the readback SQL fetches only
-        # id+fhir_resource — the bbox lives in a separate ``citations`` column
-        # populated by ``ObservationController.php`` but never SELECTed back).
-        # We populate field_or_chunk_id with the row id so the frontend at
-        # least has a stable token; bbox/page are left null and the chip
-        # falls back to value-text-only on click.
+        # observations: hydrate bbox/page/quote/field_or_chunk_id from the
+        # row's first citation (populated by ObservationController.php into
+        # the ``citations`` JSON column on insert, surfaced via
+        # ``read_observations_for_document``). Falls back to row-level
+        # defaults when the column is empty/missing — same shape the prior
+        # implementation produced. ``source_type`` stays ``"observation"``
+        # because the chip click handler routes by source_type and we want
+        # observation routing, not the citation's own source_type which is
+        # typically ``"document"`` (it points at the source PDF chunk).
         for row in obs_rows:
             row_id = row.get("id")
             cid = f"fact:obs:{row_id}"
@@ -4344,23 +4346,81 @@ async def document_post_approval_context(
             )
             value_repr = _safe_value_repr_for_obs(row)
             display = row.get("display") or row.get("loinc_code") or ""
-            quote = (
+            fallback_quote = (
                 f"{display}: {value_repr}".strip(": ").strip()
                 if display
                 else value_repr
             )
+            fallback_source_id = (
+                f"Observation/{obs_fhir_id}"
+                if isinstance(obs_fhir_id, str) and obs_fhir_id
+                else f"copilot_observations/{row_id}"
+            )
+
+            row_cits = row.get("citations") or []
+            primary_obs_cit = (
+                row_cits[0]
+                if isinstance(row_cits, list)
+                and row_cits
+                and isinstance(row_cits[0], dict)
+                else {}
+            )
+
+            # bbox: accept only a 4-element list/tuple of numbers.
+            cit_bbox_raw = primary_obs_cit.get("bbox")
+            cit_bbox: Any = None
+            if (
+                isinstance(cit_bbox_raw, (list, tuple))
+                and len(cit_bbox_raw) == 4
+                and all(isinstance(v, (int, float)) for v in cit_bbox_raw)
+            ):
+                cit_bbox = list(cit_bbox_raw)
+
+            # page: prefer explicit, else parse "p<int>" from page_or_section.
+            cit_page_raw = primary_obs_cit.get("page")
+            cit_page_or_section = primary_obs_cit.get("page_or_section")
+            cit_page: int | None = None
+            if isinstance(cit_page_raw, int):
+                cit_page = cit_page_raw
+            elif isinstance(cit_page_raw, str) and cit_page_raw.isdigit():
+                cit_page = int(cit_page_raw)
+            elif (
+                isinstance(cit_page_or_section, str)
+                and cit_page_or_section.startswith("p")
+                and cit_page_or_section[1:].isdigit()
+            ):
+                cit_page = int(cit_page_or_section[1:])
+
+            cit_field_or_chunk_id = primary_obs_cit.get("field_or_chunk_id")
+            cit_quote = primary_obs_cit.get("quote_or_value")
+            cit_source_id = primary_obs_cit.get("source_id")
+
             fact_citations[cid] = {
                 "source_type": "observation",
                 "source_id": (
-                    f"Observation/{obs_fhir_id}"
-                    if isinstance(obs_fhir_id, str) and obs_fhir_id
-                    else f"copilot_observations/{row_id}"
+                    cit_source_id
+                    if isinstance(cit_source_id, str) and cit_source_id
+                    else fallback_source_id
                 ),
-                "page_or_section": None,
-                "field_or_chunk_id": str(row_id) if row_id is not None else "",
-                "quote_or_value": quote,
-                "page": None,
-                "bbox": None,
+                "page_or_section": (
+                    cit_page_or_section
+                    if isinstance(cit_page_or_section, str)
+                    and cit_page_or_section
+                    else None
+                ),
+                "field_or_chunk_id": (
+                    cit_field_or_chunk_id
+                    if isinstance(cit_field_or_chunk_id, str)
+                    and cit_field_or_chunk_id
+                    else (str(row_id) if row_id is not None else "")
+                ),
+                "quote_or_value": (
+                    cit_quote
+                    if isinstance(cit_quote, str) and cit_quote
+                    else fallback_quote
+                ),
+                "page": cit_page,
+                "bbox": cit_bbox,
             }
 
         # intake: every payload carries a ``citations[]`` array (writer.py

@@ -1186,7 +1186,8 @@ async def stage_intake_field(
 # by ``audit/openemr_log.py`` is the correct surface for production reads.
 
 _OBS_READBACK_SQL = (
-    "SELECT id, fhir_resource FROM copilot_observations WHERE document_id=%s"
+    "SELECT id, fhir_resource, citations FROM copilot_observations "
+    "WHERE document_id=%s"
 )
 
 # 2026-05-08 — UUID → pid resolver used by _problem_list_condition_write.
@@ -1324,6 +1325,35 @@ async def read_observations_for_document(
             elif "valueString" in fhir_resource:
                 value = fhir_resource.get("valueString")
 
+            # citations JSON column — populated by ObservationController.php
+            # from the FHIR body's `_copilot_citations` extension. Surface it
+            # so the post-approval-context route can hydrate fact_citations
+            # with bbox/page/quote (the frontend uses these to draw the
+            # source rectangle on the PDF when a fact:obs chip is clicked).
+            citations: list[dict[str, Any]] = []
+            raw_citations = row[2] if len(row) > 2 else None
+            if raw_citations is not None:
+                try:
+                    parsed = (
+                        _json.loads(raw_citations)
+                        if isinstance(raw_citations, (str, bytes))
+                        else raw_citations
+                    )
+                    if isinstance(parsed, list):
+                        citations = [c for c in parsed if isinstance(c, dict)]
+                    elif isinstance(parsed, dict):
+                        # Defensive: allow a single-citation dict.
+                        citations = [parsed]
+                except Exception as exc:  # noqa: BLE001 — soft path
+                    _logger.info(
+                        "citation_deserialize_failed",
+                        extra={
+                            "row_id": obs_id,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+                    citations = []
+
             out.append(
                 {
                     "id": obs_id,
@@ -1331,6 +1361,7 @@ async def read_observations_for_document(
                     "loinc_code": loinc_code,
                     "display": display,
                     "value": value,
+                    "citations": citations,
                 }
             )
     except Exception as exc:  # noqa: BLE001 — soft path
