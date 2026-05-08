@@ -333,9 +333,7 @@ The first five tools are the conversational-loop set, registered in `agent/tool_
 
 ### 4.6 HTTP Routes
 
-All routes are registered in `agent-api/main.py`. Grouped by functional
-purpose (W1 = dispatcher / tools / sessions; W2 = document ingestion /
-graph / evidence; shared = infrastructure):
+**Methodology:** Routes are registered in two places: directly in `agent-api/main.py` via `@app.*` decorators (26 routes) and via `app.include_router(_staging_router)` at `main.py:3657`, which mounts 6 routes from `agent-api/staging/router.py` (the human-in-the-loop document approval workflow). Total live route surface: **32**. Future enumeration must grep both files. Grouped below by functional purpose (W1 = dispatcher / tools / sessions; W2 = document ingestion / graph / evidence / staging; shared = infrastructure):
 
 **W1 — dispatcher, tools, sessions, FHIR proxy**
 
@@ -369,6 +367,17 @@ graph / evidence; shared = infrastructure):
 | `/document/quarantine/{quarantine_id}/claim` | POST | `main.py:3413` |
 | `/document/quarantine/{quarantine_id}/match` | POST | `main.py:3483` |
 | `/document/quarantine/{quarantine_id}/reject` | POST | `main.py:3566` |
+
+**W2 — staging / human-in-the-loop approval** (mounted via `app.include_router(_staging_router)` at `main.py:3657`)
+
+| Route | Method | File:line |
+|---|---|---|
+| `/pending-extractions` | GET | `staging/router.py:111` |
+| `/pending-extractions/{pending_id}` | GET | `staging/router.py:151` |
+| `/pending-extractions/{pending_id}/approve` | POST | `staging/router.py:221` |
+| `/pending-extractions/batch-approve` | POST | `staging/router.py:281` |
+| `/pending-extractions/{pending_id}/reject` | POST | `staging/router.py:367` |
+| `/pending-extractions/{pending_id}/retry` | POST | `staging/router.py:405` |
 
 **Shared — infrastructure**
 
