@@ -10,7 +10,7 @@ defensible, and traceable to the project source documents:
   success metrics.
 - `W1_ARCHITECTURE.md` defines the agent architecture, verification layer,
   observability model, and initial evaluation framework.
-- `AUDIT.md` defines the pre-integration risks the eval suite must not ignore.
+- `W1_AUDIT.md` defines the pre-integration risks the eval suite must not ignore.
 
 The agent is not considered working because it gives plausible clinical
 answers. It is considered working only when it preserves authorization
@@ -54,7 +54,7 @@ Scope:
 ### Layer 2: Fixture Integration Tests
 
 These tests run against seeded synthetic FHIR bundles and controlled service
-fixtures, not the default OpenEMR demo database. `AUDIT.md` found that the demo
+fixtures, not the default OpenEMR demo database. `W1_AUDIT.md` found that the demo
 database is clinically insufficient: too few patients, no meaningful lab
 history, stale encounters, and missing code status and isolation fields.
 

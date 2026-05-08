@@ -19,7 +19,7 @@ written against a stale mental model bypasses them silently.
   verification, eval gates, W2 graph + RAG
 - `USERS.md` — Dr. Chen, UC-1..UC-5, ranking weights (UC-1 is rules-driven,
   not LLM)
-- `AUDIT.md` — why FHIR-only, why Redis pre-fetch, synthetic-data constraint
+- `W1_AUDIT.md` — why FHIR-only, why Redis pre-fetch, synthetic-data constraint
 - `todo.md` (repo root, gitignored as personal working plan — `b645131e4`) — phase tracking + slice status + cut-line decisions. Not present on fresh clones; ask the operator for current state if absent.
 - `Week_1__AgentForge2.pdf` — requirements floor
 

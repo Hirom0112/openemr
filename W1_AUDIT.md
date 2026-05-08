@@ -4,6 +4,8 @@
 **Branch:** clinical-copilot  
 **Scope:** Security, Performance, Architecture, Data Quality, Compliance / HIPAA
 
+> **Status (2026-W2 update):** Pre-W1 audit of the OpenEMR base, conducted before Week 1 implementation began. **Findings #1 (empty demo DB → UC-1..UC-5 producing nonsensical output) and #5 (`code_status` / `isolation` columns missing) have since been mitigated** by the synthetic 25-patient panel introduced in W1 and the Wave 2C generated corpus shipped in W2. See `W2_ARCHITECTURE.md` for the panel + corpus discussion. This document is retained as a historical record of the starting state. Other findings remain open per their original severity; re-verify before treating the table as current.
+
 ---
 
 ## Quick Read
@@ -68,11 +70,11 @@ The following table is the authoritative prioritized findings list. Severity: **
 
 | # | SEV | Dimension | Finding | Ownership |
 |---|-----|-----------|---------|-----------|
-| 1 | Critical | Data Quality | Demo DB has 3 patients, 0 lab results, 0 nursing notes; encounters all dated 2014-02-01. UC-1 through UC-5 produce empty or nonsensical output. | Project |
+| 1 | Critical → **Mitigated (W1+W2)** | Data Quality | Demo DB has 3 patients, 0 lab results, 0 nursing notes; encounters all dated 2014-02-01. UC-1 through UC-5 produce empty or nonsensical output. **Mitigation:** synthetic 25-patient panel ships as the test/demo dataset; Wave 2C generated corpus extends it for W2 document-ingestion scenarios. See `W2_ARCHITECTURE.md` (synthetic panel discussion) and `agent-api/tests/fixtures/`. | Project |
 | 2 | Critical | Compliance | No BAA with Anthropic. Sending PHI to the Claude API is a HIPAA §164.502 violation. | Project |
 | 3 | Critical | Compliance | No documented breach notification workflow for LLM provider incidents. HIPAA §164.400–414 requires incident classification, notification timing, HHS/media escalation, and responsible roles. | Project |
 | 4 | Critical | Compliance | No de-identification or minimum-necessary PHI layer. Every PHI field the agent reads from OpenEMR lands verbatim in the model prompt. | Agent |
-| 5 | Critical | Data Quality | `code_status` and `isolation` columns do not exist in `patient_data`. Two mandatory USERS.md auto-flags have no schema field to read from. | OpenEMR |
+| 5 | Critical → **Mitigated (W1+W2)** | Data Quality | `code_status` and `isolation` columns do not exist in `patient_data`. Two mandatory USERS.md auto-flags have no schema field to read from. **Mitigation:** the synthetic 25-patient panel populates code_status and isolation for every patient; the agent reads them through the FHIR shim with deterministic synthesized values that exercise both UC-2 (always-shown) and the auto-flag triggers. Underlying OpenEMR schema gap remains open as upstream tech debt. | OpenEMR |
 | 6 | High | Architecture | `checkUserHasAccessToPatient()` at `src/RestControllers/Authorization/BearerTokenAuthorizationStrategy.php:479` always returns `true`. Any authenticated token reads any patient. Agent census proxy is the compensating control until fixed. | OpenEMR |
 | 7 | High | Performance | `ProcedureService::getAll()` generates 190+ DB queries for moderate lab history via three nested N+1 loops (`src/Services/ProcedureService.php:711,728,745`). Blows the 3-second agent latency budget by an order of magnitude at production scale. | OpenEMR |
 | 8 | High | Architecture | Standard REST API (`/api/`) has no lab/diagnostic-report endpoint. Labs are FHIR-only. Agent must integrate via FHIR R4 exclusively. | OpenEMR |
