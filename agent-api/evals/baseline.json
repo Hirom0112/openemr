@@ -16,6 +16,7 @@
   "stage_failure_audit_emitted": {"pass_rate": 1.00,  "min_threshold": 0.95},
   "tiff_all_pages_ocrd":        {"pass_rate": 1.00,   "min_threshold": 1.00},
   "synthetic_marker_not_extracted": {"pass_rate": 1.00, "min_threshold": 1.00},
+  "synthesis_grounded":             {"pass_rate": 1.00, "min_threshold": 1.00},
   "per_modality": {
     "intake_form": {
       "n_cases": 26,

@@ -36,6 +36,14 @@ class CaseScore:
     #   None   = case had no provenance assertion OR MySQL probe was unavailable
     #            (skipped — does not count toward pass-rate denominator)
     provenance_chain: Optional[bool] = None
+    # Phase 2 Step 2 Stage 3 — post-approval RAG synthesis grounding.
+    # ``synthesis`` mirrors ``SynthesisOutput.to_dict()`` (see agent/synthesis.py);
+    # ``synthesis_input`` mirrors the serialized ``SynthesisInput`` allowlist.
+    # Both default to None — the rubric vacuously PASSes when synthesis was not
+    # invoked, so existing extraction-only cases keep their pass rate.
+    synthesis: Optional[dict] = None
+    synthesis_input: Optional[dict] = None
+    synthesis_grounded: bool = True  # vacuous-PASS default (synthesis is None)
     error: Optional[str] = None
 
 
@@ -107,6 +115,7 @@ async def score_case(case: Any, outcome: RunOutcome) -> CaseScore:
 
     is_false_positive = expected == "pass" and outcome.critic_decision == "hard_block"
     provenance_ok = _score_provenance_chain(case, outcome)
+    synthesis_grounded_ok = rubrics_mechanical.synthesis_grounded(outcome, case=case)
 
     return CaseScore(
         case_id=outcome.case_id,
@@ -121,6 +130,9 @@ async def score_case(case: Any, outcome: RunOutcome) -> CaseScore:
         no_phi_in_logs=phi_ok,
         is_critic_false_positive=is_false_positive,
         provenance_chain=provenance_ok,
+        synthesis=outcome.synthesis,
+        synthesis_input=outcome.synthesis_input,
+        synthesis_grounded=synthesis_grounded_ok,
         error=outcome.error,
     )
 
@@ -140,6 +152,8 @@ _RUBRIC_FIELDS = (
     "factually_consistent",
     "safe_refusal",
     "no_phi_in_logs",
+    # Phase 2 Step 2 Stage 3 — post-approval RAG synthesis grounding.
+    "synthesis_grounded",
 )
 
 

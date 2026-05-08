@@ -66,6 +66,19 @@ class RunOutcome:
     retrieval: Optional[Dict[str, Any]] = None
     finalized: Optional[Dict[str, Any]] = None
     skipped_reason: Optional[str] = None
+    # Phase 2 Step 2 Stage 3 — post-approval RAG synthesis capture. ``synthesis``
+    # mirrors the ``synthesis`` payload returned by ``/document/post-approval-context``
+    # (see ``agent/synthesis.py::SynthesisOutput.to_dict``); ``synthesis_input``
+    # mirrors the serialized ``SynthesisInput`` allowlist that was handed to the
+    # synthesizer. Both default to None — the suite is currently extraction-only
+    # (no post-approval invocation site in this runner), so the synthesis_grounded
+    # rubric vacuously PASSes for every existing case. Forward-looking
+    # instrumentation: when post-approval cases land, populate these fields at
+    # the build site after calling the route. ``synthesis_input`` is not surfaced
+    # in the API response today (Stage 1 carries it server-side only) — leaving
+    # it None until a future refactor exposes it via the response envelope.
+    synthesis: Optional[Dict[str, Any]] = None
+    synthesis_input: Optional[Dict[str, Any]] = None
 
 
 # --------------------------------------------------------------------------- #
