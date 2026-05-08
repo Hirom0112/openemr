@@ -282,13 +282,50 @@ Provenance chain (auditor's path):
 The chain is verified end-to-end by scripts/verify_mvp.sh Check 5
 and gated by the eval suite's provenance_chain rubric.
 
-Read-side caveat: OpenEMR's GET /apis/default/fhir/Observation
-endpoint does NOT auto-surface rows from copilot_observations — that
-would require either bridging into procedure_result (v2) or a
-read-side custom endpoint. The agent-api itself is the read surface
-in v1; the chain is queryable via the agent-api's response envelope
-(metadata.observation_ids) and via direct MySQL inspection of
-copilot_observations.
+Read-side: OpenEMR's GET /apis/default/fhir/Observation surfaces
+rows from copilot_observations via FhirObservationCopilotService,
+registered into the core FHIR Observation registry through a single
+addMappedService(...) line in src/Services/FHIR/FhirObservationService.php
+(documented exception #1 to "no core edits" — see CLAUDE.md §8). The
+service is a read-only projection over copilot_observations and
+co-exists with the core procedure_result mapping; rows are filtered
+by patient compartment and surface as fully FHIR-shaped resources.
+
+### 4.2.5 FHIR Condition custom endpoint (problem_list)
+
+Same shape as §4.2.4, scoped to extracted problem_list rows
+(condition + ICD-10 + optional SNOMED + status). agent-api POSTs
+to oe-module-clinical-copilot's ConditionController on approval,
+persisting to a module-private copilot_conditions MySQL table.
+Resource ids are deterministic (`copilot-{doc_id}-{icd10}` when
+ICD-10 is present, falling back to a slug of the condition text)
+so re-extraction is idempotent.
+
+Routing: only problem_list rows whose `icd10_code` survives the
+extraction-time grounding guardrail (`validate_icd10_grounded` —
+literal substring match against the document's source text, dot-
+optional, case-insensitive) are sent to the Condition endpoint.
+Rows without a grounded code stay as IntakeFormField staging
+artifacts and never become FHIR resources. The guardrail rejects
+fabricated codes upstream of staging and emits
+`agent_icd10_guardrail_rejections_total{reason}`; the eval suite's
+`icd10_grounded` rubric is gated at 1.00 (hard threshold).
+
+Patient resolution: the PHP controller's `subject.reference` regex
+rejects hyphens and `patient_id` is INT, so the agent-api resolves
+the staging row's UUID to the numeric pid via aiomysql against
+`patient_data.uuid` (UNHEX/REPLACE) before the POST. Soft-fails to
+`payload_invalid` on miss.
+
+Read-side: GET /apis/default/fhir/Condition?category=problem-list-item
+surfaces copilot_conditions rows via FhirConditionCopilotService,
+registered into core via addMappedService(...) in
+src/Services/FHIR/FhirConditionService.php (documented exception #2
+to "no core edits"). The projection co-exists with the core
+FhirConditionProblemListItemService — provenance chain proven by a
+live read against `patient=<uuid>&category=problem-list-item`
+returning the three Whitaker problem_list rows under
+`copilot-446-{I48.91,E78.5,N40.0}`.
 
 ### 4.3 Round-trip integrity and concurrency
 
