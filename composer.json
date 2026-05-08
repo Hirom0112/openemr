@@ -164,7 +164,8 @@
     ],
     "autoload": {
         "psr-4": {
-            "OpenEMR\\": "src"
+            "OpenEMR\\": "src",
+            "OpenEMR\\Modules\\ClinicalCopilot\\": "interface/modules/custom_modules/oe-module-clinical-copilot/src"
         },
         "classmap": [
             "library/classes"
