@@ -108,6 +108,17 @@ outstanding.
    enforce. UC-1 ranking is deterministic by design (USERS.md §5 "Ranking
    Priority Weights"); the LLM only writes one-line explanations after rules
    rank. Do not propose LLM-driven ranking.
+8. **Exception to "no core edits":** a single registration line may be added
+   to a hard-coded OpenEMR registry where the upstream codebase does not
+   expose a plugin/event hook for that registry, with a code comment
+   cross-referencing this file. Currently the only invocation:
+   `src/Services/FHIR/FhirObservationService.php` registers
+   `OpenEMR\Modules\ClinicalCopilot\FHIR\FhirObservationCopilotService` so the
+   FHIR Observation endpoint surfaces approved facts from
+   `copilot_observations` alongside core `procedure_result` rows. Reason: the
+   constructor `addMappedService(...)` calls are hard-coded with no event,
+   service-locator, or autodiscovery hook. Re-evaluate if upstream OpenEMR
+   adds a contribution mechanism.
 
 In any new session, before answering anything substantive: read both layers,
 then demonstrate (in whatever format fits) that you can speak to the

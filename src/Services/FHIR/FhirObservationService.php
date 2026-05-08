@@ -16,6 +16,7 @@ use OpenEMR\Services\FHIR\Observation\FhirObservationPatientService;
 use OpenEMR\Services\FHIR\Observation\FhirObservationSocialHistoryService;
 use OpenEMR\Services\FHIR\Observation\FhirObservationTreatmentInterventionPreferenceService;
 use OpenEMR\Services\FHIR\Observation\FhirObservationVitalsService;
+use OpenEMR\Modules\ClinicalCopilot\FHIR\FhirObservationCopilotService;
 use OpenEMR\Services\FHIR\Traits\BulkExportSupportAllOperationsTrait;
 use OpenEMR\Services\FHIR\Traits\FhirBulkExportDomainResourceTrait;
 use OpenEMR\Services\FHIR\Traits\FhirServiceBaseEmptyTrait;
@@ -71,6 +72,14 @@ class FhirObservationService extends FhirServiceBase implements IResourceSearcha
         $this->addMappedService(new FhirObservationAdvanceDirectiveService());
         $this->addMappedService(new FhirObservationTreatmentInterventionPreferenceService());
         $this->addMappedService(new FhirObservationCareExperiencePreferenceService());
+
+        // Co-Pilot FHIR sub-service registration.
+        // OpenEMR's FhirObservationService does not expose a plugin
+        // hook for sub-service contributions, so this single
+        // registration line is the documented exception to the
+        // "no core edits" rule. See agent-api/CLAUDE.md for the
+        // rationale.
+        $this->addMappedService(new FhirObservationCopilotService());
     }
 
     /**
