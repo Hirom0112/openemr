@@ -1613,12 +1613,33 @@ function DocViewer(p: DocViewerProps): ReactElement {
               activeIndex = idx >= 0 ? idx : null;
             }
           }
+          // Passive citation indicators — for every paragraph that has any
+          // citation pointing at it, the docx list renders a subtle left-tint
+          // bar and per-citation ordinal chips. Lets the doctor scan the
+          // document and see coverage at a glance without losing readability;
+          // clicking a chip opens the corresponding card in the rail
+          // (document → card direction). Active highlight (strong amber) is
+          // unchanged — it still fires only when a card is selected.
+          const citationsByDocxIdx = new Map<number, FlatCitation[]>();
+          if (useReal) {
+            const paraToDocxIdx = new Map<number, number>();
+            docxParagraphs!.forEach((p, i) => paraToDocxIdx.set(p.para_idx, i));
+            for (const c of activePageCitations) {
+              if (c.paraIdx == null) continue;
+              const idx = paraToDocxIdx.get(c.paraIdx);
+              if (idx == null) continue;
+              const bucket = citationsByDocxIdx.get(idx);
+              if (bucket) bucket.push(c);
+              else citationsByDocxIdx.set(idx, [c]);
+            }
+          }
           return (
             <div className="cdr-doc-page-wrap">
               <div className="cdr-doc-page cdr-doc-page-docx">
                 <DocxParagraphList
                   paragraphs={paragraphs}
                   activeIndex={activeIndex}
+                  citationsByDocxIdx={citationsByDocxIdx}
                   onClick={(idx) => {
                     if (useReal) {
                       // Map docx paragraph index → citation whose paraIdx
@@ -1634,6 +1655,7 @@ function DocViewer(p: DocViewerProps): ReactElement {
                       if (target) onBboxClick(target.cardId);
                     }
                   }}
+                  onChipClick={(cardId) => onBboxClick(cardId)}
                 />
               </div>
             </div>
@@ -2242,7 +2264,19 @@ interface DocxParagraphListProps {
   paragraphs: string[];
   activeIndex: number | null;
   onClick: (idx: number) => void;
+  /** Citations keyed by docx-list index (0-based). Empty map renders no
+   *  passive indicators (synth-fallback path uses this). */
+  citationsByDocxIdx?: Map<number, FlatCitation[]>;
+  /** Click on an ordinal chip → open the card it belongs to. Optional;
+   *  when omitted, chips are decorative only. */
+  onChipClick?: (cardId: string) => void;
 }
+
+// Cap how many chips we render inline before collapsing to "+N". Three is the
+// typical size for a multi-value paragraph (e.g. "RE: Margaret Chen | DOB:
+// 03/12/1968 | MRN: BHS-2847163" → 3 demographic cards). More than that gets
+// hard to scan and would crowd the line.
+const _DOCX_CHIP_CAP = 3;
 
 function DocxParagraphList(p: DocxParagraphListProps): ReactElement {
   const refs = useRef<Array<HTMLDivElement | null>>([]);
@@ -2260,20 +2294,55 @@ function DocxParagraphList(p: DocxParagraphListProps): ReactElement {
       </div>
     );
   }
+  const citationsByDocxIdx = p.citationsByDocxIdx;
   return (
     <div className="cdr-docx-list">
       {p.paragraphs.map((text, idx) => {
         const active = idx === p.activeIndex;
+        const cits = citationsByDocxIdx?.get(idx) ?? [];
+        const cited = cits.length > 0;
+        const visibleCits = cits.slice(0, _DOCX_CHIP_CAP);
+        const overflow = cits.length - visibleCits.length;
+        const className = [
+          'cdr-docx-para',
+          cited ? 'cdr-docx-para-cited' : '',
+          active ? 'cdr-docx-para-active' : '',
+        ]
+          .filter(Boolean)
+          .join(' ');
         return (
           <div
             key={idx}
             ref={(el) => {
               refs.current[idx] = el;
             }}
-            className={`cdr-docx-para${active ? ' cdr-docx-para-active' : ''}`}
+            className={className}
             onClick={() => p.onClick(idx)}
           >
             {text || <em className="cdr-docx-empty-line">(empty)</em>}
+            {cited && (
+              <span className="cdr-docx-chip-row" aria-hidden={false}>
+                {visibleCits.map((c) => (
+                  <button
+                    key={c.cardId}
+                    type="button"
+                    className="cdr-docx-chip"
+                    title={c.shortLabel ? `#${c.ordinal} ${c.shortLabel}` : `#${c.ordinal}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      p.onChipClick?.(c.cardId);
+                    }}
+                  >
+                    {c.ordinal}
+                  </button>
+                ))}
+                {overflow > 0 && (
+                  <span className="cdr-docx-chip cdr-docx-chip-overflow" title={`+${overflow} more`}>
+                    +{overflow}
+                  </span>
+                )}
+              </span>
+            )}
           </div>
         );
       })}
@@ -3449,10 +3518,57 @@ const REVIEW_CSS = `
   white-space: pre-wrap;
 }
 .cdr-docx-para:hover { background: var(--surface-tint); }
+/* Passive indicator — paragraph has at least one citation pointing at it.
+ * Subtle: thin brand-tint left bar + soft tint, not loud enough to compete
+ * with the active-state amber. The chip row carries the actual ordinal(s)
+ * in the right margin so the doctor can scan + jump without click-cycling
+ * every card. */
+.cdr-docx-para-cited {
+  border-left: 3px solid var(--brand-tint, #cfd8dc);
+  position: relative;
+  padding-right: 64px; /* reserve room for the chip row so it never overlaps text */
+}
+/* Active wins over passive on the left bar — declared after so it overrides. */
 .cdr-docx-para-active {
   background: var(--warn-soft);
   border-left: 3px solid var(--warn);
 }
+.cdr-docx-chip-row {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  display: inline-flex;
+  gap: 3px;
+  pointer-events: auto;
+}
+.cdr-docx-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font-sans, system-ui), sans-serif;
+  line-height: 1;
+  color: var(--ink-muted, #455a64);
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #cfd8dc);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.cdr-docx-chip:hover {
+  color: var(--ink, #1a2329);
+  background: var(--brand-tint, #e3f2fd);
+  border-color: var(--brand, #1976d2);
+}
+.cdr-docx-chip-overflow {
+  cursor: default;
+  color: var(--ink-muted, #455a64);
+}
+.cdr-docx-chip-overflow:hover { background: var(--surface, #fff); border-color: var(--border, #cfd8dc); }
 .cdr-docx-empty, .cdr-docx-empty-line {
   color: var(--ink-muted);
   font-style: italic;
