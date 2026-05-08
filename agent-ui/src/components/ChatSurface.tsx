@@ -671,6 +671,10 @@ export default function ChatSurface({
               summary: ctx.summary,
               query_used: ctx.query_used,
               guidelines: ctx.guidelines,
+              // Forward the 4-section synthesis when the post-approval
+              // route produced one. Null/undefined falls back to the
+              // deterministic-recap view in PostIngestContextCard.
+              synthesis: ctx.synthesis ?? null,
             },
             // When non-null, `readExtraction()` picks this up so fact:obs
             // chip clicks resolve against the same citation list the
