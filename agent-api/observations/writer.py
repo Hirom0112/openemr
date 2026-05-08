@@ -25,7 +25,7 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import re
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 
@@ -732,6 +732,30 @@ async def _problem_list_condition_write(
     if not patient_id:
         return "failed", "payload_invalid"
 
+    # UUID → numeric pid resolution. The PHP ConditionController's
+    # subject regex /^Patient\\/(\\w+)$/ rejects hyphens (UUIDs), and
+    # the patient_id INT column expects a numeric pid. The pending
+    # row stores whatever the form sent at ingest time (UUID for
+    # iframe ingests, numeric for tests), so we always resolve here
+    # rather than assume the caller already did. We resolve via a
+    # direct MySQL query against patient_data — the FHIR layer
+    # surfaces the same UUID back to us, not the pid, so it can't
+    # help. Reuses the same aiomysql plumbing
+    # `read_observations_for_document` already proved (single
+    # short-lived connection per call; OpenEMR-pool credentials).
+    if "-" in patient_id:
+        resolved = await _resolve_pid_from_uuid(patient_id)
+        if resolved is None:
+            _logger.warning(
+                "condition_write_pid_resolve_failed",
+                extra={
+                    "target_id": target_id,
+                    "patient_uuid_prefix": patient_id[:8],
+                },
+            )
+            return "failed", "payload_invalid"
+        patient_id = resolved
+
     icd10 = payload.get("icd10_code") or ""
     # Sanitised id derivation: prefer ICD-10 (deterministic across re-
     # extractions of the same problem on the same document); fall back
@@ -1105,6 +1129,67 @@ async def stage_intake_field(
 _OBS_READBACK_SQL = (
     "SELECT id, fhir_resource FROM copilot_observations WHERE document_id=%s"
 )
+
+# 2026-05-08 — UUID → pid resolver used by _problem_list_condition_write.
+# OpenEMR's patient_data.uuid is stored as a 16-byte BINARY column;
+# the FHIR layer hands us the dash-separated 36-char string form. We
+# unhex(replace(...)) to land in the binary form for the WHERE clause.
+_PID_RESOLVE_SQL = (
+    "SELECT pid FROM patient_data WHERE uuid = UNHEX(REPLACE(%s, '-', ''))"
+)
+
+
+async def _resolve_pid_from_uuid(patient_uuid: str) -> Optional[str]:
+    """Return the numeric pid for a patient_data UUID, or None on miss.
+
+    Used by the Condition write path because the PHP controller
+    expects a numeric pid in subject.reference (its regex
+    /^Patient\\/(\\w+)$/ rejects hyphens) and patient_id is an INT
+    column. Mirrors the soft-fail discipline of
+    ``read_observations_for_document``: any error returns None and
+    the caller surfaces ``payload_invalid`` rather than crashing the
+    approve flow.
+    """
+    try:
+        import aiomysql  # type: ignore[import-not-found]
+    except Exception:  # pragma: no cover — optional dep
+        return None
+    try:
+        conn = await aiomysql.connect(
+            host=settings.openemr_db_host,
+            port=settings.openemr_db_port,
+            user=settings.openemr_db_user,
+            password=settings.openemr_db_password,
+            db=settings.openemr_db_name,
+            autocommit=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — soft path
+        _logger.warning(
+            "pid_resolve_connect_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return None
+    try:
+        cur = await conn.cursor()
+        await cur.execute(_PID_RESOLVE_SQL, (patient_uuid,))
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        pid = row[0]
+        if pid is None:
+            return None
+        return str(int(pid))
+    except Exception as exc:  # noqa: BLE001 — soft path
+        _logger.warning(
+            "pid_resolve_query_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 async def read_observations_for_document(

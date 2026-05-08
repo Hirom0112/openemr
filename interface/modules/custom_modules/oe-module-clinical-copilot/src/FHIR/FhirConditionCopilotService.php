@@ -303,28 +303,29 @@ class FhirConditionCopilotService extends FhirServiceBase implements IPatientCom
             $condition->setOnsetDateTime(UtilsService::getLocalDateAsUTC($onset));
         }
 
-        // derivedFrom — only when the source document landed in OpenEMR's
-        // documents table. Mirrors the Observation pattern.
-        if (!empty($dataRecord['document_uuid'])) {
-            $ref = new FHIRReference();
-            $ref->setReference(new FHIRString('DocumentReference/' . $dataRecord['document_uuid']));
-            // Condition has no `derivedFrom`, so we encode the document
-            // link via `evidence.detail` — the standard FHIR R4 way to
-            // associate provenance to a Condition. Each evidence entry
-            // carries a list of detail references; a single document ref
-            // is the minimal shape.
-            $evidence = new \OpenEMR\FHIR\R4\FHIRBackboneElement\FHIRConditionEvidence();
-            $evidence->addDetail($ref);
-            $condition->addEvidence($evidence);
-        }
+        // Source-document linkage — Condition has no top-level
+        // derivedFrom slot in FHIR R4 (Observation does). The
+        // canonical USCDI path is `evidence.detail`, but this
+        // OpenEMR build's R4 wrappers don't ship FHIRConditionEvidence,
+        // so we surface the document link in the citation note
+        // (built below) instead. The persisted fhir_resource in
+        // copilot_conditions retains the raw payload, so consumers
+        // that need a structured reference can read it from there.
 
-        // note — single Annotation summarising citation locators (PDF
-        // bbox refs / DOCX paragraph anchors). Same pattern as the
-        // Observation projection.
-        if (!empty($dataRecord['citations'])) {
-            $note = $this->buildCitationNote((string) $dataRecord['citations']);
-            if ($note !== null) {
-                $condition->addNote(['text' => $note]);
+        // note — Annotation summarising citation locators (PDF bbox
+        // refs / DOCX paragraph anchors) plus the source document
+        // reference when available. The note is the human-readable
+        // proxy for the structured derivedFrom slot Condition lacks.
+        $citationNote = !empty($dataRecord['citations'])
+            ? $this->buildCitationNote((string) $dataRecord['citations'])
+            : null;
+        $docRefNote = !empty($dataRecord['document_uuid'])
+            ? 'DocumentReference/' . $dataRecord['document_uuid']
+            : null;
+        if ($citationNote !== null || $docRefNote !== null) {
+            $combined = trim(implode(' · ', array_filter([$docRefNote, $citationNote])));
+            if ($combined !== '') {
+                $condition->addNote(['text' => $combined]);
             }
         }
 
