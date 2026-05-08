@@ -533,6 +533,8 @@ interface ChatSurfaceProps {
   postApprovalGuidelines?: {
     documentReferenceId: string;
     ragResult: PostApprovalContext;
+    fileBatchId?: string;
+    pendingExtractionIds?: number[];
   } | null;
 }
 
@@ -619,6 +621,8 @@ export default function ChatSurface({
     if (!postApprovalGuidelines) return;
     const ctx = postApprovalGuidelines.ragResult;
     const refKey = postApprovalGuidelines.documentReferenceId;
+    const incomingFileBatchId = postApprovalGuidelines.fileBatchId;
+    const incomingRowIds = postApprovalGuidelines.pendingExtractionIds;
     if (lastInjectedPostApprovalRef.current === refKey) return;
     lastInjectedPostApprovalRef.current = refKey;
     // Wire 2 — refresh the doc-chat ref's guideline list so follow-up
@@ -700,7 +704,12 @@ export default function ChatSurface({
       // the new chip-recap message — that's what the chip click handler
       // needs to route to the read-only DocumentReviewPanel.
       let stagingMeta: { file_batch_id?: string; pending_extraction_ids?: number[] } | undefined;
-      if (hasUsefulCitations) {
+      // Prefer the staging context handed up from DocumentReviewPanel.onApproveAll —
+      // this is the only path that exists for the DocumentsTab approval flow,
+      // where there is no prior post-ingest message in the chat to walk.
+      if (incomingFileBatchId && incomingRowIds && incomingRowIds.length > 0) {
+        stagingMeta = { file_batch_id: incomingFileBatchId, pending_extraction_ids: incomingRowIds };
+      } else if (hasUsefulCitations) {
         for (let i = prev.length - 1; i >= 0; i--) {
           const m = prev[i];
           const data = m.response?.data as { document_reference_id?: string } | undefined;
@@ -762,11 +771,19 @@ export default function ChatSurface({
         role: 'assistant' as const,
         response: {
           type: 'text' as const,
-          data: null,
+          // Carry the document_reference_id so the synthesis-card chip click
+          // handler picks up `stagedDocRef` (it reads response.data.document_reference_id).
+          // Without this, fact:* chip clicks bail at the stagedDocRef === ''
+          // guard and the read-only review panel never opens.
+          data: { document_reference_id: refKey },
           narrative: '',
           citations: [],
           metadata: {
             no_auto_collapse: true,
+            // Same staging payload msgA carries — synthesis-card chip clicks
+            // need file_batch_id + pending_extraction_ids to route to the
+            // read-only DocumentReviewPanel.
+            ...(stagingMeta ? { staging: stagingMeta } : {}),
             post_ingest_context: {
               summary: ctx.summary,
               query_used: ctx.query_used,

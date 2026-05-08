@@ -83,6 +83,7 @@ export interface DocumentReviewPanelProps {
   onCompleted: (
     documentReferenceId: string,
     ragResult: PostApprovalContext | null,
+    stagingContext?: { fileBatchId: string; pendingExtractionIds: number[] },
   ) => void;
 }
 
@@ -1005,13 +1006,13 @@ export default function DocumentReviewPanel(
             document_reference_id: documentReferenceId,
             ...(sessionId ? { session_id: sessionId } : {}),
           });
-          onCompleted(documentReferenceId, rag);
+          onCompleted(documentReferenceId, rag, { fileBatchId, pendingExtractionIds: ids });
         } catch (err) {
           console.warn('[DocumentReviewPanel] post-approval-context failed', err);
-          onCompleted(documentReferenceId, null);
+          onCompleted(documentReferenceId, null, { fileBatchId, pendingExtractionIds: ids });
         }
       } else {
-        onCompleted(documentReferenceId, null);
+        onCompleted(documentReferenceId, null, { fileBatchId, pendingExtractionIds: ids });
       }
     } catch (err) {
       ids.forEach((id) =>
@@ -1023,7 +1024,7 @@ export default function DocumentReviewPanel(
     } finally {
       setBulkBusy(false);
     }
-  }, [baseUrl, documentReferenceId, liveRows, onCompleted, patientId, sessionId, setRowState]);
+  }, [baseUrl, documentReferenceId, fileBatchId, liveRows, onCompleted, patientId, sessionId, setRowState]);
 
   const onRejectAll = useCallback(async () => {
     const ids = liveRows.map((r) => r.row.id);

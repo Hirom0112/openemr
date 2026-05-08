@@ -51,6 +51,8 @@ export default function App({ config }: AppProps) {
   const [postApprovalGuidelines, setPostApprovalGuidelines] = useState<{
     documentReferenceId: string;
     ragResult: PostApprovalContext;
+    fileBatchId?: string;
+    pendingExtractionIds?: number[];
   } | null>(null);
 
   // Pending-extractions polling. Lifted out of the (now-deleted) sidebar so
@@ -137,12 +139,21 @@ export default function App({ config }: AppProps) {
   );
 
   const handleReviewCompleted = useCallback(
-    (documentReferenceId: string, ragResult: PostApprovalContext | null) => {
+    (
+      documentReferenceId: string,
+      ragResult: PostApprovalContext | null,
+      stagingContext?: { fileBatchId: string; pendingExtractionIds: number[] },
+    ) => {
       // Non-empty RAG → push to ChatSurface so the next assistant turn
       // shows the post-approval guidelines card. Switching tabs first so
       // the message is on screen before the iframe re-paints.
       if (ragResult) {
-        setPostApprovalGuidelines({ documentReferenceId, ragResult });
+        setPostApprovalGuidelines({
+          documentReferenceId,
+          ragResult,
+          fileBatchId: stagingContext?.fileBatchId,
+          pendingExtractionIds: stagingContext?.pendingExtractionIds,
+        });
       }
       setReviewTarget(null);
       setActiveTab('chat');
