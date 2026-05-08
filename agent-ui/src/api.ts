@@ -678,7 +678,11 @@ export type IngestResult =
 // ── Pending extractions (Slice 9.3) ─────────────────────────────────────────
 
 export type PendingState = 'pending' | 'approved' | 'rejected' | 'written' | 'failed';
-export type TargetResourceType = 'Observation' | 'Task' | 'AllergyIntolerance';
+export type TargetResourceType =
+  | 'Observation'
+  | 'Task'
+  | 'AllergyIntolerance'
+  | 'IntakeFormField';
 
 export interface PendingExtractionRow {
   id: number;
@@ -793,9 +797,25 @@ export async function getPendingOne(baseUrl: string, pendingId: number): Promise
   return _jsonOrThrow<PendingExtractionRow>(res, 'get pending');
 }
 
-/** POST /pending-extractions/{id}/approve */
-export async function approveOne(baseUrl: string, pendingId: number): Promise<ApproveOneResponse> {
-  const res = await fetch(`${baseUrl}/pending-extractions/${pendingId}/approve`, withAuth({ method: 'POST' }));
+/**
+ * POST /pending-extractions/{id}/approve
+ *
+ * When ``overridePayload`` is supplied, the body is
+ * ``{"override_payload": <obj>}`` so the writer persists the operator's
+ * edits instead of the originally-staged payload. Omitting it preserves
+ * the original (no-body) behavior used by ApprovalModal's bulk path.
+ */
+export async function approveOne(
+  baseUrl: string,
+  pendingId: number,
+  overridePayload?: Record<string, unknown> | null,
+): Promise<ApproveOneResponse> {
+  const init: RequestInit = { method: 'POST' };
+  if (overridePayload != null) {
+    init.headers = { 'Content-Type': 'application/json' };
+    init.body = JSON.stringify({ override_payload: overridePayload });
+  }
+  const res = await fetch(`${baseUrl}/pending-extractions/${pendingId}/approve`, withAuth(init));
   return _jsonOrThrow<ApproveOneResponse>(res, 'approve');
 }
 
@@ -1053,6 +1073,34 @@ export async function fetchPostIngestContext(
     throw new Error(`post-ingest-context failed: ${res.status} ${text.slice(0, 200)}`);
   }
   return (await res.json()) as PostIngestContextResponse;
+}
+
+/**
+ * Phase-3 post-approval RAG. Fired once after the operator finalizes every
+ * pending row in a document batch (approve or reject). The envelope mirrors
+ * ``PostIngestContextResponse`` so the existing ``PostIngestContextCard``
+ * render path can be reused without a new metadata key.
+ */
+export type PostApprovalContext = PostIngestContextResponse;
+
+export async function fetchPostApprovalContext(
+  baseUrl: string,
+  documentReferenceId: string,
+  payload: { patient_id: string; document_reference_id: string },
+): Promise<PostApprovalContext> {
+  const res = await fetch(
+    `${baseUrl}/document/${encodeURIComponent(documentReferenceId)}/post-approval-context`,
+    withAuth({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`post-approval-context failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  return (await res.json()) as PostApprovalContext;
 }
 
 export interface DocumentChatResponse {

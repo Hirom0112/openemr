@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, type ReactElement } from 'react';
 import { sendAgentMessage, sendAgentMessageWithMeta, prefetchPatientData, postClientTiming, getBriefing, getMedicationSafety, streamHandoff, refreshCensus, fetchPostIngestContext, sendDocumentChatMessage } from '../api';
-import type { HandoffSummaryPayload, GuidelineSnippet } from '../api';
+import type { HandoffSummaryPayload, GuidelineSnippet, PostApprovalContext } from '../api';
 import PostIngestContextCard from './PostIngestContextCard';
 import type { AgentResponse, CensusPatient, ErrorClass, HandoffData, HandoffPatient } from '../types';
 import ResponseRenderer from './ResponseRenderer';
@@ -515,6 +515,15 @@ interface ChatSurfaceProps {
    *  batch. Used by the post-upload flow (`handleStaged`); DocumentsTab
    *  calls the same setter independently. */
   onTriggerApproval: (staging: StagingMetadata, lane: Lane | null) => void;
+  /** Phase 3 — RAG result fired by DocumentReviewPanel after a batch is
+   *  fully decided. When this prop changes (new documentReferenceId), an
+   *  assistant message carrying ``metadata.post_ingest_context`` is
+   *  injected so the existing PostIngestContextCard render path picks it
+   *  up unchanged. Same-id repeats are deduped. */
+  postApprovalGuidelines?: {
+    documentReferenceId: string;
+    ragResult: PostApprovalContext;
+  } | null;
 }
 
 export default function ChatSurface({
@@ -524,6 +533,7 @@ export default function ChatSurface({
   pendingCount,
   onSwitchToDocumentsTab,
   onTriggerApproval,
+  postApprovalGuidelines,
 }: ChatSurfaceProps) {
   const displayName = (providerName && providerName.trim()) || 'Doctor';
   const greeting = `Good day, ${displayName}. Ready for your census.`;
@@ -584,6 +594,40 @@ export default function ChatSurface({
     guidelines: GuidelineSnippet[];
     patient_id: string;
   } | null>(null);
+
+  // Phase-3 dedupe: inject the post-approval guidelines message once per
+  // unique documentReferenceId. The same panel re-mount would otherwise
+  // double-render the card if React fires the effect again with a stable
+  // prop value.
+  const lastInjectedPostApprovalRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!postApprovalGuidelines) return;
+    const ctx = postApprovalGuidelines.ragResult;
+    const refKey = postApprovalGuidelines.documentReferenceId;
+    if (lastInjectedPostApprovalRef.current === refKey) return;
+    lastInjectedPostApprovalRef.current = refKey;
+    forceScrollOnNextMessage.current = true;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `assistant-post-approval-${refKey}-${Date.now()}`,
+        role: 'assistant',
+        response: {
+          type: 'text',
+          data: null,
+          narrative: '',
+          citations: [],
+          metadata: {
+            post_ingest_context: {
+              summary: ctx.summary,
+              query_used: ctx.query_used,
+              guidelines: ctx.guidelines,
+            },
+          },
+        },
+      },
+    ]);
+  }, [postApprovalGuidelines]);
 
   // ── Document ingest target resolution ─────────────────────────────────────
   // Hoisted above dispatchMessage so the doc-chat fast-path can read the

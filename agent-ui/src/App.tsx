@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { fetchHealth, getPending } from './api';
-import type { PendingExtractionRow, StagingMetadata } from './api';
+import type { PendingExtractionRow, PostApprovalContext, StagingMetadata } from './api';
 import ChatSurface from './components/ChatSurface';
 import DocumentsTab from './components/DocumentsTab';
 import ApprovalModal from './components/ApprovalModal';
+import DocumentReviewPanel from './components/DocumentReviewPanel';
 import { BRAND, NEU, SURFACE } from './styles/tokens';
 import type { Lane } from './styles/tokens';
 import type { CopilotConfig } from './types';
@@ -29,6 +30,22 @@ export default function App({ config }: AppProps) {
   const [pendingApproval, setPendingApproval] = useState<{
     staging: StagingMetadata;
     lane: Lane | null;
+  } | null>(null);
+
+  // Phase-3 — rich review panel target. When non-null the panel mounts
+  // over the active tab; HL7/XLSX still use ApprovalModal (above).
+  const [reviewTarget, setReviewTarget] = useState<{
+    documentReferenceId: string;
+    fileBatchId: string;
+    rowIds: number[];
+  } | null>(null);
+
+  // Phase-3 — post-approval RAG result, handed down to ChatSurface so it
+  // can render as a guidelines card on the next assistant turn. The full
+  // {documentReferenceId, ragResult} envelope lets ChatSurface dedupe.
+  const [postApprovalGuidelines, setPostApprovalGuidelines] = useState<{
+    documentReferenceId: string;
+    ragResult: PostApprovalContext;
   } | null>(null);
 
   // Pending-extractions polling. Lifted out of the (now-deleted) sidebar so
@@ -94,6 +111,28 @@ export default function App({ config }: AppProps) {
       setPendingApproval({ staging, lane });
     },
     [],
+  );
+
+  const triggerRichReview = useCallback(
+    (documentReferenceId: string, fileBatchId: string, rowIds: number[]) => {
+      setReviewTarget({ documentReferenceId, fileBatchId, rowIds });
+    },
+    [],
+  );
+
+  const handleReviewCompleted = useCallback(
+    (documentReferenceId: string, ragResult: PostApprovalContext | null) => {
+      // Non-empty RAG → push to ChatSurface so the next assistant turn
+      // shows the post-approval guidelines card. Switching tabs first so
+      // the message is on screen before the iframe re-paints.
+      if (ragResult) {
+        setPostApprovalGuidelines({ documentReferenceId, ragResult });
+      }
+      setReviewTarget(null);
+      setActiveTab('chat');
+      void refetchPending();
+    },
+    [refetchPending],
   );
 
   const pendingCount = pendingRows.length;
@@ -163,6 +202,7 @@ export default function App({ config }: AppProps) {
                 pendingCount={pendingCount}
                 onSwitchToDocumentsTab={() => setActiveTab('documents')}
                 onTriggerApproval={triggerApproval}
+                postApprovalGuidelines={postApprovalGuidelines}
               />
             </div>
             <div
@@ -179,6 +219,7 @@ export default function App({ config }: AppProps) {
                 rows={pendingRows}
                 patientId={ingestPatientId}
                 onTriggerApproval={triggerApproval}
+                onTriggerRichReview={triggerRichReview}
               />
             </div>
           </>
@@ -194,6 +235,21 @@ export default function App({ config }: AppProps) {
           staging={pendingApproval.staging}
           lane={pendingApproval.lane}
           onClose={handleApprovalClose}
+        />
+      )}
+
+      {/* Phase-3 rich review panel. Same overlay tier as ApprovalModal —
+          only one can be open at a time because they're triggered from
+          mutually-exclusive document-format branches. */}
+      {reviewTarget && ingestPatientId && (
+        <DocumentReviewPanel
+          baseUrl={ingestBaseUrl}
+          patientId={ingestPatientId}
+          documentReferenceId={reviewTarget.documentReferenceId}
+          fileBatchId={reviewTarget.fileBatchId}
+          pendingRowIds={reviewTarget.rowIds}
+          onClose={() => setReviewTarget(null)}
+          onCompleted={handleReviewCompleted}
         />
       )}
     </div>

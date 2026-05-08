@@ -18,7 +18,17 @@ import { BRAND, NEU, SURFACE, type Lane } from '../styles/tokens';
 interface Props {
   rows: PendingExtractionRow[];
   patientId: string | null;
+  /** Phase-2 fallback: HL7/XLSX/TIFF docs with Task or AllergyIntolerance
+   *  rows route through the existing ApprovalModal. */
   onTriggerApproval: (staging: StagingMetadata, lane: Lane | null) => void;
+  /** Phase-3 rich review surface: PDF/PNG/DOCX docs whose rows are
+   *  Observation or IntakeFormField launch the inline review panel
+   *  mounted at App-level. */
+  onTriggerRichReview?: (
+    documentReferenceId: string,
+    fileBatchId: string,
+    rowIds: number[],
+  ) => void;
 }
 
 interface DocumentGroup {
@@ -27,7 +37,12 @@ interface DocumentGroup {
   rowIds: number[];
   /** target_resource_type → count, used for the summary line. */
   byResource: Record<string, number>;
+  /** True when every row in the group has a target_resource_type that the
+   *  rich panel knows how to edit (Observation | IntakeFormField). */
+  richEligible: boolean;
 }
+
+const RICH_ELIGIBLE_TYPES = new Set(['Observation', 'IntakeFormField']);
 
 function groupRows(rows: PendingExtractionRow[]): DocumentGroup[] {
   const map = new Map<string, DocumentGroup>();
@@ -40,12 +55,16 @@ function groupRows(rows: PendingExtractionRow[]): DocumentGroup[] {
         fileBatchId: row.file_batch_id,
         rowIds: [],
         byResource: {},
+        richEligible: true,
       };
       map.set(key, group);
     }
     group.rowIds.push(row.id);
     const t = row.target_resource_type;
     group.byResource[t] = (group.byResource[t] ?? 0) + 1;
+    if (!RICH_ELIGIBLE_TYPES.has(t)) {
+      group.richEligible = false;
+    }
   }
   // Stable order: by documentRef ascending.
   return [...map.values()].sort((a, b) =>
@@ -61,7 +80,7 @@ function summariseResources(byResource: Record<string, number>): string {
 }
 
 export default function DocumentsTab(props: Props): ReactElement {
-  const { rows, patientId, onTriggerApproval } = props;
+  const { rows, patientId, onTriggerApproval, onTriggerRichReview } = props;
 
   const groups = useMemo(() => groupRows(rows), [rows]);
 
@@ -89,6 +108,10 @@ export default function DocumentsTab(props: Props): ReactElement {
             key={group.documentRef}
             group={group}
             onReview={() => {
+              if (group.richEligible && onTriggerRichReview) {
+                onTriggerRichReview(group.documentRef, group.fileBatchId, group.rowIds);
+                return;
+              }
               const staging: StagingMetadata = {
                 file_batch_id: group.fileBatchId,
                 pending_extraction_ids: group.rowIds,
