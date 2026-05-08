@@ -1,5 +1,6 @@
 import { useState, type ReactElement, type CSSProperties, type KeyboardEvent } from 'react';
 import { BRAND } from '../styles/tokens';
+import { chipLabel } from '../utils/citationParser';
 
 /**
  * Clickable wrapper around the post-ingest citation-chip aesthetic. Used by
@@ -71,7 +72,7 @@ export default function SynthesisCitationChip(
       onMouseLeave={() => setHover(false)}
       onFocus={() => setFocus(true)}
       onBlur={() => setFocus(false)}
-      title={title}
+      title={title ?? citationId}
       aria-label={`Open citation ${citationId}`}
       style={{
         ...BASE_STYLE,
@@ -79,7 +80,7 @@ export default function SynthesisCitationChip(
         ...(focus ? FOCUS_STYLE : null),
       }}
     >
-      {citationId}
+      {chipLabel(citationId)}
     </button>
   );
 }

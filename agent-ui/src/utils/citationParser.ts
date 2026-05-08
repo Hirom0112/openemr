@@ -128,3 +128,37 @@ export function parseCitationTokens(
   }
   return out;
 }
+
+
+/**
+ * Strip the citation-grammar prefix from a token for display purposes.
+ * The full token is preserved in click handlers, tooltips, and ARIA labels;
+ * this helper only governs what shows inside the chip.
+ *
+ * Mapping:
+ *   fact:obs:copilot-{doc}-{loinc}  →  obs · {loinc}
+ *   fact:obs:{anything-else}         →  obs · {anything-else}
+ *   fact:intake:{field}              →  {field}
+ *   guideline:{chunk_id}             →  {chunk_id}
+ *   anything else                    →  passthrough
+ *
+ * Rationale: chip color + shape already say "this is a citation"; the
+ * `fact:` / `guideline:` prefix is informational noise. Keep the kind
+ * signal for fact:obs (clinical-fact vs guideline matters at a glance)
+ * but drop the redundant grammar prefix everywhere.
+ */
+export function chipLabel(citationId: string): string {
+  if (citationId.startsWith('guideline:')) {
+    return citationId.slice('guideline:'.length);
+  }
+  if (citationId.startsWith('fact:obs:')) {
+    const tail = citationId.slice('fact:obs:'.length);
+    // copilot-{doc}-{loinc} → loinc; otherwise keep the tail.
+    const m = /^copilot-\d+-(.+)$/.exec(tail);
+    return `obs · ${m ? m[1] : tail}`;
+  }
+  if (citationId.startsWith('fact:intake:')) {
+    return citationId.slice('fact:intake:'.length);
+  }
+  return citationId;
+}

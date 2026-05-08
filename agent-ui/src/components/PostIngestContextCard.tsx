@@ -1,7 +1,7 @@
 import { Fragment, useState, type ReactElement, type ReactNode } from 'react';
 import type { GuidelineSnippet, SynthesisOutput } from '../api';
 import { BRAND, SURFACE } from '../styles/tokens';
-import { parseCitationTokens } from '../utils/citationParser';
+import { chipLabel, parseCitationTokens } from '../utils/citationParser';
 import SynthesisCitationChip from './SynthesisCitationChip';
 
 /**
@@ -87,8 +87,8 @@ function renderCitations(
         title={id.startsWith('guideline:') ? id.slice('guideline:'.length) : undefined}
       />
     ) : (
-      <span key={id} style={CITATION_CHIP_STYLE}>
-        {id}
+      <span key={id} style={CITATION_CHIP_STYLE} title={id}>
+        {chipLabel(id)}
       </span>
     );
     return (
