@@ -16,7 +16,7 @@ The triage ranking — the heart of use case one — is done by a rules engine, 
 
 Every AI response passes through a verification layer before Dr. Chen sees it. This layer does two things. First, it checks that every clinical claim traces back to a specific record — with value, source type, and timestamp. Claims that can't be sourced are removed or flagged. Second, it enforces hard rules that the AI can't override: it can never say "no known allergies" if the allergy section has blank fields, it must always flag blank code status, it must mark any critical value older than 30 minutes as potentially stale. These rules exist because prompt engineering alone cannot guarantee safety in a clinical context.
 
-A few key decisions are worth understanding. The agent uses the raw Anthropic SDK rather than a framework like LangGraph — the five tools are simple enough that transparency and auditability matter more than framework abstractions. LangGraph is the designated upgrade path when a second agent type (an ED workflow, an ICU workflow) makes multi-agent coordination necessary. Real patient data doesn't enter any AI prompt until a Business Associate Agreement with Anthropic is signed and a breach response procedure is documented — that's not an engineering decision, it's a legal one, and the pilot runs on synthetic data until both are in place. The full reasoning behind these decisions, including the ones we debated and rejected, is in the sections below.
+A few key decisions are worth understanding. The W1 dispatcher uses the raw Anthropic SDK + a custom `Checkpointer` rather than a framework like LangGraph — the five conversational tools are simple enough that transparency and auditability matter more than framework abstractions. The W2 doc-ingestion graph (supervisor + workers + critic) ships on LangGraph 0.2.60 and is live as of W2; both are described in `W2_ARCHITECTURE.md §5` and in §8.1 below. Real patient data doesn't enter any AI prompt until a Business Associate Agreement with Anthropic is signed and a breach response procedure is documented — that's not an engineering decision, it's a legal one, and the pilot runs on synthetic data until both are in place. The full reasoning behind these decisions, including the ones we debated and rejected, is in the sections below.
 
 ---
 
@@ -695,13 +695,15 @@ At 100,000 users this is a platform, not a product deployment. The architecture 
 | Family meeting use case | Decision 4 (family meeting) is not covered in v1 — no use case surfaces goals-of-care signals, prognosis documentation, or family communication history | Extend the UC-3 query tool to support unstructured clinical narrative retrieval; the extension point is the `query_patient_records` tool which already handles arbitrary question routing |
 | Multi-tenant RBAC | Current architecture is single-hospital deployment only | Hospital-scoped tenant isolation in the census proxy layer; cross-hospital data separation at the Redis key level |
 | Resident-facing agent view | Residents use the attending view in v1; no scope differentiation between attending and resident | Resident-specific RBAC scope in the census proxy; attending supervision overlay that restricts certain tool outputs for resident sessions |
-| LangGraph orchestration | v1 uses raw Anthropic SDK + custom checkpointer — multi-agent coordination becomes hand-rolled complexity at scale | Adopt LangGraph when the second agent type is built (see §8.1 below) |
+| LangGraph orchestration | W1 dispatcher uses raw Anthropic SDK + custom Checkpointer — kept transparent for clinical auditability | **W2 ships on LangGraph 0.2.60** (`requirements.txt:62`, `agent/graph/{build,state,nodes}.py`) — supervisor + workers + critic for the doc-ingest graph. The 'second agent type' trigger condition has fired; both runtimes are now live. See §8.1 below. |
 
 ---
 
-### 8.1 Orchestration Framework Decision — LangGraph as v2 Target
+### 8.1 Orchestration Framework Decision — Raw SDK for W1, LangGraph for W2 (both shipped)
 
-**The decision:** v1 uses the raw Anthropic SDK with a thin custom `Checkpointer` abstraction. LangGraph is the designated v2 orchestration framework. Adoption is triggered by a specific condition, not by a timeline.
+**The decision (current state):** The W1 dispatcher uses the raw Anthropic SDK with a thin custom `Checkpointer` abstraction. The W2 doc-ingestion graph uses **LangGraph 0.2.60** (pinned in `requirements.txt:62`); the supervisor, four worker nodes (extractor / retriever / critic / cross-source-conflict), and the LangGraph state machine live in `agent/graph/{build,state,nodes}.py`. Both are live as of W2 ship.
+
+The original §8.1 framing — "LangGraph is the designated v2 orchestration framework, adoption is triggered by the second agent type" — was written when LangGraph was prospective. The trigger condition has fired: the W2 multi-agent graph is the second agent type. The doc retains the migration-cost rationale below for historical context but the trigger is now in the past.
 
 **Why not LangGraph in v1.**
 
