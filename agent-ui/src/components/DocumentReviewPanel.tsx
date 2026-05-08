@@ -97,6 +97,9 @@ interface LoadedRow {
 }
 
 interface FlatCitation {
+  /** Unique render-side card id (see :type:`VirtualCard`). */
+  cardId: string;
+  /** Underlying staging row id — what approve/reject hits. */
   rowId: number;
   /** 1-based ordinal across the whole document — drives the chip label `#296`. */
   ordinal: number;
@@ -106,6 +109,29 @@ interface FlatCitation {
   quote: string;
   /** Short human label e.g. "demographics" / "lisinopril" — drives the bbox badge. */
   shortLabel: string;
+}
+
+/**
+ * One render-tier card. The staging table has 1 row per intake KIND
+ * (demographics gets a single row whose payload nests 5 fields), but
+ * the panel renders 1 card per *field* — 5 demographics cards, 1
+ * medication card per medication, and so on. Cards point back to a
+ * single :type:`LoadedRow` for status + approve/reject routing; that
+ * means clicking Approve on the "DOB" sub-card commits the whole
+ * demographics row, and the other 4 demographics cards reflect the
+ * shared status. We surface this in the UI by treating the row's
+ * status as the card's status.
+ */
+interface VirtualCard {
+  id: string;
+  parent: LoadedRow;
+  /** Demographics sub-field name; null for non-demographics cards. */
+  subfield: 'name' | 'dob' | 'sex' | 'mrn' | 'address' | null;
+  /** Per-card primary citation. May be null when the field has none. */
+  citation: FlatCitation | null;
+  category: string;
+  /** Per-card label — "Name" / "Date of Birth" / "Lisinopril" / etc. */
+  cardLabel: string;
 }
 
 const ROW_LIMIT = 50;
@@ -251,25 +277,16 @@ function _findFirstCitation(obj: unknown): unknown | null {
   return null;
 }
 
-/** Pull the first/primary citation off a row payload. */
-function _primaryCitation(row: PendingExtractionRow): {
+/** Normalize a single Citation dict from the staging payload into our
+ *  internal shape. Returns null when the dict isn't shaped right. */
+function _normalizeCitationDict(c: unknown): {
   page: number;
   bbox: [number, number, number, number] | null;
   fieldOrChunkId: string;
   quote: string;
 } | null {
-  const v = _payloadValue(row);
-  // Try root.citations / value.citations first; fall back to a depth-walk
-  // for nested shapes (e.g. demographics whose fields each carry their own
-  // citations under payload.demographics.<field>.citations).
-  const direct = Array.isArray(v.citations)
-    ? v.citations
-    : Array.isArray((row.payload as Record<string, unknown>).citations)
-      ? ((row.payload as Record<string, unknown>).citations as unknown[])
-      : null;
-  const c0 = direct ? direct[0] : _findFirstCitation(row.payload);
-  if (!c0 || typeof c0 !== 'object') return null;
-  const obj = c0 as Record<string, unknown>;
+  if (!c || typeof c !== 'object') return null;
+  const obj = c as Record<string, unknown>;
   const fieldOrChunkId =
     (typeof obj.field_or_chunk_id === 'string' && obj.field_or_chunk_id) ||
     (typeof obj.field_id === 'string' ? obj.field_id : '') ||
@@ -290,6 +307,94 @@ function _primaryCitation(row: PendingExtractionRow): {
     ? (obj.bbox as [number, number, number, number])
     : null;
   return { page: pageNum, bbox, fieldOrChunkId, quote };
+}
+
+/** Pull the first/primary citation off a row payload. */
+function _primaryCitation(row: PendingExtractionRow): {
+  page: number;
+  bbox: [number, number, number, number] | null;
+  fieldOrChunkId: string;
+  quote: string;
+} | null {
+  const v = _payloadValue(row);
+  // Try root.citations / value.citations first; fall back to a depth-walk
+  // for nested shapes (e.g. demographics whose fields each carry their own
+  // citations under payload.demographics.<field>.citations).
+  const direct = Array.isArray(v.citations)
+    ? v.citations
+    : Array.isArray((row.payload as Record<string, unknown>).citations)
+      ? ((row.payload as Record<string, unknown>).citations as unknown[])
+      : null;
+  const c0 = direct ? direct[0] : _findFirstCitation(row.payload);
+  return _normalizeCitationDict(c0);
+}
+
+const _DEMOGRAPHICS_SUBFIELDS: ReadonlyArray<{
+  key: 'name' | 'dob' | 'sex' | 'mrn' | 'address';
+  label: string;
+}> = [
+  { key: 'name',    label: 'Name' },
+  { key: 'dob',     label: 'Date of Birth' },
+  { key: 'sex',     label: 'Sex' },
+  { key: 'mrn',     label: 'MRN' },
+  { key: 'address', label: 'Address' },
+];
+
+/**
+ * For a demographics row, expand its nested ``payload.demographics``
+ * blob into per-subfield card definitions. Each sub-field has its
+ * own citation (different bbox/page) — pulling them apart at the
+ * card layer means the rail shows one card + one chip + one bbox per
+ * field rather than smashing all 5 into a single card.
+ *
+ * Subfields that are absent in the payload are omitted entirely (no
+ * empty Sex card when the LLM didn't extract one).
+ */
+function _demographicsSubCards(
+  row: PendingExtractionRow,
+): Array<{
+  subfield: 'name' | 'dob' | 'sex' | 'mrn' | 'address';
+  label: string;
+  value: string;
+  citation: ReturnType<typeof _normalizeCitationDict>;
+}> {
+  const demo = _payloadValue(row);
+  const out: Array<{
+    subfield: 'name' | 'dob' | 'sex' | 'mrn' | 'address';
+    label: string;
+    value: string;
+    citation: ReturnType<typeof _normalizeCitationDict>;
+  }> = [];
+  for (const { key, label } of _DEMOGRAPHICS_SUBFIELDS) {
+    const sub = demo[key];
+    if (sub === undefined || sub === null) continue;
+    let value = '';
+    let citation: ReturnType<typeof _normalizeCitationDict> = null;
+    if (typeof sub === 'string') {
+      value = sub;
+    } else if (typeof sub === 'object' && !Array.isArray(sub)) {
+      const subRec = sub as Record<string, unknown>;
+      value = typeof subRec.value === 'string' ? subRec.value : '';
+      const cits = Array.isArray(subRec.citations) ? subRec.citations : [];
+      citation = _normalizeCitationDict(cits[0]);
+    }
+    if (!value) continue;
+    out.push({ subfield: key, label, value, citation });
+  }
+  return out;
+}
+
+function _shortLabelForSubfield(
+  subfield: 'name' | 'dob' | 'sex' | 'mrn' | 'address',
+  value: string,
+): string {
+  switch (subfield) {
+    case 'name': return value || 'name';
+    case 'dob': return 'dob';
+    case 'sex': return value || 'sex';
+    case 'mrn': return 'mrn';
+    case 'address': return 'address';
+  }
 }
 
 /** Synthesize paragraphs for the DOCX fallback. */
@@ -353,7 +458,7 @@ export default function DocumentReviewPanel(
   const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
 
   // Active row drives the bbox highlight + scroll-into-view in the rail.
-  const [activeRowId, setActiveRowId] = useState<number | null>(null);
+  const [activeCardId, setActiveCardId] = useState<string | null>(null);
 
   // PDF page navigation. The user can drive this with prev/next OR by
   // clicking a field whose citation lives on a different page.
@@ -454,50 +559,101 @@ export default function DocumentReviewPanel(
     return () => URL.revokeObjectURL(url);
   }, [previewBytes, previewKind]);
 
-  // ── Citation flattening ────────────────────────────────────────────────
-  const citations: FlatCitation[] = useMemo(() => {
-    return rows.map((lr, idx) => {
-      const c = _primaryCitation(lr.row);
-      return {
-        rowId: lr.row.id,
-        ordinal: idx + 1,
-        page: c?.page ?? 1,
-        bbox: c?.bbox ?? null,
-        fieldOrChunkId: c?.fieldOrChunkId ?? '',
-        quote: c?.quote ?? '',
-        shortLabel: _shortLabelFor(lr.row),
-      };
-    });
+  // ── Card expansion ─────────────────────────────────────────────────────
+  // Demographics rows split into one card per nested sub-field so each
+  // citation gets its own chip + bbox; everything else is 1 card per row.
+  const cards: VirtualCard[] = useMemo(() => {
+    const out: VirtualCard[] = [];
+    let ordinal = 0;
+    for (const lr of rows) {
+      const k = _kind(lr.row);
+      if (k === 'demographics') {
+        const subs = _demographicsSubCards(lr.row);
+        for (const s of subs) {
+          ordinal += 1;
+          const cardId = `${lr.row.id}:${s.subfield}`;
+          out.push({
+            id: cardId,
+            parent: lr,
+            subfield: s.subfield,
+            citation: s.citation
+              ? {
+                  cardId,
+                  rowId: lr.row.id,
+                  ordinal,
+                  page: s.citation.page,
+                  bbox: s.citation.bbox,
+                  fieldOrChunkId: s.citation.fieldOrChunkId,
+                  quote: s.citation.quote,
+                  shortLabel: _shortLabelForSubfield(s.subfield, s.value),
+                }
+              : null,
+            category: 'Demographics',
+            cardLabel: s.label,
+          });
+        }
+      } else {
+        ordinal += 1;
+        const cardId = `${lr.row.id}`;
+        const c = _primaryCitation(lr.row);
+        out.push({
+          id: cardId,
+          parent: lr,
+          subfield: null,
+          citation: c
+            ? {
+                cardId,
+                rowId: lr.row.id,
+                ordinal,
+                page: c.page,
+                bbox: c.bbox,
+                fieldOrChunkId: c.fieldOrChunkId,
+                quote: c.quote,
+                shortLabel: _shortLabelFor(lr.row),
+              }
+            : null,
+          category: _categoryFor(lr.row),
+          cardLabel: _labelFor(lr.row),
+        });
+      }
+    }
+    return out;
   }, [rows]);
+
+  // Flat citation list — drives the bbox layer + initial-citation focus.
+  const cardCitations = useMemo(
+    () => cards.map((c) => c.citation).filter((c): c is FlatCitation => c !== null),
+    [cards],
+  );
 
   // Citations on the active page (PDF only).
   const activePageCitations = useMemo(
-    () => citations.filter((c) => c.page === activePage),
-    [citations, activePage],
+    () => cardCitations.filter((c) => c.page === activePage),
+    [cardCitations, activePage],
   );
 
   // When the panel mounts in read-only mode and the caller passed a
-  // citation field id (e.g. "p1-b007"), find the row whose primary
-  // citation matches and auto-focus it. Runs ONCE per (rowsLoaded,
-  // initialActiveCitationFieldId) — re-running on activeRowId change
+  // citation field id (e.g. "p1-b007"), find the card whose citation
+  // matches and auto-focus it. Runs ONCE per (cards-built,
+  // initialActiveCitationFieldId) — re-running on activeCardId change
   // would fight the user's clicks.
   useEffect(() => {
-    if (!initialActiveCitationFieldId || rows.length === 0) return;
-    const match = citations.find(
+    if (!initialActiveCitationFieldId || cardCitations.length === 0) return;
+    const match = cardCitations.find(
       (c) => c.fieldOrChunkId === initialActiveCitationFieldId,
     );
     if (!match) return;
-    setActiveRowId(match.rowId);
+    setActiveCardId(match.cardId);
     if (match.page !== activePage) setActivePage(match.page);
     // Best-effort scroll the rail card into view after paint.
     if (typeof window !== 'undefined') {
       window.requestAnimationFrame(() => {
-        const el = document.getElementById(`copilot-review-field-${match.rowId}`);
+        const el = document.getElementById(`copilot-review-field-${match.cardId}`);
         el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialActiveCitationFieldId, rows.length]);
+  }, [initialActiveCitationFieldId, cardCitations.length]);
 
   // ── Row mutation callbacks ─────────────────────────────────────────────
   const setRowState = useCallback((rowId: number, patch: Partial<RowState>) => {
@@ -555,18 +711,18 @@ export default function DocumentReviewPanel(
 
   // ── Bidirectional citation linking ─────────────────────────────────────
   const onFieldClick = useCallback(
-    (rowId: number) => {
-      setActiveRowId(rowId);
-      const c = citations.find((x) => x.rowId === rowId);
+    (cardId: string) => {
+      setActiveCardId(cardId);
+      const c = cardCitations.find((x) => x.cardId === cardId);
       if (c && c.page !== activePage) setActivePage(c.page);
     },
-    [citations, activePage],
+    [cardCitations, activePage],
   );
 
-  const onBboxClick = useCallback((rowId: number) => {
-    setActiveRowId(rowId);
+  const onBboxClick = useCallback((cardId: string) => {
+    setActiveCardId(cardId);
     // Scroll the corresponding field into view.
-    const el = document.getElementById(`copilot-review-field-${rowId}`);
+    const el = document.getElementById(`copilot-review-field-${cardId}`);
     if (el && typeof el.scrollIntoView === 'function') {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -663,17 +819,16 @@ export default function DocumentReviewPanel(
     setBulkSummary(`Rejected ${nOk} · Failed ${nErr}`);
   }, [baseUrl, liveRows, setRowState]);
 
-  // ── Group rows ─────────────────────────────────────────────────────────
-  const groupedRows = useMemo(() => {
-    const map = new Map<string, LoadedRow[]>();
-    for (const lr of rows) {
-      const cat = _categoryFor(lr.row);
-      const arr = map.get(cat) ?? [];
-      arr.push(lr);
-      map.set(cat, arr);
+  // ── Group cards ────────────────────────────────────────────────────────
+  const groupedCards = useMemo(() => {
+    const map = new Map<string, VirtualCard[]>();
+    for (const card of cards) {
+      const arr = map.get(card.category) ?? [];
+      arr.push(card);
+      map.set(card.category, arr);
     }
     // Stable order per GROUP_ORDER, then any unexpected categories last.
-    const ordered: Array<[string, LoadedRow[]]> = [];
+    const ordered: Array<[string, VirtualCard[]]> = [];
     for (const cat of GROUP_ORDER) {
       const arr = map.get(cat);
       if (arr && arr.length > 0) ordered.push([cat, arr]);
@@ -682,14 +837,49 @@ export default function DocumentReviewPanel(
       if (!GROUP_ORDER.includes(cat)) ordered.push([cat, arr]);
     }
     return ordered;
-  }, [rows]);
+  }, [cards]);
 
   const totalCitationPages = useMemo(() => {
-    if (citations.length === 0) return 1;
-    return Math.max(...citations.map((c) => c.page));
-  }, [citations]);
+    if (cardCitations.length === 0) return 1;
+    return Math.max(...cardCitations.map((c) => c.page));
+  }, [cardCitations]);
 
+  // Row count drives the action-bar progress + bulk button counter
+  // (one decision per staging row, even when a row maps to N cards).
   const allCount = rows.length;
+
+  // Patient name resolution — fetch once on mount; falls back to the
+  // raw patient_id if FHIR is unavailable. Without this, the rail
+  // subtitle showed the OpenEMR numeric pid (e.g. "18") which means
+  // nothing to a clinician glancing at the panel.
+  const [patientName, setPatientName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!patientId || !baseUrl) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `${baseUrl}/fhir/patient/${encodeURIComponent(patientId)}`,
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          name?: Array<{ given?: string[]; family?: string }>;
+        };
+        const n0 = data.name?.[0];
+        if (!n0) return;
+        const joined = [...(n0.given ?? []), n0.family ?? '']
+          .filter((s) => typeof s === 'string' && s.trim().length > 0)
+          .join(' ')
+          .trim();
+        if (!cancelled && joined) setPatientName(joined);
+      } catch {
+        // best-effort
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [baseUrl, patientId]);
 
   return (
     <div className="copilot-doc-review" style={rootStyle}>
@@ -756,7 +946,7 @@ export default function DocumentReviewPanel(
           setActivePage={setActivePage}
           zoom={zoom}
           setZoom={setZoom}
-          activeRowId={activeRowId}
+          activeCardId={activeCardId}
           activePageCitations={activePageCitations}
           onBboxClick={onBboxClick}
           totalPages={totalCitationPages}
@@ -766,9 +956,9 @@ export default function DocumentReviewPanel(
           <div className="cdr-rail-header">
             <div className="cdr-rail-title">Extracted Fields</div>
             <div className="cdr-rail-subtitle">
-              <span>{allCount} row{allCount === 1 ? '' : 's'}</span>
+              <span>{cards.length} field{cards.length === 1 ? '' : 's'}</span>
               <span className="cdr-dot" />
-              <span>{patientId ? _truncate(patientId, 12) : 'Patient'}</span>
+              <span>{patientName || (patientId ? `Patient #${_truncate(patientId, 8)}` : 'Patient')}</span>
               <span className="cdr-dot" />
               <span>Intake Form</span>
             </div>
@@ -782,20 +972,19 @@ export default function DocumentReviewPanel(
             {!loading && !loadError && rows.length === 0 && (
               <div className="cdr-state-msg">No staged rows for this document.</div>
             )}
-            {groupedRows.map(([category, items]) => (
+            {groupedCards.map(([category, items]) => (
               <FieldGroup key={category} title={category}>
-                {items.map((lr) => (
+                {items.map((card) => (
                   <FieldCard
-                    key={lr.row.id}
-                    lr={lr}
-                    citation={citations.find((c) => c.rowId === lr.row.id)}
-                    active={activeRowId === lr.row.id}
+                    key={card.id}
+                    card={card}
+                    active={activeCardId === card.id}
                     busy={bulkBusy}
                     readOnly={readOnly}
-                    onClick={() => onFieldClick(lr.row.id)}
+                    onClick={() => onFieldClick(card.id)}
                     onValueChange={onValueChange}
-                    onApprove={() => void onApproveOne(lr.row.id)}
-                    onReject={() => void onRejectOne(lr.row.id)}
+                    onApprove={() => void onApproveOne(card.parent.row.id)}
+                    onReject={() => void onRejectOne(card.parent.row.id)}
                   />
                 ))}
               </FieldGroup>
@@ -860,9 +1049,9 @@ interface DocViewerProps {
   setActivePage: (n: number) => void;
   zoom: number;
   setZoom: (n: number) => void;
-  activeRowId: number | null;
+  activeCardId: string | null;
   activePageCitations: FlatCitation[];
-  onBboxClick: (rowId: number) => void;
+  onBboxClick: (cardId: string) => void;
   totalPages: number;
 }
 
@@ -887,7 +1076,7 @@ function DocViewer(p: DocViewerProps): ReactElement {
     setActivePage,
     zoom,
     setZoom,
-    activeRowId,
+    activeCardId,
     activePageCitations,
     onBboxClick,
     totalPages,
@@ -1053,7 +1242,7 @@ function DocViewer(p: DocViewerProps): ReactElement {
                 <BboxLayer
                   geom={pageGeom}
                   citations={activePageCitations}
-                  activeRowId={activeRowId}
+                  activeCardId={activeCardId}
                   onBboxClick={onBboxClick}
                 />
               )}
@@ -1084,7 +1273,7 @@ function DocViewer(p: DocViewerProps): ReactElement {
                 <BboxLayer
                   geom={pageGeom}
                   citations={activePageCitations}
-                  activeRowId={activeRowId}
+                  activeCardId={activeCardId}
                   onBboxClick={onBboxClick}
                 />
               )}
@@ -1098,13 +1287,13 @@ function DocViewer(p: DocViewerProps): ReactElement {
               <DocxParagraphList
                 paragraphs={synthesizedParagraphs}
                 activeIndex={
-                  activeRowId == null
+                  activeCardId == null
                     ? null
-                    : activePageCitations.findIndex((c) => c.rowId === activeRowId)
+                    : activePageCitations.findIndex((c) => c.cardId === activeCardId)
                 }
                 onClick={(idx) => {
                   const target = activePageCitations[idx];
-                  if (target) onBboxClick(target.rowId);
+                  if (target) onBboxClick(target.cardId);
                 }}
               />
             </div>
@@ -1128,12 +1317,12 @@ function DocViewer(p: DocViewerProps): ReactElement {
 interface BboxLayerProps {
   geom: PageGeometry;
   citations: FlatCitation[];
-  activeRowId: number | null;
-  onBboxClick: (rowId: number) => void;
+  activeCardId: string | null;
+  onBboxClick: (cardId: string) => void;
 }
 
 function BboxLayer(p: BboxLayerProps): ReactElement {
-  const { geom, citations, activeRowId, onBboxClick } = p;
+  const { geom, citations, activeCardId, onBboxClick } = p;
   const sx = geom.renderWidth / geom.sourceWidth;
   const sy = geom.renderHeight / geom.sourceHeight;
   return (
@@ -1145,14 +1334,14 @@ function BboxLayer(p: BboxLayerProps): ReactElement {
         const top = y * sy;
         const width = w * sx;
         const height = h * sy;
-        const active = c.rowId === activeRowId;
+        const active = c.cardId === activeCardId;
         return (
           <button
             type="button"
-            key={c.rowId}
+            key={c.cardId}
             className={`cdr-citation-box${active ? ' cdr-citation-box-active' : ''}`}
             style={{ left, top, width, height }}
-            onClick={() => onBboxClick(c.rowId)}
+            onClick={() => onBboxClick(c.cardId)}
             title={c.quote || c.shortLabel}
           >
             {/* Default state: a small number-only badge that doesn't
@@ -1241,8 +1430,7 @@ function FieldGroup(p: FieldGroupProps): ReactElement {
 }
 
 interface FieldCardProps {
-  lr: LoadedRow;
-  citation?: FlatCitation;
+  card: VirtualCard;
   active: boolean;
   busy: boolean;
   readOnly?: boolean;
@@ -1253,7 +1441,8 @@ interface FieldCardProps {
 }
 
 function FieldCard(p: FieldCardProps): ReactElement {
-  const { lr, citation, active, busy, readOnly = false, onClick, onValueChange, onApprove, onReject } = p;
+  const { card, active, busy, readOnly = false, onClick, onValueChange, onApprove, onReject } = p;
+  const lr = card.parent;
   const status = lr.state.status;
   const decision = lr.state.decision;
   const cardClasses = [
@@ -1267,9 +1456,9 @@ function FieldCard(p: FieldCardProps): ReactElement {
 
   const inputDisabled = readOnly || busy || status === 'busy' || status === 'done';
 
-  const labelText = _labelFor(lr.row);
-  const citationChip = citation
-    ? `p${citation.page} · #${citation.ordinal}`
+  const labelText = card.cardLabel;
+  const citationChip = card.citation
+    ? `p${card.citation.page} · #${card.citation.ordinal}`
     : '—';
 
   // Confidence is best-effort: payload may carry .confidence on the value
@@ -1279,7 +1468,7 @@ function FieldCard(p: FieldCardProps): ReactElement {
 
   return (
     <div
-      id={`copilot-review-field-${lr.row.id}`}
+      id={`copilot-review-field-${card.id}`}
       className={cardClasses}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest('input, textarea, select, button')) return;
@@ -1291,7 +1480,15 @@ function FieldCard(p: FieldCardProps): ReactElement {
         <span className="cdr-field-citation">{citationChip}</span>
       </div>
 
-      <FieldEditor lr={lr} onValueChange={onValueChange} disabled={inputDisabled} />
+      {card.subfield != null
+        ? <DemographicsSubfieldInput
+            lr={lr}
+            subfield={card.subfield}
+            onValueChange={onValueChange}
+            disabled={inputDisabled}
+          />
+        : <FieldEditor lr={lr} onValueChange={onValueChange} disabled={inputDisabled} />
+      }
 
       <div className="cdr-field-actions">
         <div className="cdr-field-confidence">
@@ -1346,7 +1543,11 @@ interface FieldEditorInnerProps {
 function FieldEditor(p: FieldEditorInnerProps): ReactElement {
   const kind = _kind(p.lr.row);
   switch (kind) {
-    case 'demographics': return <DemographicsInputs {...p} />;
+    // Demographics is split per-subfield by the card builder; the
+    // FieldCard renders DemographicsSubfieldInput directly. This
+    // branch is unreachable in the current flow but kept for
+    // defense in depth.
+    case 'demographics': return <RawJsonInputs {...p} />;
     case 'chief_concern': return <ChiefConcernInputs {...p} />;
     case 'medication': return <MedicationInputs {...p} />;
     case 'allergy': return <AllergyInputs {...p} />;
@@ -1370,27 +1571,69 @@ function _emitIntake(
   p.onValueChange(p.lr.row.id, merged);
 }
 
-function DemographicsInputs(p: FieldEditorInnerProps): ReactElement {
-  const v = _payloadValue(p.lr.row);
-  const [name, setName] = useState(_str(v.name));
-  const [dob, setDob] = useState(_str(v.dob));
-  const [mrn, setMrn] = useState(_str(v.mrn));
+interface DemographicsSubfieldInputProps {
+  lr: LoadedRow;
+  subfield: 'name' | 'dob' | 'sex' | 'mrn' | 'address';
+  onValueChange: (rowId: number, override: Record<string, unknown> | null) => void;
+  disabled: boolean;
+}
+
+function DemographicsSubfieldInput(p: DemographicsSubfieldInputProps): ReactElement {
+  const original = p.lr.row.payload as Record<string, unknown>;
+  const demo = (original.demographics && typeof original.demographics === 'object'
+    ? original.demographics as Record<string, unknown>
+    : {}) as Record<string, unknown>;
+  const sub = demo[p.subfield];
+  const initial = typeof sub === 'string'
+    ? sub
+    : (sub && typeof sub === 'object' && typeof (sub as Record<string, unknown>).value === 'string'
+        ? (sub as Record<string, unknown>).value as string
+        : '');
+  const [val, setVal] = useState(initial);
+  // Preserve nested-citation shape on edit: write the new string into
+  // demographics[sub].value and leave citations + neighbor fields alone.
   useEffect(() => {
-    _emitIntake(p, { name, dob, mrn });
+    const next: Record<string, unknown> = { ...original };
+    const nextDemo: Record<string, unknown> = { ...demo };
+    if (sub && typeof sub === 'object' && !Array.isArray(sub)) {
+      nextDemo[p.subfield] = { ...(sub as Record<string, unknown>), value: val };
+    } else {
+      nextDemo[p.subfield] = { value: val, citations: [], needs_review: false };
+    }
+    next.demographics = nextDemo;
+    p.onValueChange(p.lr.row.id, next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, dob, mrn]);
+  }, [val, p.subfield, p.lr.row.id]);
+  const placeholder = (() => {
+    switch (p.subfield) {
+      case 'name': return 'Patient name';
+      case 'dob': return 'YYYY-MM-DD';
+      case 'sex': return 'Sex';
+      case 'mrn': return 'MRN';
+      case 'address': return 'Address';
+    }
+  })();
+  if (p.subfield === 'address') {
+    return (
+      <textarea
+        className="cdr-field-input"
+        rows={2}
+        value={val}
+        placeholder={placeholder}
+        disabled={p.disabled}
+        onChange={(e) => setVal(e.target.value)}
+      />
+    );
+  }
   return (
-    <>
-      <input className="cdr-field-input cdr-field-input-compound" type="text" value={name}
-        placeholder="Patient name"
-        disabled={p.disabled} onChange={(e) => setName(e.target.value)} />
-      <div className="cdr-field-input-row">
-        <input className="cdr-field-input" type="text" value={dob} placeholder="DOB (YYYY-MM-DD)"
-          disabled={p.disabled} onChange={(e) => setDob(e.target.value)} />
-        <input className="cdr-field-input" type="text" value={mrn} placeholder="MRN"
-          disabled={p.disabled} onChange={(e) => setMrn(e.target.value)} />
-      </div>
-    </>
+    <input
+      className="cdr-field-input"
+      type={p.subfield === 'dob' ? 'date' : 'text'}
+      value={val}
+      placeholder={placeholder}
+      disabled={p.disabled}
+      onChange={(e) => setVal(e.target.value)}
+    />
   );
 }
 

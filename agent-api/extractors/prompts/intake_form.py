@@ -57,6 +57,20 @@ HARD RULES (the agent will reject your output otherwise):
 - code_status.value must be one of:
     "full_code", "DNR", "DNI", "comfort_care", "POLST", "unknown".
   Map common phrases: "Full Code"->"full_code", "DNR/DNI"->"DNR".
+- For each MedicationItem, populate as many of these fields as the
+  source document grounds:
+    name        — required.
+    dose        — required when present in the document.
+    route       — verbatim from the ROUTE / FREQ column or equivalent
+                  (e.g. "PO daily", "PO BID", "IV", "topical"). Fold
+                  combined route+frequency cells into this single
+                  field rather than splitting (the schema's separate
+                  `frequency` field is a v1.5 split — until then,
+                  carry the whole "PO daily AM" string in `route`).
+    indication  — verbatim from the REASON / INDICATION column.
+  Omit any of dose/route/indication you cannot ground; do NOT
+  fabricate. Citation rules apply unchanged — every populated field
+  must be groundable in an OCR bbox.
 - For each FamilyHistoryItem, in addition to relation + condition,
   populate when the source document grounds them:
     age_at_onset  — string. The age at which the relative was
