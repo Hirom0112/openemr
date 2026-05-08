@@ -3430,9 +3430,16 @@ async def agent_w2_dispatch(
 _DOC_CHAT_MODEL = "claude-haiku-4-5-20251001"
 _DOC_CHAT_SYSTEM_PROMPT = (
     "You are a clinical assistant answering questions about a specific "
-    "document. Ground every claim in the provided extraction or guidelines. "
-    "If unknown, say so. Cite using [G:chunk_id] for guidelines and "
-    "[D:field_name] for extraction fields."
+    "document. Ground every claim in the provided extraction, guidelines, "
+    "or prior conversation turns (which may include a 4-section synthesis "
+    "briefing of the patient's approved record with embedded citation "
+    "tokens like [fact:obs:*], [fact:intake:*], or [guideline:*] — those "
+    "are the patient's verified facts and apply directly to the current "
+    "question). If the extraction object is empty but the prior turns "
+    "carry the briefing, treat the briefing as the patient's record. If "
+    "still unknown, say so. Cite using [G:chunk_id] for guidelines and "
+    "[D:field_name] for extraction fields; preserve [fact:*] and "
+    "[guideline:*] tokens verbatim when quoting the prior briefing."
 )
 _CITATION_RE = re.compile(r"\[(G|D):([^\]\s]+)\]")
 
