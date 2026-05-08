@@ -616,6 +616,16 @@ export default function ChatSurface({
     const refKey = postApprovalGuidelines.documentReferenceId;
     if (lastInjectedPostApprovalRef.current === refKey) return;
     lastInjectedPostApprovalRef.current = refKey;
+    // Wire 2 — refresh the doc-chat ref's guideline list so follow-up
+    // questions land at /document/{id}/chat with the post-approval RAG
+    // snippets in scope. Preserve patient_id / document_reference_id /
+    // extraction from whatever the post-ingest path stashed earlier.
+    if (docChatContextRef.current && docChatContextRef.current.document_reference_id === refKey) {
+      docChatContextRef.current = {
+        ...docChatContextRef.current,
+        guidelines: ctx.guidelines,
+      };
+    }
     forceScrollOnNextMessage.current = true;
     setMessages((prev) => [
       ...prev,
@@ -833,11 +843,28 @@ export default function ChatSurface({
     if (!isAutoDispatch && docCtx && ingestBaseUrl) {
       setLoading(true);
       try {
+        // Wire 3 — thread prior conversation turns so the chat handler can
+        // resolve pronouns ("what about the lactate?") against earlier Q/A.
+        // Only role+content pairs; structured cards (briefing/meds/handoff)
+        // are skipped so the prompt stays compact.
+        const docHistory: { role: 'user' | 'assistant'; content: string }[] = [];
+        for (const m of messages) {
+          if (m.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
+            docHistory.push({ role: 'user', content: m.content });
+          } else if (m.role === 'assistant') {
+            const narrative = m.response?.narrative;
+            if (typeof narrative === 'string' && narrative.trim()) {
+              docHistory.push({ role: 'assistant', content: narrative });
+            }
+          }
+        }
         const docResp = await sendDocumentChatMessage(ingestBaseUrl, docCtx.document_reference_id, {
           patient_id: docCtx.patient_id,
           question: text,
           extraction: docCtx.extraction,
           guidelines: docCtx.guidelines,
+          history: docHistory,
+          ...(sessionId ? { session_id: sessionId } : {}),
         });
         forceScrollOnNextMessage.current = true;
         setMessages((prev) => [

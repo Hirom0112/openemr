@@ -269,6 +269,7 @@ export default function App({ config }: AppProps) {
           initialActiveCitationFieldId={reviewTarget.initialActiveCitationFieldId}
           onClose={() => setReviewTarget(null)}
           onCompleted={handleReviewCompleted}
+          sessionId={sessionId}
         />
       )}
     </div>

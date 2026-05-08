@@ -1185,7 +1185,7 @@ export type PostApprovalContext = PostIngestContextResponse;
 export async function fetchPostApprovalContext(
   baseUrl: string,
   documentReferenceId: string,
-  payload: { patient_id: string; document_reference_id: string },
+  payload: { patient_id: string; document_reference_id: string; session_id?: string },
 ): Promise<PostApprovalContext> {
   const res = await fetch(
     `${baseUrl}/document/${encodeURIComponent(documentReferenceId)}/post-approval-context`,
@@ -1286,6 +1286,7 @@ export async function sendDocumentChatMessage(
     extraction: unknown;
     guidelines: GuidelineSnippet[];
     history?: { role: 'user' | 'assistant'; content: string }[];
+    session_id?: string;
   },
 ): Promise<DocumentChatResponse> {
   const res = await fetch(`${baseUrl}/document/${encodeURIComponent(documentReferenceId)}/chat`, withAuth({

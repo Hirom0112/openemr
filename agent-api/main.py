@@ -3746,6 +3746,7 @@ async def document_post_ingest_context(
 
 class PostApprovalContextRequest(BaseModel):
     patient_id: str
+    session_id: str | None = None
 
 
 def _build_rag_query_from_approved_facts(
@@ -4039,6 +4040,51 @@ async def document_post_approval_context(
         else:
             agent_synthesis_total.labels(outcome="fallback").inc()
 
+        # Wire 1 — persist a synthetic assistant turn into dispatcher session
+        # memory so follow-up /document/{id}/chat calls (and any later
+        # /agent/query) see this synthesis brief in their loaded history.
+        # Mirrors the briefing-button pattern (_persist_button_action). Best
+        # effort: a Redis hiccup must NOT break the synthesis response.
+        if body.session_id and outcome.output is not None:
+            try:
+                _signals = outcome.output.clinical_signals
+                _mappings = outcome.output.guideline_mappings
+                _next = outcome.output.next_steps
+                _lines: list[str] = ["Approved-record summary for this document.", ""]
+                _lines.append(outcome.output.approved_facts)
+                _lines.append("")
+                if _signals:
+                    _lines.append("Clinical signals:")
+                    for _s in _signals:
+                        _tokens = "".join(f"[{cid}]" for cid in _s.citation_ids)
+                        _lines.append(f"- {_s.claim} {_tokens}".rstrip())
+                    _lines.append("")
+                if _mappings:
+                    _lines.append("Guideline mappings:")
+                    for _m in _mappings:
+                        _lines.append(f"- {_m.claim} [guideline:{_m.chunk_id}]")
+                    _lines.append("")
+                if _next:
+                    _lines.append("Suggested next steps:")
+                    for _ns in _next:
+                        _lines.append(f"- {_ns}")
+                _rendered = "\n".join(_lines).strip()
+                _user_msg = (
+                    f"[finalized review of document {document_reference_id} "
+                    f"for patient {body.patient_id}]"
+                )
+                await _persist_button_action(
+                    body.session_id, _user_msg, _rendered
+                )
+            except Exception as _persist_exc:  # noqa: BLE001 — defensive
+                logger.warning(
+                    "session_persist_failed",
+                    extra={
+                        "document_reference_id": document_reference_id,
+                        "error_type": type(_persist_exc).__name__,
+                    },
+                )
+
         duration_ms = int((time.perf_counter() - started) * 1000)
         logger.info(
             "post_approval_context_completed",
@@ -4102,6 +4148,7 @@ class DocumentChatRequest(BaseModel):
     extraction: dict[str, Any] | None = None
     guidelines: list[dict[str, Any]] = []
     history: list[_ChatHistoryTurn] = []
+    session_id: str | None = None
 
 
 def _parse_citations_from_answer(text: str) -> list[str]:
@@ -4232,6 +4279,32 @@ async def document_chat(
         answer_text = "".join(parts)
 
         citations_used = _parse_citations_from_answer(answer_text)
+
+        # Wire 3 — persist this Q/A pair into dispatcher session memory so the
+        # follow-up /agent/query path (and re-entries into this chat) see the
+        # full thread. Best-effort: a Redis hiccup must NOT break the chat
+        # response.
+        if body.session_id:
+            try:
+                from agent.dispatcher import _save_turn as _save_turn_chat
+                _ctx = _session_ctx(body.session_id)
+                await _save_turn_chat(
+                    body.session_id, _ctx, "user", question
+                )
+                await _save_turn_chat(
+                    body.session_id,
+                    _ctx,
+                    "assistant",
+                    [{"type": "text", "text": answer_text}],
+                )
+            except Exception as _persist_exc:  # noqa: BLE001 — defensive
+                logger.warning(
+                    "session_persist_failed",
+                    extra={
+                        "document_reference_id": document_reference_id,
+                        "error_type": type(_persist_exc).__name__,
+                    },
+                )
 
         logger.info(
             "document_chat_completed",

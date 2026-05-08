@@ -57,6 +57,12 @@ export interface DocumentReviewPanelProps {
   fileBatchId: string;
   pendingRowIds: number[];
   /**
+   * Optional dispatcher session id. When provided, post-approval RAG
+   * synthesis is persisted into session memory so chat follow-ups can
+   * reference it. When omitted, persistence is skipped server-side.
+   */
+  sessionId?: string;
+  /**
    * When true, the panel renders a verification-only view: inputs are
    * disabled, per-row Approve/Reject and the bulk action bar are
    * hidden, and the status pill flips to "Read-only · Approved". Used
@@ -465,6 +471,7 @@ export default function DocumentReviewPanel(
     documentReferenceId,
     fileBatchId,
     pendingRowIds,
+    sessionId,
     readOnly = false,
     initialActiveCitationFieldId,
     onClose,
@@ -963,6 +970,7 @@ export default function DocumentReviewPanel(
           const rag = await fetchPostApprovalContext(baseUrl, documentReferenceId, {
             patient_id: patientId,
             document_reference_id: documentReferenceId,
+            ...(sessionId ? { session_id: sessionId } : {}),
           });
           onCompleted(documentReferenceId, rag);
         } catch (err) {
@@ -982,7 +990,7 @@ export default function DocumentReviewPanel(
     } finally {
       setBulkBusy(false);
     }
-  }, [baseUrl, documentReferenceId, liveRows, onCompleted, patientId, setRowState]);
+  }, [baseUrl, documentReferenceId, liveRows, onCompleted, patientId, sessionId, setRowState]);
 
   const onRejectAll = useCallback(async () => {
     const ids = liveRows.map((r) => r.row.id);
