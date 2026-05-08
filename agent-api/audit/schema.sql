@@ -139,8 +139,12 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- Pending extractions: one row per (DocumentReference, target FHIR resource)
 -- staged for clinician approval before the FHIR write fires.
 --
--- target_resource_type is one of three: Observation (lab values), Task
--- (Care_Gaps from XLSX), or AllergyIntolerance (XLSX Patient sheet allergies).
+-- target_resource_type is one of four: Observation (lab values), Task
+-- (Care_Gaps from XLSX), AllergyIntolerance (XLSX Patient sheet allergies),
+-- or IntakeFormField (PDF/DOCX intake-form fields without FHIR writers —
+-- allergies/meds/demographics/family-hx/chief-concern/code-status. These
+-- rows track per-field review state but never trigger a FHIR write on
+-- approve; ``state='approved'`` is the terminal state for them).
 -- target_resource_id mirrors the deterministic id produced by
 -- ``observations.writer.deterministic_observation_id`` and the equivalent
 -- minters for Task / AllergyIntolerance — the regex is the same one the
@@ -164,7 +168,7 @@ CREATE TABLE IF NOT EXISTS copilot_pending_extractions (
     file_batch_id          UUID NOT NULL,
     patient_id             TEXT NOT NULL,
     target_resource_type   TEXT NOT NULL
-        CHECK (target_resource_type IN ('Observation', 'Task', 'AllergyIntolerance')),
+        CHECK (target_resource_type IN ('Observation', 'Task', 'AllergyIntolerance', 'IntakeFormField')),
     target_resource_id     TEXT NOT NULL
         CHECK (target_resource_id ~ '^copilot-\d+-[\w.\-]+$'),
     state                  TEXT NOT NULL DEFAULT 'pending'
