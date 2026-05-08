@@ -2,7 +2,7 @@
 
 ## What's here
 
-The eval suite is the test suite. All test files live in `agent-api/tests/` and run with pytest. **534 test cases across 44 test files**, covering every clinical-safety-critical path. Authoritative count: `python3 -m pytest agent-api/tests/ --collect-only -q | tail -1`.
+The eval suite is the test suite. All test files live in `agent-api/tests/` and run with pytest. **1,250 tests collected across 117 test files** at submission lock (run `cd agent-api && python3 -m pytest --collect-only -q | tail -1` for the live count). Counts grow as the suite grows; the headline above is the snapshot the reviewer can reproduce against this commit.
 
 ---
 
@@ -66,7 +66,7 @@ AGENT_API_URL=https://your-agent-url OPENEMR_BASE_URL=https://your-openemr-url b
 
 ## Provenance chain rubric (seventh rubric)
 
-The architecture's prior framing of "the system is gated by 50 cases scored against five boolean rubrics" is out of date — the gate is now scored against **seven** boolean rubrics (the original five from `W2_ARCHITECTURE.md §11.2` plus `factually_consistent` plus the new `provenance_chain`).
+The architecture's prior framing of "the system is gated by 50 cases scored against five boolean rubrics" is out of date — the gate is now scored against **seven** boolean rubrics (the original five from `W2_ARCHITECTURE.md §11.2` plus `factually_consistent` plus the new `provenance_chain`), over the 156-case suite shipped at submission lock. Rubric-count harmonization across all docs is tracked separately; see `W2_ARCHITECTURE.md §11.2` for the canonical rubric set.
 
 `provenance_chain` is a mechanical (non-LLM) boolean check, run per case, that asserts the full chain `LabValue → copilot_observations row → derivedFrom → DocumentReference/copilot-{doc_id} → documents.id` is traversable end-to-end on the deployed pilot. Concretely:
 
@@ -90,15 +90,17 @@ This rubric is the regression-protected contract for the §4.2.4 provenance chai
 
 ---
 
-## W2 88-case eval suite — Stage 4 category mapping
+## W2 156-case eval suite — Stage 4 category mapping
 
-The W2 fixture set (`agent-api/tests/fixtures/w2_eval_cases.py`) is the gating eval. Each case is a frozen `W2EvalCase`; the runner (`agent-api/evals/runner.py`) executes the W2 graph and the rubric layer (`agent-api/evals/rubrics_*.py`) scores the outcome. The 11 buckets map onto the 5 Stage 4 categories below.
+The W2 fixture set (`agent-api/tests/fixtures/w2_eval_cases.py`) is the gating eval. Each case is a frozen `W2EvalCase`; the runner (`agent-api/evals/runner.py`) executes the W2 graph and the rubric layer (`agent-api/evals/rubrics_*.py`) scores the outcome. The 12 buckets map onto the 5 Stage 4 categories below, with a Phase 9.9 multimodal expansion adding cases across new document modalities (HL7v2, XLSX, DOCX referrals, TIFF faxes, photo capture).
+
+> Live counts at submission lock. Run `python3 -c "from collections import Counter; from tests.fixtures.w2_eval_cases import CASES; print(Counter(c.bucket for c in CASES))"` from `agent-api/` for the current runtime breakdown.
 
 ### a. Extraction
 
 What we test: lab + intake extractors produce schema-valid output, name the right fields, and survive low-quality / multi-page / non-English input without inventing values.
 
-Buckets covering this: `lab_nominal` (17), `intake_nominal` (17), `unknown_nominal` (8), `low_quality_scan` (5). Total: **47 cases**.
+Buckets covering this: `lab_nominal` (22), `intake_nominal` (22), `unknown_nominal` (8), `low_quality_scan` (10). Total: **62 cases**.
 
 ### b. Evidence retrieval
 
@@ -108,7 +110,9 @@ Buckets covering this: `evidence_retrieval` (10). Total: **10 cases**. Each case
 
 ### c. Citations
 
-What we test: every clinical claim carries at least one citation that resolves into the OCR layout, AND every Observation that hits MySQL carries a `derivedFrom` chain back to the source DocumentReference. Runs over the full 88 via `citation_present`; `provenance_chain` runs over the labs that set `expected_provenance`. CI must run the MySQL service container so the provenance probe is live — without it, the rubric silently skips (tri-state `None`).
+What we test: every clinical claim carries at least one citation that resolves into the OCR layout, AND every Observation that hits MySQL carries a `derivedFrom` chain back to the source DocumentReference. Runs over the full 156 via `citation_present`; `provenance_chain` runs over the labs that set `expected_provenance`. CI must run the MySQL service container so the provenance probe is live — without it, the rubric silently skips (tri-state `None`).
+
+Bbox-fidelity ground-truth is its own bucket as of Wave 2C: `bbox_gt` (36) carries hand-annotated value-to-bounding-box mappings that the citation token-match rubrics gate against.
 
 Beyond presence, three Wave 2C mechanical rubrics gate citation quality at the token level:
 
@@ -118,43 +122,46 @@ Beyond presence, three Wave 2C mechanical rubrics gate citation quality at the t
 
 All three default to vacuously True when the extraction lacks document-type citations (guidelines, observations) or when OCR layout is unavailable. `run_full_suite.py` reports pass-rates for each, and `baseline.json` gates them with a per-rubric `min_threshold`.
 
-Buckets covering this: `lab_nominal` (17), `intake_nominal` (17). Total: **34 cases**.
+Buckets covering this: `lab_nominal` (22), `intake_nominal` (22), plus the dedicated `bbox_gt` (36). Total over citation-bearing buckets: **80 cases** (44 nominal + 36 bbox-GT).
 
 ### d. Refusals
 
 What we test: when the agent should refuse, it refuses cleanly. Hard-block on identity / unreadable failures; soft-warn on conflicts and demographic drift.
 
-Buckets covering this: `wrong_patient` (7), `wrong_type_hint` (6), `mixed_content` (6), `intra_doc_conflict` (3). Total: **22 cases**.
+Buckets covering this: `wrong_patient` (11), `wrong_type_hint` (6), `mixed_content` (12), `intra_doc_conflict` (5). Total: **34 cases**.
 
 ### e. Missing data
 
 What we test: when fields are absent, the agent records absence rather than inventing values. When the document itself is empty / encrypted / all-noise, the agent refuses cleanly.
 
-Buckets covering this: `missing_data` (4), `blank_noise` (5). Total: **9 cases**.
+Buckets covering this: `missing_data` (7), `blank_noise` (7). Total: **14 cases**.
 
 ### Inventory
 
 | Bucket               | Count |
 | -------------------- | ----- |
-| `lab_nominal`        | 17    |
-| `intake_nominal`     | 17    |
-| `unknown_nominal`    | 8     |
-| `wrong_type_hint`    | 6     |
-| `wrong_patient`      | 7     |
-| `blank_noise`        | 5     |
-| `mixed_content`      | 6     |
-| `low_quality_scan`   | 5     |
-| `intra_doc_conflict` | 3     |
+| `bbox_gt`            | 36    |
+| `lab_nominal`        | 22    |
+| `intake_nominal`     | 22    |
+| `mixed_content`      | 12    |
+| `wrong_patient`      | 11    |
+| `low_quality_scan`   | 10    |
 | `evidence_retrieval` | 10    |
-| `missing_data`       | 4     |
-| **Total**            | **88**|
+| `unknown_nominal`    | 8     |
+| `blank_noise`        | 7     |
+| `missing_data`       | 7     |
+| `wrong_type_hint`    | 6     |
+| `intra_doc_conflict` | 5     |
+| **Total**            | **156**|
+
+Phase 9.9 multimodal expansion: `bbox_gt`, `evidence_retrieval`, `missing_data`, and the photo/HL7/XLSX/DOCX/TIFF modality lanes were added in Wave 2C/2E and Phase 9.9 to grow the suite from the brief's 50-case floor to current shipped state. See `W2_ARCHITECTURE.md §11.9` for the modality-lane discussion.
 
 ### Running the W2 suite
 
 ```bash
 # Generate the deterministic fixture corpus.
 python3 agent-api/tests/fixtures/eval/_generate_eval_corpus.py
-# Run the full 88-case suite locally.
+# Run the full 156-case suite locally.
 cd agent-api && python3 -m evals.run_full_suite --output ../eval_results.json
 # Diff against the rolling baseline (gates the PR on >5pp drop).
 python3 agent-api/evals/diff_baseline.py \
