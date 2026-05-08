@@ -208,6 +208,21 @@ def _custom_upload_url() -> str:
     )
 
 
+_MIME_TO_EXTENSION: dict[str, str] = {
+    "application/pdf": ".pdf",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/tiff": ".tiff",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/hl7-v2": ".hl7",
+}
+
+
+def _extension_for_mime(mime_type: str) -> str:
+    return _MIME_TO_EXTENSION.get(mime_type.lower(), "")
+
+
 async def _write_via_custom_endpoint(
     *,
     patient_id: str,
@@ -227,7 +242,7 @@ async def _write_via_custom_endpoint(
         raise RuntimeError("copilot_jwt_secret unset — custom endpoint skipped")
 
     url = _custom_upload_url()
-    filename = (display or "document") + ".pdf"
+    filename = (display or "document") + _extension_for_mime(mime_type)
     # Field name "file" — UploadController.php reads $_FILES['file'].
     # The legacy REST tier (_write_via_rest) uses "document" because
     # OpenEMR's RestApiController reads $_FILES['document'] there.

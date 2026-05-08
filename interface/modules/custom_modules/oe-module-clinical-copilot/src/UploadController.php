@@ -3,12 +3,23 @@
 /**
  * Clinical Co-Pilot — Document Upload Controller.
  *
- * Custom JWT-authenticated endpoint that accepts a multipart PDF upload from
- * the agent-api and persists it into OpenEMR's documents table + filesystem
- * via the legacy ``Document::createDocument`` API. This bypasses the FHIR
- * Binary endpoint (read-only on this OpenEMR build) and the legacy REST
+ * Custom JWT-authenticated endpoint that accepts a multipart document upload
+ * (PDF, PNG/JPEG/TIFF, DOCX, XLSX, HL7 v2) from the agent-api and persists
+ * it into OpenEMR's documents table + filesystem via the legacy
+ * ``Document::createDocument`` API. Bypasses the FHIR Binary endpoint
+ * (read-only on this OpenEMR build) and the legacy REST
  * ``/apis/default/api/patient/{pid}/document`` endpoint (returns 401 even
  * with a valid bearer + api:oemr scope on this deploy).
+ *
+ * MIME validation
+ * ---------------
+ * Trusts the client-declared MIME from the multipart part header
+ * (``$_FILES['file']['type']``) rather than libmagic
+ * (``mime_content_type``). libmagic returns ``application/zip`` for XLSX/DOCX
+ * (they're zip containers) and ``text/plain`` for HL7 v2, so it cannot
+ * distinguish the multimodal formats agent-api sends. The HS256 JWT gate
+ * (issuer ``openemr-copilot``, shared ``COPILOT_JWT_SECRET``) is the real
+ * trust boundary; a forged client cannot reach this code path.
  *
  * Auth model
  * ----------
@@ -47,6 +58,10 @@ final class UploadController
         'application/pdf',
         'image/png',
         'image/jpeg',
+        'image/tiff',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/hl7-v2',
     ];
     private const DEFAULT_CATEGORY = 'Medical Record';
 
@@ -94,10 +109,12 @@ final class UploadController
             }
 
             $tmpName = (string) $file['tmp_name'];
-            $mime = function_exists('mime_content_type')
-                ? (string) (mime_content_type($tmpName) ?: '')
-                : '';
-            if ($mime === '' || !in_array(strtolower($mime), self::ALLOWED_MIMES, true)) {
+            // Trust the client-declared MIME (set by the JWT-authenticated
+            // agent-api in the multipart part header). libmagic-based
+            // mime_content_type cannot distinguish XLSX/DOCX from generic
+            // application/zip, nor HL7 v2 from text/plain.
+            $mime = strtolower(trim((string) ($file['type'] ?? '')));
+            if ($mime === '' || !in_array($mime, self::ALLOWED_MIMES, true)) {
                 self::respond(400, ['error' => 'unsupported_mime', 'mime' => $mime]);
                 return;
             }
@@ -241,12 +258,9 @@ final class UploadController
     private static function sanitizeFilename(string $raw): string
     {
         $base = basename($raw);
-        $base = preg_replace('/[^A-Za-z0-9._\-]+/', '_', $base) ?? 'document.pdf';
+        $base = preg_replace('/[^A-Za-z0-9._\-]+/', '_', $base) ?? 'document';
         if ($base === '' || $base === '.' || $base === '..') {
-            $base = 'document.pdf';
-        }
-        if (stripos($base, '.pdf') === false) {
-            $base .= '.pdf';
+            $base = 'document';
         }
         return $base;
     }
