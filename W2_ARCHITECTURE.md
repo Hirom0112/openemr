@@ -1262,6 +1262,47 @@ If the meta-eval cadence lapses (no human labeler named), the system follows the
 
 The grader-injected regression test: before final submission, a deliberate extraction regression is introduced in a feature branch and the gate's failure is confirmed. If it does not fail, the gate is broken and is fixed before submission.
 
+### 11.9 Phase 9.9 multimodal expansion
+
+Phase 9.9 grew the W2 eval suite from the brief's 50-case floor to 124 cases (Wave 2C/2E annotated bbox-GT + cross-source cases) and then to 156 cases (multimodal lanes for HL7v2, XLSX workbooks, DOCX referrals, TIFF faxes, and photo-capture intake). The growth is additive — new buckets and new modalities are appended to `tests/fixtures/w2_eval_cases.py` and the `BUCKET_COUNTS` literal is mutated at module-load by `_load_annotated_cases()` so the runtime `len(CASES)` and the asserted `BUCKET_COUNTS` sum stay synchronized.
+
+**Modality additions** (new `document_modality` lanes, all routed via `baseline.json:per_modality`):
+
+| Modality | Count | Code location |
+|---|---|---|
+| `hl7_v2` | 8 | `parsers/hl7/{dispatch.py,oru.py,adt.py,normalizer.py,probe.py}` |
+| `xlsx_workbook` | 8 | `parsers/xlsx/{dispatch.py,probe.py,parser.py}` |
+| `docx_referral` | 8 | `documents/docx_loader.py` |
+| `tiff_fax` | 8 | `documents/tiff_loader.py` |
+| `photo_capture` | 12 | `documents/{ocr.py,ocr_engine.py}` (preprocess), `tests/test_photo_preprocess.py` |
+
+**New mechanical rubrics introduced in Phase 9.9** (all wired into `agent-api/evals/rubrics_mechanical.py` and gated by per-rubric `min_threshold` in `evals/baseline.json`):
+
+| Rubric | What it asserts |
+|---|---|
+| `quarantine_audit_emitted` | Documents that quarantined emit one `document_quarantined` audit row per `audit/writer.py` |
+| `no_unconfirmed_writes` | No `copilot_observations` row is written without a confirmed extraction stage transition |
+| `stage_failure_audit_emitted` | A failed staging transition emits `extraction_*_failed` audit rows |
+| `tiff_all_pages_ocrd` | Multi-page TIFF inputs OCR every page, not just page 1 |
+| `synthetic_marker_not_extracted` | The synthetic-corpus PHI markers (e.g., `SYN-MARK-`) are stripped before any FHIR write or audit emission |
+
+**Per-modality `baseline.json` extension.** `evals/baseline.json` now carries a top-level `per_modality` map keyed by `document_modality`. The diff_baseline gate checks both the global rubric pass-rates AND the per-modality breakdown, so a regression isolated to (e.g.) `tiff_fax` is caught without dragging down the global average.
+
+### 11.10 Staging / human-in-the-loop approval surface
+
+The W2 ingestion pipeline includes a human-in-the-loop approval step for extractions that the critic flags `soft_warn`. Pending extractions are stored in `copilot_pending_extractions` (Postgres, owned by the `staging/` package) and surfaced through 6 routes mounted via `app.include_router(_staging_router)` at `main.py:3657`:
+
+| Route | Method | File:line | Purpose |
+|---|---|---|---|
+| `/pending-extractions` | GET | `staging/router.py:111` | List pending extractions, filterable by panel and state |
+| `/pending-extractions/{pending_id}` | GET | `staging/router.py:151` | Fetch a single pending row (full extraction context) |
+| `/pending-extractions/{pending_id}/approve` | POST | `staging/router.py:221` | Synchronous approve → write to FHIR-shaped store → state-mark |
+| `/pending-extractions/batch-approve` | POST | `staging/router.py:281` | Best-effort batch approve; per-id results returned |
+| `/pending-extractions/{pending_id}/reject` | POST | `staging/router.py:367` | Reject with reason; emits `extraction_rejected` audit |
+| `/pending-extractions/{pending_id}/retry` | POST | `staging/router.py:405` | Retry a previously failed staging transition |
+
+Mutating routes are scoped to roles via `_require_mutating_role()` at `staging/router.py`. State transitions emit `copilot_audit_events` rows with PHI-safe `detail_json` (codes/counts only — no values, prose, or raw clinical fields). The `staging/watchdog.py` APScheduler job reaps stuck `claimed` rows whose owners crashed mid-transition. Importlinter contract `staging-isolated` forbids `staging -> agent`, keeping the human-loop surface independent of the dispatcher and graph runtimes.
+
 ---
 
 ## 12. Risk Register
