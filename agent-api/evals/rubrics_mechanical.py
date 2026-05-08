@@ -927,6 +927,215 @@ def synthetic_marker_not_extracted(outcome: RunOutcome, *, case: Any = None) -> 
     return True
 
 
+# --------------------------------------------------------------------------- #
+# Phase 2 Step 2 — post-approval RAG synthesis grounding.
+#
+# Mechanical, deterministic, hard-failure (baseline 1.00, min 1.00). Gates the
+# structured output of the post-approval synthesizer against its input
+# allowlist: every clinical-signal citation_id must come from the approved
+# facts or retrieved guideline snippets that were handed to the synthesizer,
+# every guideline_mapping chunk_id must come from those same guidelines, and
+# the schema's required string fields must be non-empty.
+#
+# Stage 3 wires ``outcome.synthesis`` (SynthesisOutput.to_dict()) and
+# ``outcome.synthesis_input`` (serialized SynthesisInput) onto the runner.
+# Until then, ``getattr(outcome, "synthesis", None)`` returns None and this
+# rubric vacuously passes — never spuriously fails on incomplete
+# instrumentation, mirroring the Slice 9.9 multimodal pattern above.
+# --------------------------------------------------------------------------- #
+
+
+_SYNTHESIS_REQUIRED_KEYS: frozenset[str] = frozenset(
+    {"approved_facts", "clinical_signals", "guideline_mappings", "next_steps"}
+)
+
+
+def _truncate_reason_value(value: str, *, limit: int = 80) -> str:
+    """Truncate an offending id to ``limit`` chars for reason-code surfacing."""
+    s = str(value)
+    return s if len(s) <= limit else s[:limit]
+
+
+def _synthesis_grounded_check(outcome: RunOutcome) -> tuple[bool, Optional[str]]:
+    """Internal — returns ``(passed, reason)``.
+
+    ``reason`` is None on PASS and one of the deterministic snake_case codes
+    documented on :func:`synthesis_grounded` on FAIL. Kept separate from the
+    bool-returning public rubric so the registry signature stays uniform with
+    ``citation_present`` / ``no_phi_in_logs`` while still exposing diagnostics
+    to callers (eval reporters, debug tooling) via
+    :func:`synthesis_grounded_reason`.
+    """
+    synth = getattr(outcome, "synthesis", None)
+    if synth is None:
+        # Vacuous PASS — synthesis was not invoked, fell back to recap, or the
+        # runner has not yet wired the field (Stage 3). The fallback path is
+        # exercised by other rubrics; this one only judges existing output.
+        return (True, None)
+
+    synth_input = getattr(outcome, "synthesis_input", None)
+    if synth_input is None or not isinstance(synth_input, dict):
+        # Cannot reconstruct the citation_id allowlist without the input.
+        return (False, "synthesis_input_missing")
+
+    # 2. Schema gate.
+    if not isinstance(synth, dict):
+        return (False, "schema_invalid")
+    if set(synth.keys()) != _SYNTHESIS_REQUIRED_KEYS:
+        return (False, "schema_invalid")
+    approved_prose = synth.get("approved_facts")
+    clinical_signals = synth.get("clinical_signals")
+    guideline_mappings = synth.get("guideline_mappings")
+    next_steps = synth.get("next_steps")
+    if not isinstance(approved_prose, str):
+        return (False, "schema_invalid")
+    if not isinstance(clinical_signals, list):
+        return (False, "schema_invalid")
+    if not isinstance(guideline_mappings, list):
+        return (False, "schema_invalid")
+    if not isinstance(next_steps, list):
+        return (False, "schema_invalid")
+
+    # 5a. Approved-facts prose non-empty.
+    if not approved_prose.strip():
+        return (False, "approved_facts_empty")
+
+    # Build the citation_id allowlist and chunk_id allowlist from the input.
+    input_facts = synth_input.get("approved_facts") or []
+    input_guidelines = synth_input.get("guidelines") or []
+    if not isinstance(input_facts, list) or not isinstance(input_guidelines, list):
+        return (False, "schema_invalid")
+    valid_citation_ids: Set[str] = set()
+    for f in input_facts:
+        if isinstance(f, dict):
+            cid = f.get("citation_id")
+            if isinstance(cid, str):
+                valid_citation_ids.add(cid)
+    valid_chunk_ids: Set[str] = set()
+    for g in input_guidelines:
+        if isinstance(g, dict):
+            cid = g.get("citation_id")
+            if isinstance(cid, str):
+                valid_citation_ids.add(cid)
+            chid = g.get("chunk_id")
+            if isinstance(chid, str):
+                valid_chunk_ids.add(chid)
+
+    # 3. Clinical-signal grounding.
+    for s in clinical_signals:
+        if not isinstance(s, dict):
+            return (False, "schema_invalid")
+        cids = s.get("citation_ids")
+        if not isinstance(cids, list) or len(cids) == 0:
+            return (False, "citation_ids_empty")
+        for cid in cids:
+            if not isinstance(cid, str) or cid not in valid_citation_ids:
+                return (
+                    False,
+                    f"unknown_citation_id:{_truncate_reason_value(cid)}",
+                )
+        claim = s.get("claim")
+        if not isinstance(claim, str) or not claim.strip():
+            return (False, "empty_claim")
+
+    # 4. Guideline-mapping grounding.
+    for m in guideline_mappings:
+        if not isinstance(m, dict):
+            return (False, "schema_invalid")
+        chid = m.get("chunk_id")
+        if not isinstance(chid, str) or chid not in valid_chunk_ids:
+            return (
+                False,
+                f"unknown_chunk_id:{_truncate_reason_value(str(chid))}",
+            )
+        claim = m.get("claim")
+        if not isinstance(claim, str) or not claim.strip():
+            return (False, "empty_claim")
+
+    # 5b. Next-step entries (when present) must not be blank.
+    for step in next_steps:
+        if not isinstance(step, str) or not step.strip():
+            return (False, "next_step_empty")
+
+    return (True, None)
+
+
+def synthesis_grounded(outcome: RunOutcome, *, case: Any = None) -> bool:
+    """Hard / 1.00 — every synthesis citation_id and chunk_id is grounded
+    in the synthesizer's own input allowlist, and required schema strings
+    are non-empty.
+
+    The rubric reads two fields off the outcome:
+
+      * ``outcome.synthesis`` — the structured ``SynthesisOutput.to_dict()``
+        payload (see ``agent/synthesis.py``), or ``None`` when synthesis
+        was skipped, fell back to recap, or was never invoked.
+      * ``outcome.synthesis_input`` — the serialized ``SynthesisInput`` that
+        was handed to the synthesizer. Carries the canonical citation_id /
+        chunk_id allowlist for this case.
+
+    Pass criterion (all must hold):
+
+      1. **Vacuous PASS** when ``outcome.synthesis is None``. The fallback
+         path is judged by other rubrics; this one only gates output that
+         exists.
+      2. **Schema gate** — synthesis is a dict whose top-level keys are
+         exactly ``{"approved_facts", "clinical_signals",
+         "guideline_mappings", "next_steps"}``. ``approved_facts`` is a
+         string; the other three are lists.
+      3. **Clinical-signal grounding** — every entry has a non-empty
+         ``citation_ids`` list whose members all appear in the input
+         allowlist (approved-fact citation_ids ∪ guideline citation_ids),
+         and a non-empty ``claim`` string.
+      4. **Guideline-mapping grounding** — every entry's ``chunk_id`` is a
+         member of the input guidelines' chunk_ids, and ``claim`` is
+         non-empty.
+      5. **No empty claims** — the ``approved_facts`` prose is non-empty,
+         and every ``next_steps`` entry is non-empty after strip.
+
+    Edge cases:
+
+      * ``synthesis_input is None`` while ``synthesis is not None`` — FAIL
+        with reason ``synthesis_input_missing``. Without the input the
+        allowlist cannot be reconstructed.
+      * Empty ``clinical_signals`` / ``guideline_mappings`` / ``next_steps``
+        lists are PASS (the schema permits them).
+      * Cache-replayed stale fingerprints are out of scope; the cache
+        contract handles invalidation by prompt_version + approved-fact
+        fingerprint.
+
+    Reason codes (surfaced via :func:`synthesis_grounded_reason`):
+    ``schema_invalid``, ``synthesis_input_missing``,
+    ``unknown_citation_id:{value}``, ``unknown_chunk_id:{value}``,
+    ``empty_claim``, ``citation_ids_empty``, ``next_step_empty``,
+    ``approved_facts_empty``. Offending id values are truncated to 80 chars.
+
+    Explicit non-goals:
+      * Does NOT score factual accuracy of claims (covered by
+        ``factually_consistent`` for extraction; a future
+        ``synthesis_faithful`` LLM-judge rubric will cover prose meaning).
+      * Does NOT regex for prescribing language (future
+        ``synthesis_no_prescribing``).
+      * Does NOT score length, formatting, em-dash bans, or voice — those
+        are enforced by the schema and the synthesizer prompt upstream.
+    """
+    passed, _reason = _synthesis_grounded_check(outcome)
+    return passed
+
+
+def synthesis_grounded_reason(outcome: RunOutcome) -> Optional[str]:
+    """Diagnostic sibling of :func:`synthesis_grounded`.
+
+    Returns ``None`` on PASS or one of the deterministic reason codes
+    documented on :func:`synthesis_grounded` on FAIL. Reporters and debug
+    tooling can call this to surface *why* a case failed without re-running
+    the rubric logic. Not part of the registry (the gate is the bool
+    rubric); kept exported for external consumers.
+    """
+    _passed, reason = _synthesis_grounded_check(outcome)
+    return reason
+
+
 # Auto-discovery registry. New rubrics are picked up by the scoring harness
 # (via ``RUBRIC_REGISTRY[name]`` lookup) without per-rubric wiring in
 # ``scoring.py``. Each entry is a callable accepting (outcome, *, case)
@@ -938,6 +1147,8 @@ RUBRIC_REGISTRY: dict[str, Any] = {
     "stage_failure_audit_emitted": stage_failure_audit_emitted,
     "tiff_all_pages_ocrd": tiff_all_pages_ocrd,
     "synthetic_marker_not_extracted": synthetic_marker_not_extracted,
+    # Phase 2 Step 2 — post-approval RAG synthesis grounding.
+    "synthesis_grounded": synthesis_grounded,
 }
 
 
@@ -958,5 +1169,8 @@ __all__ = [
     "stage_failure_audit_emitted",
     "tiff_all_pages_ocrd",
     "synthetic_marker_not_extracted",
+    # Phase 2 Step 2 — post-approval RAG synthesis grounding.
+    "synthesis_grounded",
+    "synthesis_grounded_reason",
     "RUBRIC_REGISTRY",
 ]
