@@ -1569,12 +1569,33 @@ async def extract_intake(
         blocks,
         pdf_bytes=pdf_bytes,
     )
+    # ICD-10 hallucination guardrail — must run BEFORE the dispatcher
+    # stages anything. Walks final.problem_list and drops any
+    # icd10_code that doesn't ground literally in the OCR layout's
+    # source text. The source-text composition mirrors what the eval
+    # rubric uses (concatenated block text); guardrail and rubric
+    # share the same predicate (validate_icd10_grounded).
+    if final.problem_list:
+        source_text = "\n".join((b.text or "") for b in blocks)
+        # apply_icd10_guardrail mutates the list in place AND returns
+        # it; we re-bind via model_copy so the rest of the form is
+        # untouched. Pydantic v2 frozen-ish handling: the list itself
+        # is mutable, but reassigning through model_copy keeps the
+        # IntakeForm instance immutable in the right places.
+        guarded = apply_icd10_guardrail(
+            list(final.problem_list),
+            source_text,
+            document_reference_id=document_reference_id,
+        )
+        final = final.model_copy(update={"problem_list": guarded})
+
     logger.info(
         "extractor_intake_ok",
         extra={
             "document_reference_id": document_reference_id,
             "n_meds": len(final.current_medications),
             "n_allergies": len(final.allergies),
+            "n_problems": len(final.problem_list),
             "classifier_confidence": final.classifier_confidence,
         },
     )
@@ -1831,12 +1852,27 @@ async def extract_intake_from_docx(
             ),
         }
     )
+    # ICD-10 hallucination guardrail — same as the vision/PDF path.
+    # Source text for DOCX is the concatenation of every paragraph's
+    # rendered text; ICD-10 codes printed inside table cells survive
+    # the loader (extract_docx_paragraphs flattens table-cell prose
+    # into the same paragraph stream).
+    if final.problem_list:
+        source_text = "\n".join((p.text or "") for p in paragraphs)
+        guarded = apply_icd10_guardrail(
+            list(final.problem_list),
+            source_text,
+            document_reference_id=document_reference_id,
+        )
+        final = final.model_copy(update={"problem_list": guarded})
+
     logger.info(
         "extractor_intake_prose_ok",
         extra={
             "document_reference_id": document_reference_id,
             "n_meds": len(final.current_medications),
             "n_allergies": len(final.allergies),
+            "n_problems": len(final.problem_list),
             "n_paragraphs": meta.get("n_paragraphs"),
             "tracked_changes_present": meta.get("tracked_changes_present"),
             "embedded_images_dropped": meta.get("embedded_images_dropped"),

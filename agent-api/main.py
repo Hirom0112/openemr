@@ -2192,6 +2192,37 @@ async def _dispatch_multimodal_ingest(
                                "error_type": type(exc).__name__},
                     )
 
+            # 2026-05-08 — problem_list rows. ICD-10 guardrail already
+            # ran inside extract_intake_from_docx, so any icd10_code
+            # surviving on a ProblemListItem is grounded literally in
+            # the prose. Phase 2 stages all rows as IntakeFormField;
+            # Phase 4 will route grounded-icd10 rows to the FHIR
+            # Condition writer.
+            for idx, problem in enumerate(getattr(extraction, "problem_list", []) or []):
+                try:
+                    dispatch_pending_ids.append(
+                        await _obs_writer.stage_intake_field(
+                            document_id=doc_id_numeric,
+                            patient_id=patient_id,
+                            file_batch_id=file_batch_id,
+                            document_reference_id=write_result.document_reference_id,
+                            field_kind="problem_list",
+                            field_index=idx,
+                            payload=problem.model_dump(mode="json"),
+                            locator=_first_locator_docx(getattr(problem, "citations", None)),
+                            source_format="docx",
+                            request_id=rid,
+                            provider_id=provider_id,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "intake_field_stage_soft_failed",
+                        extra={"request_id": rid, "format": "docx",
+                               "field_kind": "problem_list", "field_index": idx,
+                               "error_type": type(exc).__name__},
+                    )
+
         elif extraction.kind == "unknown":
             for idx, fact in enumerate(getattr(extraction, "key_facts", []) or []):
                 try:
@@ -3008,6 +3039,36 @@ async def document_ingest(
                 logger.warning(
                     "intake_field_stage_soft_failed",
                     extra={"request_id": rid, "field_kind": "pertinent_lab", "field_index": idx,
+                           "error_type": type(stage_exc).__name__},
+                )
+
+        # 2026-05-08 — problem_list rows. ICD-10 guardrail already
+        # ran inside extract_intake (vision/PDF path), so any
+        # icd10_code surviving on a ProblemListItem is grounded
+        # literally in the OCR text. Phase 2 stages all rows as
+        # IntakeFormField; Phase 4 will route grounded-icd10 rows to
+        # the FHIR Condition writer.
+        for idx, problem in enumerate(getattr(extraction, "problem_list", []) or []):
+            try:
+                pending_extraction_ids.append(
+                    await _obs_writer.stage_intake_field(
+                        document_id=_doc_id_int,
+                        patient_id=patient_id,
+                        file_batch_id=file_batch_id,
+                        document_reference_id=write_result.document_reference_id,
+                        field_kind="problem_list",
+                        field_index=idx,
+                        payload=problem.model_dump(mode="json"),
+                        locator=_first_locator(getattr(problem, "citations", None)),
+                        source_format=_src,
+                        request_id=rid,
+                        provider_id=provider_id,
+                    )
+                )
+            except Exception as stage_exc:  # noqa: BLE001
+                logger.warning(
+                    "intake_field_stage_soft_failed",
+                    extra={"request_id": rid, "field_kind": "problem_list", "field_index": idx,
                            "error_type": type(stage_exc).__name__},
                 )
 
