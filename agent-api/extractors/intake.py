@@ -168,11 +168,28 @@ def _normalize_for_match(s: str) -> str:
 
 
 def _value_in_block(value: str, block_text: str) -> bool:
+    """True iff `block_text` overlaps `value` above the floor.
+
+    Used by the kept-branch of :func:`_repoint_citation` to decide
+    whether the LLM's already-cited block contains the value. Without
+    the floor, any substring containment counts — so a tiny block whose
+    text happens to appear inside a long value (e.g. a 5-char "weeks"
+    block hit by a 100-char chief-concern paragraph) was wrongly
+    accepted as the citation target. We share the same overlap formula
+    as :func:`_candidate_blocks_for_value` to keep the kept-branch and
+    search-branch decisions symmetric.
+    """
     nv = _normalize_for_match(value)
     nb = _normalize_for_match(block_text)
     if not nv or not nb:
         return False
-    return nv in nb or nb in nv
+    if nv in nb:
+        overlap = len(nv)
+    elif nb in nv:
+        overlap = len(nb)
+    else:
+        return False
+    return overlap >= _min_overlap_floor(len(nv))
 
 
 def _block_centroid_y(b: LayoutBlock) -> float:
@@ -313,17 +330,39 @@ _FIELD_ANCHOR_HINTS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _min_overlap_floor(nv_len: int) -> int:
+    """Compute the minimum normalized-overlap a candidate must clear.
+
+    The floor combines two guards:
+
+    - Legacy short-value preservation: ``min(4, max(1, nv_len // 2))``
+      so 1-2-character normalized values still match (e.g. 1-letter sex,
+      2-character state codes). This is the pre-2026-05 behavior.
+    - Long-value ratio guard: ``ceil(0.30 * nv_len)`` so a long value
+      cannot be grounded by a tiny block whose text just happens to be
+      a 5-character substring (the chief-concern → "weeks" failure
+      mode at id #382 of copilot:429).
+
+    The effective floor is the MAX of the two — the legacy floor still
+    handles short values; the ratio guard activates once the value is
+    long enough that 30% > the legacy floor (≈ 14 normalized chars and
+    up).
+    """
+    legacy_floor = min(4, max(1, nv_len // 2))
+    ratio_floor = (nv_len * 30 + 99) // 100  # ceil(0.30 * nv_len)
+    return max(legacy_floor, ratio_floor)
+
+
 def _candidate_blocks_for_value(
     value: str, blocks: List[LayoutBlock]
 ) -> List[Tuple[LayoutBlock, int]]:
     """Return all blocks whose normalized text overlaps `value` above the
-    minimum-length floor, paired with the overlap length. The floor is
-    identical to the legacy `_find_block_for_value` floor: at least 4
-    normalized chars OR half the value length, whichever is smaller."""
+    minimum-length floor, paired with the overlap length. See
+    :func:`_min_overlap_floor` for the floor formula."""
     nv = _normalize_for_match(value)
     if not nv:
         return []
-    min_overlap = min(4, max(1, len(nv) // 2))
+    min_overlap = _min_overlap_floor(len(nv))
     out: List[Tuple[LayoutBlock, int]] = []
     for b in blocks:
         nb = _normalize_for_match(b.text)
@@ -339,6 +378,131 @@ def _candidate_blocks_for_value(
             continue
         out.append((b, overlap))
     return out
+
+
+def _bbox_union(
+    bboxes: List[Tuple[float, float, float, float]],
+) -> Tuple[float, float, float, float]:
+    """Tight axis-aligned union of ≥1 (x, y, w, h) rectangles."""
+    if not bboxes:
+        return (0.0, 0.0, 0.0, 0.0)
+    xs = [b[0] for b in bboxes]
+    ys = [b[1] for b in bboxes]
+    rights = [b[0] + b[2] for b in bboxes]
+    bottoms = [b[1] + b[3] for b in bboxes]
+    x = min(xs)
+    y = min(ys)
+    w = max(rights) - x
+    h = max(bottoms) - y
+    return (float(x), float(y), float(w), float(h))
+
+
+def _spans_for_value(
+    value: str, blocks: List[LayoutBlock]
+) -> List[Tuple[List[LayoutBlock], int]]:
+    """Find y-adjacent runs of blocks on a single page whose concatenated
+    text contains `value` (or vice-versa) above the
+    :func:`_min_overlap_floor` threshold.
+
+    Used by the repointer when no single block clears the floor — the
+    canonical case is a multi-line chief concern paragraph that spans 2-3
+    OCR line blocks. Returns ``[(run, overlap), ...]`` so the caller can
+    pick the best run (smallest, highest-overlap) and synthesize a
+    merged bbox.
+
+    Y-adjacency rule: each consecutive pair must have a vertical gap less
+    than ``2 × max(height(run))`` so we don't bridge paragraphs separated
+    by white space the OCR happens to have seen. Maximum run length is
+    capped at 5 blocks — clinical paragraphs rarely exceed that.
+    """
+    nv = _normalize_for_match(value)
+    if not nv:
+        return []
+    min_overlap = _min_overlap_floor(len(nv))
+    by_page: dict[int, List[LayoutBlock]] = {}
+    for b in blocks:
+        # Only consider line-granularity blocks for span concatenation —
+        # word blocks would explode the search space for no benefit (a
+        # multi-word value already matches the parent line block).
+        if not _is_line_granularity(b):
+            continue
+        by_page.setdefault(b.page, []).append(b)
+    out: List[Tuple[List[LayoutBlock], int]] = []
+    for page_blocks in by_page.values():
+        sorted_blocks = sorted(page_blocks, key=_block_centroid_y)
+        n = len(sorted_blocks)
+        for i in range(n):
+            heights: List[float] = []
+            for j in range(i + 1, min(i + 6, n + 1)):
+                run = sorted_blocks[i:j]
+                heights = [_block_height(b) for b in run]
+                # Y-adjacency: each consecutive pair's gap (top of next
+                # minus bottom of prev) must be < 2x max height in run.
+                ok = True
+                for k in range(len(run) - 1):
+                    prev = run[k]
+                    nxt = run[k + 1]
+                    gap = nxt.bbox[1] - (prev.bbox[1] + prev.bbox[3])
+                    if gap > 2.0 * max(heights):
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                if len(run) < 2:
+                    # Single-block runs are handled by
+                    # _candidate_blocks_for_value; skip here.
+                    continue
+                concat = "\n".join(b.text or "" for b in run)
+                nb = _normalize_for_match(concat)
+                if not nb:
+                    continue
+                if nv in nb:
+                    overlap = len(nv)
+                elif nb in nv:
+                    overlap = len(nb)
+                else:
+                    continue
+                if overlap < min_overlap:
+                    continue
+                out.append((list(run), overlap))
+    return out
+
+
+def _synthesize_span_block(
+    run: List[LayoutBlock],
+) -> LayoutBlock:
+    """Materialize a synthetic LayoutBlock representing a multi-line span.
+
+    Bbox is the tight union of the run's per-block bboxes. Text is the
+    run's per-block text concatenated with newlines (used purely for
+    citation `quote_or_value`; downstream consumers don't re-parse it).
+    Granularity inherits the run's first block (LINE for our use case).
+    `bbox_id` is suffixed with ``-spanN`` so logs make the span origin
+    obvious; consumers that look up the id in the original block_index
+    should fall back gracefully (the sites that do this all
+    short-circuit on `is None`).
+    """
+    if not run:
+        raise ValueError("_synthesize_span_block called with empty run")
+    head = run[0]
+    union = _bbox_union([b.bbox for b in run])
+    text = "\n".join(b.text or "" for b in run)
+    # Average ocr_confidence; fall back to head if anything goes wrong.
+    try:
+        confs = [float(getattr(b, "ocr_confidence", 1.0)) for b in run]
+        avg_conf = sum(confs) / len(confs) if confs else float(head.ocr_confidence)
+    except Exception:  # noqa: BLE001 — defensive, never block the request
+        avg_conf = float(head.ocr_confidence)
+    span_id = f"{head.bbox_id}-span{len(run)}"
+    return LayoutBlock(
+        bbox_id=span_id,
+        page=head.page,
+        bbox=union,
+        text=text,
+        ocr_confidence=avg_conf,
+        granularity=head.granularity,
+        polygon=None,
+    )
 
 
 def _anchor_text_compatible(
@@ -622,6 +786,53 @@ def _repoint_citation(
 
     if value:
         cands = _candidate_blocks_for_value(value, blocks)
+        # Multi-line span fallback: when no single block fully contains
+        # the value (i.e. the best single-block candidate's overlap is
+        # strictly less than the normalized value length), look for a
+        # contiguous run of LINE blocks whose concatenated text DOES
+        # contain the full value. Prefer the smallest such run. This
+        # handles the chief-concern paragraph case where the value is
+        # split across 2-3 OCR line blocks — without it, the repointer
+        # snaps to whichever single line happens to have the most
+        # surface overlap (often the middle line) and the bbox covers
+        # only that fragment.
+        nv_len = len(_normalize_for_match(value))
+        best_single_overlap = max((ov for _b, ov in cands), default=0)
+        if nv_len > 0 and best_single_overlap < nv_len:
+            spans = _spans_for_value(value, blocks)
+            full_spans = [s for s in spans if s[1] >= nv_len]
+            if full_spans:
+                full_spans.sort(key=lambda s: (len(s[0]), -s[1]))
+                best_run, best_overlap = full_spans[0]
+                span_block = _synthesize_span_block(best_run)
+                agent_citation_repoint_total.labels(
+                    field=field_name or "unknown", outcome="repointed_span"
+                ).inc()
+                logger.info(
+                    "extractor_citation_repointed",
+                    extra={
+                        "tool": "intake",
+                        "field_name": field_name,
+                        "outcome": "repointed_span",
+                        "from": cit.field_or_chunk_id,
+                        "to": span_block.bbox_id,
+                        "candidate_count": len(spans),
+                        "chosen_bbox_id": span_block.bbox_id,
+                        "chosen_granularity": _block_granularity(span_block),
+                        "span_run_size": len(best_run),
+                        "span_overlap": best_overlap,
+                        "value_preview": (value or "")[:32],
+                    },
+                )
+                return cit.model_copy(
+                    update={
+                        "field_or_chunk_id": span_block.bbox_id,
+                        "quote_or_value": span_block.text or cit.quote_or_value,
+                        "bbox": span_block.bbox,
+                        "page": span_block.page,
+                        "polygon": None,
+                    }
+                )
         if cands:
             if len(cands) == 1:
                 target = cands[0][0]
@@ -676,6 +887,45 @@ def _repoint_citation(
                     "polygon": _block_polygon_list(target),
                 }
             )
+
+        # No single block cleared the floor — try multi-line spans for
+        # multi-paragraph values (chief concern, address, long
+        # narratives). Pick the smallest span (fewest blocks) that
+        # qualifies; ties broken by highest overlap.
+        spans = _spans_for_value(value, blocks)
+        if spans:
+            spans.sort(key=lambda s: (len(s[0]), -s[1]))
+            best_run, best_overlap = spans[0]
+            span_block = _synthesize_span_block(best_run)
+            agent_citation_repoint_total.labels(
+                field=field_name or "unknown", outcome="repointed_span"
+            ).inc()
+            logger.info(
+                "extractor_citation_repointed",
+                extra={
+                    "tool": "intake",
+                    "field_name": field_name,
+                    "outcome": "repointed_span",
+                    "from": cit.field_or_chunk_id,
+                    "to": span_block.bbox_id,
+                    "candidate_count": len(spans),
+                    "chosen_bbox_id": span_block.bbox_id,
+                    "chosen_granularity": _block_granularity(span_block),
+                    "span_run_size": len(best_run),
+                    "span_overlap": best_overlap,
+                    "value_preview": (value or "")[:32],
+                },
+            )
+            return cit.model_copy(
+                update={
+                    "field_or_chunk_id": span_block.bbox_id,
+                    "quote_or_value": span_block.text or cit.quote_or_value,
+                    "bbox": span_block.bbox,
+                    "page": span_block.page,
+                    "polygon": None,
+                }
+            )
+
         # No candidate cleared the floor: emit a no_match observation so
         # we can audit how often the LLM citation goes unverified.
         agent_citation_repoint_total.labels(
