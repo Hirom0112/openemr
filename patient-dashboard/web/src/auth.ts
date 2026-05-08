@@ -33,6 +33,25 @@ async function refreshAccessToken(refreshToken: string): Promise<{
   return response.json();
 }
 
+// SameSite=None cookies are required when this app is loaded inside an
+// OpenEMR iframe at a different origin. Auth.js's default ('lax') causes
+// the OAuth state cookie to be dropped on the third-party callback,
+// producing 'InvalidCheck: state value could not be parsed' errors after
+// a successful OpenEMR login. Secure=true is mandatory whenever
+// SameSite=None — Railway's edge terminates TLS so this is always true
+// in prod. Local-dev (http://localhost) callers fall through to the
+// Auth.js defaults via the env guard below.
+const crossSiteCookies = process.env.NEXTAUTH_URL?.startsWith("https://")
+  ? {
+      sessionToken: { options: { sameSite: "none" as const, secure: true } },
+      callbackUrl: { options: { sameSite: "none" as const, secure: true } },
+      csrfToken: { options: { sameSite: "none" as const, secure: true } },
+      pkceCodeVerifier: { options: { sameSite: "none" as const, secure: true } },
+      state: { options: { sameSite: "none" as const, secure: true } },
+      nonce: { options: { sameSite: "none" as const, secure: true } },
+    }
+  : undefined;
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     OpenEMR({
@@ -43,6 +62,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ],
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
+  ...(crossSiteCookies ? { cookies: crossSiteCookies } : {}),
   callbacks: {
     async jwt({ token, account, profile }) {
       // Initial sign-in: persist OAuth tokens + fhirUser claim.
