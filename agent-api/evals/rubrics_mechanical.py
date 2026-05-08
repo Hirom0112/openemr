@@ -83,6 +83,7 @@ def _iter_cited_items(extraction: dict) -> Iterable[dict]:
             "allergies",
             "family_history",
             "pertinent_labs",
+            "problem_list",
         ):
             for item in extraction.get(key) or []:
                 if isinstance(item, dict):
@@ -1141,6 +1142,88 @@ def synthesis_grounded_reason(outcome: RunOutcome) -> Optional[str]:
     return reason
 
 
+# --------------------------------------------------------------------------- #
+# 2026-05-08 problem_list build — Phase 1 mechanical rubric.
+#
+# Hard / 1.00 (same posture as no_phi_in_logs). Walks every
+# ProblemListItem in extraction.problem_list and asserts that any
+# non-null icd10_code grounds literally in the OCR source text.
+# Vacuous-True for cases without problem_list extraction (which is
+# every case in the existing 156-case suite). Mirrors the
+# extractor.intake.validate_icd10_grounded check that runs pre-staging,
+# so a failed rubric means a fabricated code escaped the runtime
+# guardrail — that's a generator/wiring bug worth halting on.
+# --------------------------------------------------------------------------- #
+
+
+def _layout_source_text(outcome: RunOutcome) -> str:
+    """Concatenate every block.text in outcome.ocr_layout.
+
+    Used as the haystack for icd10_grounded. Missing/empty layout →
+    empty string; the rubric falls vacuously through (no problem_list
+    extraction can survive without a layout to ground against).
+    """
+    layout = getattr(outcome, "ocr_layout", None) or []
+    if not isinstance(layout, list):
+        return ""
+    parts: list[str] = []
+    for blk in layout:
+        if isinstance(blk, dict):
+            t = blk.get("text") or blk.get("content") or blk.get("value") or ""
+            if isinstance(t, str):
+                parts.append(t)
+    return "\n".join(parts)
+
+
+def icd10_grounded(outcome: RunOutcome, *, case: Any = None) -> bool:
+    """Hard / 1.00 — every ProblemListItem.icd10_code must appear
+    literally in the OCR source text.
+
+    The runtime guardrail (extractors.intake.apply_icd10_guardrail)
+    drops fabricated codes pre-staging. This rubric is the eval-side
+    sentinel: if the runtime guardrail let a fabricated code through,
+    the suite halts.
+
+    Vacuous-True cases:
+      - extraction is missing or not a dict
+      - kind != intake_form (problem_list lives only on IntakeForm)
+      - no problem_list entries at all
+      - every problem_list entry has icd10_code = None
+
+    Validation reuses :func:`extractors.intake.validate_icd10_grounded`
+    so the eval and the runtime gate share the same predicate.
+    """
+    extraction = outcome.extraction
+    if not isinstance(extraction, dict):
+        return True
+    if extraction.get("kind") != "intake_form":
+        return True
+    items = extraction.get("problem_list") or []
+    if not isinstance(items, list) or not items:
+        return True
+    # Lazy import to avoid forcing every rubric consumer to also import
+    # the extractor module (which pulls Anthropic, pymupdf, etc.).
+    from extractors.intake import validate_icd10_grounded
+
+    source = _layout_source_text(outcome)
+    if not source:
+        # No haystack → can't validate. Return True vacuously rather
+        # than spuriously fail; the no-layout cases are caught by
+        # citation_resolvable's own vacuous-True branch.
+        return True
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("icd10_code")
+        if code is None:
+            continue
+        if not isinstance(code, str) or not code.strip():
+            continue
+        if not validate_icd10_grounded(code, source):
+            return False
+    return True
+
+
 # Auto-discovery registry. New rubrics are picked up by the scoring harness
 # (via ``RUBRIC_REGISTRY[name]`` lookup) without per-rubric wiring in
 # ``scoring.py``. Each entry is a callable accepting (outcome, *, case)
@@ -1154,6 +1237,8 @@ RUBRIC_REGISTRY: dict[str, Any] = {
     "synthetic_marker_not_extracted": synthetic_marker_not_extracted,
     # Phase 2 Step 2 — post-approval RAG synthesis grounding.
     "synthesis_grounded": synthesis_grounded,
+    # 2026-05-08 problem_list build — ICD-10 hallucination guardrail.
+    "icd10_grounded": icd10_grounded,
 }
 
 
@@ -1177,5 +1262,7 @@ __all__ = [
     # Phase 2 Step 2 — post-approval RAG synthesis grounding.
     "synthesis_grounded",
     "synthesis_grounded_reason",
+    # 2026-05-08 problem_list build.
+    "icd10_grounded",
     "RUBRIC_REGISTRY",
 ]
