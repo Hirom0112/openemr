@@ -634,7 +634,7 @@ The synthetic FHIR dataset must cover at least 12 patients and must include at l
 
 ### 7.1 Per-Request Cost Model
 
-Pricing is based on `${CLAUDE_MODEL_ID}` (set to `claude-sonnet-4-6` at time of writing — update to the current Sonnet model at deployment time and re-run the full pytest suite + diff_baseline.py before promoting to production). Input tokens at $3.00 per million, output tokens at $15.00 per million. Cached input tokens at $0.30 per million (see §4.3 for caching strategy).
+Pricing is based on `${CLAUDE_MODEL_ID}` (current value: see `agent-api/config.py`). Re-run the full pytest suite + `diff_baseline.py` before promoting any model bump to production. Standard Anthropic pricing tiers apply: input tokens at $3.00 per million, output tokens at $15.00 per million, cached input tokens at $0.30 per million (see §4.3 for caching strategy).
 
 | Use Case | Avg Input Tokens | Avg Output Tokens | Cost per Request | Notes |
 |---|---|---|---|---|
