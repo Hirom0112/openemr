@@ -121,16 +121,40 @@ def _resolve_loinc_for_lab(lab_value: LabValue) -> tuple[str, str]:
     return lookup_loinc(lab_value.normalized_test_name)
 
 
-def deterministic_observation_id(document_id: str | int, loinc_code: str) -> str:
-    """Deterministic id: ``copilot-{document_id}-{loinc_code}``.
+def deterministic_observation_id(
+    document_id: str | int,
+    loinc_code: str,
+    *,
+    slug: str = "",
+) -> str:
+    """Deterministic id: ``copilot-{document_id}-{loinc_code}[-{slug}]``.
 
     The PHP endpoint enforces ``r"^copilot-\\d+-[\\w.-]+$"``; we sanitise the
     LOINC code (strip anything outside the allowed character set) so a stray
     code like ``"LP UNKNOWN"`` doesn't 400 the upsert.
+
+    ``slug`` is an optional per-row distinguisher appended after the LOINC.
+    Use it when multiple distinct ``LabValue``s in the same document can
+    share one LOINC — e.g. a CBC report whose panel header is "LOINC
+    58410-2 (CBC WITH DIFFERENTIAL)" and the LLM stamps that single panel
+    code onto every per-test ``LabValue.loinc_code``. Without a slug all
+    rows would collapse onto one ``(document_reference_id, target_resource_id)``
+    via the ``copilot_pending_extractions_pending_unique_idx`` partial
+    unique index. With a slug (typically ``normalized_test_name``), rows
+    get distinct ids: ``copilot-450-58410-2-wbc``, ``…-rbc``, ``…-hgb``…
+
+    Backward compatible: callers that omit ``slug`` get the original
+    ``copilot-{doc}-{loinc}`` shape, so existing single-LOINC ingests
+    (HL7 OBX-3.1 carry-through, name-resolved single LOINCs) keep their
+    deterministic ids and the UPSERT semantics for re-extraction still
+    overwrite the same row.
     """
     sanitised = re.sub(r"[^\w.-]+", "-", str(loinc_code).strip())
     if not sanitised:
         sanitised = "unknown"
+    sanitised_slug = re.sub(r"[^\w.-]+", "-", str(slug or "").strip()).strip("-")
+    if sanitised_slug:
+        return f"copilot-{document_id}-{sanitised}-{sanitised_slug}"
     return f"copilot-{document_id}-{sanitised}"
 
 
@@ -484,7 +508,13 @@ async def write_observation(
     """
     code, display = _resolve_loinc_for_lab(lab_value)
     if observation_id is None:
-        observation_id = deterministic_observation_id(document_id, code)
+        # Slug = normalized_test_name so panel-LOINC reports (e.g. CBC where
+        # the LLM stamps 58410-2 onto every LabValue) produce distinct ids
+        # per row instead of collapsing onto one via the pending-state
+        # partial unique index. See deterministic_observation_id() docstring.
+        observation_id = deterministic_observation_id(
+            document_id, code, slug=lab_value.normalized_test_name
+        )
 
     if _ID_PATTERN.match(observation_id) is None:
         raise ValueError("observation_id failed copilot id pattern")
@@ -878,7 +908,13 @@ async def stage_observation(
 
     code, display = _resolve_loinc_for_lab(lab_value)
     if observation_id is None:
-        observation_id = deterministic_observation_id(document_id, code)
+        # Slug = normalized_test_name so panel-LOINC reports (e.g. CBC where
+        # the LLM stamps 58410-2 onto every LabValue) produce distinct ids
+        # per row instead of collapsing onto one via the pending-state
+        # partial unique index. See deterministic_observation_id() docstring.
+        observation_id = deterministic_observation_id(
+            document_id, code, slug=lab_value.normalized_test_name
+        )
     if _ID_PATTERN.match(observation_id) is None:
         raise ValueError("observation_id failed copilot id pattern")
 
