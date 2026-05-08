@@ -328,6 +328,57 @@ If the verification layer catches a violation, it either rewrites the specific c
 | `get_medication_safety` | UC-4 medication query or auto-flag | AllergyIntolerance, Condition, Observation (electrolytes, renal, hepatic), MedicationRequest | Chart-data-only safety surface context |
 | `generate_handoff` | UC-5 "give me handoff" trigger | All 7 resource types across all census patients | Per-patient handoff paragraph context, assembled in parallel |
 
+### 4.6 HTTP Routes
+
+All routes are registered in `agent-api/main.py`. Grouped by functional
+purpose (W1 = dispatcher / tools / sessions; W2 = document ingestion /
+graph / evidence; shared = infrastructure):
+
+**W1 — dispatcher, tools, sessions, FHIR proxy**
+
+| Route | Method | File:line |
+|---|---|---|
+| `/triage/census` | POST | `main.py:494` |
+| `/briefing/{patient_id}` | POST | `main.py:603` |
+| `/session/{session_id}/query` | POST | `main.py:635` |
+| `/medication/safety/{patient_id}` | GET | `main.py:652` |
+| `/handoff/generate` | POST | `main.py:698` |
+| `/handoff/generate/stream` | POST | `main.py:724` |
+| `/agent/triage_rationale/{patient_id}` | POST | `main.py:816` |
+| `/agent/query` | POST | `main.py:841` |
+| `/agent/prefetch/status` | GET | `main.py:928` |
+| `/agent/prefetch` | POST | `main.py:951` |
+| `/agent/client-timing` | POST | `main.py:1235` |
+| `/session/{session_id}/message` | POST | `main.py:1261` |
+| `/session/{session_id}/history` | GET | `main.py:1275` |
+| `/fhir/patient/{patient_id}` | GET | `main.py:401` |
+
+**W2 — document ingestion, graph, evidence, quarantine**
+
+| Route | Method | File:line |
+|---|---|---|
+| `/document/ingest` | POST | `main.py:2035` |
+| `/evidence/search` | POST | `main.py:2665` |
+| `/agent/w2/dispatch` | POST | `main.py:2708` |
+| `/document/post-ingest-context` | POST | `main.py:3054` |
+| `/document/{document_reference_id}/chat` | POST | `main.py:3183` |
+| `/document/quarantine` | GET | `main.py:3379` |
+| `/document/quarantine/{quarantine_id}/claim` | POST | `main.py:3413` |
+| `/document/quarantine/{quarantine_id}/match` | POST | `main.py:3483` |
+| `/document/quarantine/{quarantine_id}/reject` | POST | `main.py:3566` |
+
+**Shared — infrastructure**
+
+| Route | Method | File:line |
+|---|---|---|
+| `/health` | GET | `main.py:387` |
+| `/diag/fhir` | GET | `main.py:412` |
+| `/audit/destruction-record` | POST | `main.py:301` |
+
+This classification is documentation-only — routes are not split across
+router modules. The dispatcher's W1 surface and the W2 graph share a
+single FastAPI app instance.
+
 ---
 
 ## 5. Observability
