@@ -625,16 +625,30 @@ export default function ChatSurface({
     const incomingRowIds = postApprovalGuidelines.pendingExtractionIds;
     if (lastInjectedPostApprovalRef.current === refKey) return;
     lastInjectedPostApprovalRef.current = refKey;
-    // Wire 2 — refresh the doc-chat ref's guideline list so follow-up
-    // questions land at /document/{id}/chat with the post-approval RAG
-    // snippets in scope. Preserve patient_id / document_reference_id /
-    // extraction from whatever the post-ingest path stashed earlier.
-    if (docChatContextRef.current && docChatContextRef.current.document_reference_id === refKey) {
-      docChatContextRef.current = {
-        ...docChatContextRef.current,
-        guidelines: ctx.guidelines,
-      };
-    }
+    // Wire 2 — set/refresh the doc-chat ref so follow-up questions land at
+    // /document/{id}/chat (which can answer grounded against the doc's
+    // extraction + guidelines + persisted synthesis turn) rather than
+    // /agent/query (the dispatcher, which is hard-wired to refuse treatment
+    // recommendations as the safety layer). The post-approval response IS
+    // the freshest doc context, so it wins unconditionally — earlier the
+    // guard required a pre-existing ref for the same doc, which silently
+    // no-op'd whenever the user opened the doc from DocumentsTab instead
+    // of via the upload → post-ingest path.
+    const ctxMeta = (ctx.metadata ?? {}) as { patient_id?: unknown };
+    const ctxPatientId =
+      typeof ctxMeta.patient_id === 'string' ? ctxMeta.patient_id : '';
+    const prevRef = docChatContextRef.current;
+    const prevExtraction =
+      prevRef && prevRef.document_reference_id === refKey
+        ? prevRef.extraction
+        : null;
+    docChatContextRef.current = {
+      document_reference_id: refKey,
+      patient_id:
+        ctxPatientId || (prevRef ? prevRef.patient_id : ''),
+      guidelines: ctx.guidelines,
+      extraction: prevExtraction,
+    };
     forceScrollOnNextMessage.current = true;
     // Forward the extraction citations + bbox layout + pdf source onto this
     // message's metadata so the synthesis-citation click handler can resolve
