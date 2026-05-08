@@ -204,7 +204,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
@@ -2169,6 +2169,29 @@ async def _dispatch_multimodal_ingest(
                                "error_type": type(exc).__name__},
                     )
 
+            for idx, lab in enumerate(getattr(extraction, "pertinent_labs", []) or []):
+                try:
+                    dispatch_pending_ids.append(
+                        await _obs_writer.stage_pertinent_lab(
+                            document_id=doc_id_numeric,
+                            patient_id=patient_id,
+                            file_batch_id=file_batch_id,
+                            document_reference_id=write_result.document_reference_id,
+                            lab_value=lab,
+                            field_index=idx,
+                            source_format="docx",
+                            request_id=rid,
+                            provider_id=provider_id,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "intake_field_stage_soft_failed",
+                        extra={"request_id": rid, "format": "docx",
+                               "field_kind": "pertinent_lab", "field_index": idx,
+                               "error_type": type(exc).__name__},
+                    )
+
         elif extraction.kind == "unknown":
             for idx, fact in enumerate(getattr(extraction, "key_facts", []) or []):
                 try:
@@ -2963,6 +2986,28 @@ async def document_ingest(
                 logger.warning(
                     "intake_field_stage_soft_failed",
                     extra={"request_id": rid, "field_kind": "code_status",
+                           "error_type": type(stage_exc).__name__},
+                )
+
+        for idx, lab in enumerate(getattr(extraction, "pertinent_labs", []) or []):
+            try:
+                pending_extraction_ids.append(
+                    await _obs_writer.stage_pertinent_lab(
+                        document_id=_doc_id_int,
+                        patient_id=patient_id,
+                        file_batch_id=file_batch_id,
+                        document_reference_id=write_result.document_reference_id,
+                        lab_value=lab,
+                        field_index=idx,
+                        source_format=_src,
+                        request_id=rid,
+                        provider_id=provider_id,
+                    )
+                )
+            except Exception as stage_exc:  # noqa: BLE001
+                logger.warning(
+                    "intake_field_stage_soft_failed",
+                    extra={"request_id": rid, "field_kind": "pertinent_lab", "field_index": idx,
                            "error_type": type(stage_exc).__name__},
                 )
 

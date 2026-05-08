@@ -601,6 +601,65 @@ async def stage_allergy(
     )
 
 
+async def stage_pertinent_lab(
+    *,
+    document_id: str,
+    patient_id: str,
+    file_batch_id: str,
+    document_reference_id: str,
+    lab_value: LabValue,
+    field_index: int,
+    source_format: str = "pdf",
+    request_id: str | None = None,
+    provider_id: str | None = None,
+) -> int:
+    """Stage one ``IntakeFormField`` row for a ``pertinent_labs`` entry.
+
+    The payload is the FHIR-Observation body that ``_build_observation``
+    produces, so the existing ``'lab'`` UI editor (``LabInputs``,
+    ``_shortLabelFor``, ``_labelFor``) renders without modification — it
+    already reads ``code.coding[0].display`` + ``valueQuantity.value/unit``.
+
+    Provenance stays distinct from real lab-report Observations:
+    ``target_resource_type='IntakeFormField'`` (informational approval, no
+    FHIR write), and the deterministic id includes ``intake-lab-`` so the
+    UI's ``_kindFromRow`` regex picks the ``'lab'`` editor branch.
+
+    Approval is a no-op write (``_perform_write`` short-circuits
+    ``IntakeFormField`` to ``("written", None)``) — same semantics as
+    every other intake field today.
+    """
+    from staging import store as _staging_store
+
+    code, display = _resolve_loinc_for_lab(lab_value)
+    target_resource_id = f"copilot-{document_id}-intake-lab-{field_index}"
+    body = _build_observation(
+        document_id=document_id,
+        patient_id=patient_id,
+        lab_value=lab_value,
+        observation_id=target_resource_id,
+        loinc=(code, display),
+    )
+    locator = (
+        lab_value.citations[0].field_or_chunk_id
+        if lab_value.citations
+        else None
+    )
+    return await _staging_store.stage_pending(
+        document_reference_id=document_reference_id,
+        file_batch_id=file_batch_id,
+        patient_id=patient_id,
+        source_format=source_format,
+        target_resource_type="IntakeFormField",  # type: ignore[arg-type]
+        target_resource_id=target_resource_id,
+        payload=body,
+        locator=locator,
+        confidence=None,
+        request_id=request_id,
+        provider_id=provider_id,
+    )
+
+
 async def stage_intake_field(
     *,
     document_id: str,
