@@ -113,3 +113,28 @@ def configure_json_logging(level: str | int) -> None:
     handler.addFilter(RequestIdFilter())
     root.addHandler(handler)
     root.setLevel(level)
+
+    _silence_phi_leaking_third_party_loggers()
+
+
+# PHI safety: third-party SDKs log request/response bodies at DEBUG.
+# anthropic._base_client dumps the full prompt + completion text;
+# httpx and httpcore dump request/response bytes; redis dumps commands;
+# langfuse and langgraph emit node-level payloads. Pinning these to
+# WARNING keeps clinical content out of the log stream regardless of
+# the root level. Application-owned loggers are unaffected.
+_PHI_LEAKING_THIRD_PARTY_LOGGERS = (
+    "anthropic",
+    "httpx",
+    "httpcore",
+    "urllib3",
+    "redis",
+    "langfuse",
+    "langgraph",
+    "langchain",
+)
+
+
+def _silence_phi_leaking_third_party_loggers() -> None:
+    for name in _PHI_LEAKING_THIRD_PARTY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
