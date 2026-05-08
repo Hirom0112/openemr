@@ -68,9 +68,51 @@ function _titleCase(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 }
 
-function _kindLabelFromByResource(byResource: Record<string, number>): string {
-  if ((byResource.Observation ?? 0) > 0) return 'Lab Report';
-  if ((byResource.IntakeFormField ?? 0) > 0) return 'Intake Form';
+/** Walk an arbitrary payload looking for the first dict that carries a
+ *  `field_or_chunk_id` (or its FHIR-shape sibling `bbox_id`). Used by
+ *  the format detector below — we don't care which field the citation
+ *  hangs off, only what its locator string looks like. */
+function _firstLocator(obj: unknown): string {
+  if (!obj || typeof obj !== 'object') return '';
+  if (Array.isArray(obj)) {
+    for (const v of obj) {
+      const f = _firstLocator(v);
+      if (f) return f;
+    }
+    return '';
+  }
+  const r = obj as Record<string, unknown>;
+  for (const k of ['field_or_chunk_id', 'bbox_id']) {
+    const v = r[k];
+    if (typeof v === 'string' && v) return v;
+  }
+  for (const v of Object.values(r)) {
+    const f = _firstLocator(v);
+    if (f) return f;
+  }
+  return '';
+}
+
+/** 'docx' (para=N locator), 'pdf' (pN-bNNN locator), or 'unknown'.
+ *  Used to distinguish DOCX referral letters from PDF intake forms —
+ *  both stage as IntakeFormField rows so target_resource_type alone
+ *  can't tell them apart. */
+function _formatHintFromRow(row: PendingExtractionRow): 'docx' | 'pdf' | 'unknown' {
+  const id = _firstLocator(row.payload);
+  if (!id) return 'unknown';
+  if (/^para=\d+/.test(id)) return 'docx';
+  if (/^p\d+-b\d+/.test(id)) return 'pdf';
+  return 'unknown';
+}
+
+function _kindLabel(
+  byResource: Record<string, number>,
+  format: 'docx' | 'pdf' | 'unknown',
+): string {
+  if ((byResource.Observation ?? 0) > 0) return 'Lab';
+  if ((byResource.IntakeFormField ?? 0) > 0) {
+    return format === 'docx' ? 'Referral' : 'Intake';
+  }
   if ((byResource.Task ?? 0) > 0) return 'Task';
   if ((byResource.AllergyIntolerance ?? 0) > 0) return 'Allergy';
   return 'Document';
@@ -80,6 +122,8 @@ function groupRows(rows: PendingExtractionRow[]): DocumentGroup[] {
   const map = new Map<string, DocumentGroup>();
   // Cached per-document last name; we walk demographics rows once per group.
   const lastNames = new Map<string, string>();
+  // First citation-locator shape we see for the group decides the format.
+  const formats = new Map<string, 'docx' | 'pdf' | 'unknown'>();
   for (const row of rows) {
     const key = row.document_reference_id || '(unknown)';
     let group = map.get(key);
@@ -104,11 +148,16 @@ function groupRows(rows: PendingExtractionRow[]): DocumentGroup[] {
       const ln = _lastNameFromRow(row);
       if (ln) lastNames.set(key, ln);
     }
+    if ((formats.get(key) ?? 'unknown') === 'unknown') {
+      const f = _formatHintFromRow(row);
+      if (f !== 'unknown') formats.set(key, f);
+    }
   }
   // Compute display labels post-grouping so byResource is fully populated.
   for (const group of map.values()) {
     const last = lastNames.get(group.documentRef) ?? '';
-    const kind = _kindLabelFromByResource(group.byResource);
+    const fmt = formats.get(group.documentRef) ?? 'unknown';
+    const kind = _kindLabel(group.byResource, fmt);
     group.displayLabel = last ? `${_titleCase(last)} ${kind}` : kind;
   }
   // Stable order: by documentRef ascending.

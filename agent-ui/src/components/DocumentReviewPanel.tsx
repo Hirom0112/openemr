@@ -3019,12 +3019,25 @@ function _documentLabel(rows: LoadedRow[]): string | null {
     }
     break;
   }
+  // Detect format by inspecting any row's first citation locator —
+  // 'para=N' is DOCX prose, 'pN-bNNN' is PDF/PNG vision. Distinguishes
+  // referral letters (DOCX) from intake forms (PDF) when both surface
+  // as IntakeFormField rows.
+  let format: 'docx' | 'pdf' | 'unknown' = 'unknown';
+  for (const r of rows) {
+    const cit = _findFirstCitation(r.row.payload);
+    const id = (cit && typeof cit === 'object'
+      ? (cit as { field_or_chunk_id?: string }).field_or_chunk_id
+      : null) ?? '';
+    if (/^para=\d+/.test(id)) { format = 'docx'; break; }
+    if (/^p\d+-b\d+/.test(id)) { format = 'pdf'; break; }
+  }
   let kind: string | null = null;
   for (const r of rows) {
     const k = _kindFromRow(r.row);
     if (k === 'lab') { kind = 'Lab Report'; break; }
     if (k !== 'demographics' && k !== 'other') {
-      kind = 'Intake Form';
+      kind = format === 'docx' ? 'Referral' : 'Intake Form';
       break;
     }
   }
