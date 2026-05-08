@@ -87,6 +87,38 @@ HARD RULES:
 
   NEVER drop a labelled lab value silently. Omit the field entirely
   if the document carries no labs.
+- Problem List / Past Medical History extraction: when the prose
+  has a section like "Past Medical History:", "Problem List:",
+  "PMH:", or narrates problems inline ("known to have…",
+  "history significant for…"), populate ``problem_list`` with one
+  ProblemListItem per distinct condition. Each item carries:
+      condition    REQUIRED — verbatim from the prose
+      icd10_code   optional — see grounding rule below
+      snomed_code  optional
+      onset_date   optional — accept verbatim values including
+                   "since 2018" / "adolescence" / "in his 30s"
+      status       optional — map "active"→"active",
+                   "resolved"→"resolved", "history of"/"former"→
+                   "inactive"; omit when not stated
+  Each ProblemListItem MUST cite a paragraph (or run) where the
+  condition value appears. Example for "PMH: Atrial fibrillation
+  (I48.91), Hyperlipidemia, BPH" cited at para=18::
+      {"condition": "Atrial fibrillation",
+       "icd10_code": "I48.91",
+       "citations": [{"source_type": "document",
+                       "source_id": "<doc_ref_id>",
+                       "page_or_section": "Past Medical History",
+                       "field_or_chunk_id": "para=18",
+                       "quote_or_value": "Atrial fibrillation (I48.91)"}]}
+  ICD-10 GROUNDING RULE (HARD): only emit ``icd10_code`` if the
+  code appears LITERALLY in the prose. Do NOT infer ICD-10 codes
+  from condition names — even if you "know" Atrial fibrillation
+  maps to I48.91, do NOT emit the code unless the document prints
+  it. The system runs a literal-substring validator
+  post-extraction and DROPS any code that doesn't appear in the
+  rendered text; the row stays (condition + onset + status +
+  citations preserved) but the fabricated code is nulled out.
+  Same rule applies to ``snomed_code``.
 - code_status.value must be one of:
     "full_code", "DNR", "DNI", "comfort_care", "POLST", "unknown".
 - Omit any optional field you cannot ground in the prose.

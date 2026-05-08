@@ -69,6 +69,38 @@ HARD RULES (the agent will reject your output otherwise):
 - code_status.value must be one of:
     "full_code", "DNR", "DNI", "comfort_care", "POLST", "unknown".
   Map common phrases: "Full Code"->"full_code", "DNR/DNI"->"DNR".
+- Problem List / Past Medical History: when the document has a
+  section labelled "PROBLEM LIST", "PAST MEDICAL HISTORY", "PMH",
+  or equivalent, populate ``problem_list`` with one ProblemListItem
+  per row. Tabular layout typical:
+      CONDITION    → condition  (REQUIRED, verbatim text)
+      ICD-10       → icd10_code (optional — see grounding rule)
+      SNOMED       → snomed_code (optional)
+      ONSET        → onset_date (optional, accept verbatim
+                     including "~2018" / "adolescence")
+      STATUS       → status     (optional — map "Active"→"active",
+                     "Resolved"→"resolved", "Inactive"/"Hx"→
+                     "inactive"; omit when not stated)
+  Each ProblemListItem MUST have ≥1 citation pointing to the bbox
+  where the condition value appears. Example for the row
+  "Atrial fibrillation | I48.91 | 2022 | Active" cited at p1-b015::
+      {"condition": "Atrial fibrillation",
+       "icd10_code": "I48.91", "onset_date": "2022",
+       "status": "active",
+       "citations": [{"source_type": "document",
+                       "source_id": "<doc_ref_id>",
+                       "page_or_section": "1",
+                       "field_or_chunk_id": "p1-b015",
+                       "quote_or_value": "I48.91"}]}
+  ICD-10 GROUNDING RULE (HARD): only emit ``icd10_code`` if the
+  code appears LITERALLY in the source document. Do NOT infer
+  ICD-10 codes from condition names — even if you "know" Atrial
+  fibrillation maps to I48.91, do NOT emit the code unless the
+  document prints it. The system runs a literal-substring
+  validator post-extraction and DROPS any code that doesn't
+  appear in the OCR text; the row stays (condition + onset +
+  status + citations preserved) but the fabricated code is
+  nulled out. Same rule applies to ``snomed_code``.
 - For each MedicationItem, populate as many of these fields as the
   source document grounds:
     name        — required.
