@@ -63,6 +63,30 @@ HARD RULES:
   + dose pair, OR via a paragraph-level Citation with the full
   ``quote_or_value`` substring. Never drop a numeric clinical fact
   silently.
+- Lab values inside a non-LabReport document (e.g. a "Pertinent
+  Labs" section of a referral letter, or values cited in HPI prose)
+  MUST be surfaced as entries in ``pertinent_labs``. Each entry is a
+  ``LabValue`` with the same shape used by ``lab_report``: populate
+  ``test_name``, ``normalized_test_name``, ``value``, ``unit`` when
+  printed, ``reference_range`` when printed, ``collection_date`` when
+  printed, ``abnormal_flag`` (use ``"high"`` / ``"low"`` only when the
+  document explicitly flags the value, e.g. ``[HIGH]`` or ``H``;
+  otherwise ``"unknown"``), and a paragraph-level Citation. Example
+  for the line ``"LDL-C: 142 mg/dL [HIGH]  (2026-04-12)"`` cited at
+  ``para=26``::
+
+      {"test_name": "LDL-C",
+       "normalized_test_name": "LDL cholesterol",
+       "value": "142", "unit": "mg/dL", "reference_range": null,
+       "collection_date": "2026-04-12", "abnormal_flag": "high",
+       "citations": [{"source_type": "document",
+                       "source_id": "<doc_ref_id>",
+                       "page_or_section": "Pertinent Labs",
+                       "field_or_chunk_id": "para=26",
+                       "quote_or_value": "LDL-C: 142 mg/dL [HIGH]"}]}
+
+  NEVER drop a labelled lab value silently. Omit the field entirely
+  if the document carries no labs.
 - code_status.value must be one of:
     "full_code", "DNR", "DNI", "comfort_care", "POLST", "unknown".
 - Omit any optional field you cannot ground in the prose.

@@ -249,6 +249,14 @@ class IntakeForm(BaseModel):
     allergies: List[AllergyItem] = Field(default_factory=list)
     family_history: List[FamilyHistoryItem] = Field(default_factory=list)
     code_status: Optional[CodeStatus] = None
+    # Lab values surfaced from a non-LabReport document (e.g. labs section
+    # inside a referral letter or admission note). Reuses ``LabValue`` so
+    # the schema, citation contract, and UI editor are shared with the
+    # primary lab extraction path. Provenance stays distinct: these stage
+    # as ``IntakeFormField`` rows (informational approval, no FHIR write),
+    # NOT as ``Observation`` rows like the LabReport flow. Optional and
+    # additive — older payloads without this field still validate.
+    pertinent_labs: List[LabValue] = Field(default_factory=list)
     classifier_confidence: float
     ocr_confidence_range: Tuple[float, float]
     extracted_at: datetime

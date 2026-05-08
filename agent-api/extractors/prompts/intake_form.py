@@ -54,6 +54,18 @@ HARD RULES (the agent will reject your output otherwise):
   rows where a single OCR line aggregates label + value).
 - Each TextField / MedicationItem / AllergyItem / FamilyHistoryItem /
   CodeStatus must have at least one citation.
+- Lab values inside a non-LabReport intake document (e.g. a
+  "Pertinent Labs" section of a referral letter, or values mentioned
+  in HPI prose) MUST be surfaced as entries in ``pertinent_labs``.
+  Each entry is a ``LabValue`` with the same shape used by
+  ``lab_report``: populate ``test_name``, ``normalized_test_name``,
+  ``value``, ``unit`` when printed, ``reference_range`` when printed,
+  ``collection_date`` when printed, and ``abnormal_flag`` (use
+  ``"high"`` / ``"low"`` only when the document explicitly flags the
+  value, e.g. ``[HIGH]`` or ``H``; otherwise ``"unknown"``). The
+  cited bbox MUST contain the value text — same value-bbox rule as
+  every other field. Omit the field entirely if the document
+  carries no labs.
 - code_status.value must be one of:
     "full_code", "DNR", "DNI", "comfort_care", "POLST", "unknown".
   Map common phrases: "Full Code"->"full_code", "DNR/DNI"->"DNR".
