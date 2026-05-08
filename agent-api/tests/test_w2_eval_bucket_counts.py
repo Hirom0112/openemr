@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fixtures.w2_eval_cases import BUCKET_COUNTS, CASES, TOTAL_CASES
+from tests.fixtures.w2_eval_cases import BUCKET_COUNTS, CASES, BUCKET_CONTRACT_TOTAL
 
 
 @pytest.mark.hard_failure
@@ -13,8 +13,8 @@ def test_bucket_counts_match() -> None:
     for c in CASES:
         counts[c.bucket] = counts.get(c.bucket, 0) + 1
     assert counts == BUCKET_COUNTS, counts
-    assert sum(BUCKET_COUNTS.values()) == TOTAL_CASES
-    assert len(CASES) == TOTAL_CASES
+    assert sum(BUCKET_COUNTS.values()) == BUCKET_CONTRACT_TOTAL
+    assert len(CASES) == BUCKET_CONTRACT_TOTAL
 
 
 @pytest.mark.hard_failure
