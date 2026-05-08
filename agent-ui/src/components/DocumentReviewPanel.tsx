@@ -660,13 +660,19 @@ export default function DocumentReviewPanel(
   // citation gets its own chip + bbox; everything else is 1 card per row.
   const cards: VirtualCard[] = useMemo(() => {
     const out: VirtualCard[] = [];
-    let ordinal = 0;
+    // First pass — build cards with placeholder ordinals (0). Real ordinals
+    // are assigned after sort so they reflect document order, not staging
+    // order. (Staging order is grouped-by-category and gets reshuffled
+    // whenever a new field group is added — e.g. problem_list landed at the
+    // top of main.py's staging loop and pushed demographics to the end of
+    // the rail. Sorting by paraIdx makes both the document chips AND the
+    // rail cards flow top-to-bottom together; click-bridges still use
+    // cardId, so the renumber is purely cosmetic.)
     for (const lr of rows) {
       const k = _kind(lr.row);
       if (k === 'demographics') {
         const subs = _demographicsSubCards(lr.row);
         for (const s of subs) {
-          ordinal += 1;
           const cardId = `${lr.row.id}:${s.subfield}`;
           out.push({
             id: cardId,
@@ -676,7 +682,7 @@ export default function DocumentReviewPanel(
               ? {
                   cardId,
                   rowId: lr.row.id,
-                  ordinal,
+                  ordinal: 0,
                   page: s.citation.page,
                   bbox: s.citation.bbox,
                   fieldOrChunkId: s.citation.fieldOrChunkId,
@@ -690,7 +696,6 @@ export default function DocumentReviewPanel(
           });
         }
       } else {
-        ordinal += 1;
         const cardId = `${lr.row.id}`;
         const c = _primaryCitation(lr.row);
         out.push({
@@ -701,7 +706,7 @@ export default function DocumentReviewPanel(
             ? {
                 cardId,
                 rowId: lr.row.id,
-                ordinal,
+                ordinal: 0,
                 page: c.page,
                 bbox: c.bbox,
                 fieldOrChunkId: c.fieldOrChunkId,
@@ -715,7 +720,28 @@ export default function DocumentReviewPanel(
         });
       }
     }
-    return out;
+    // Sort by document position (paraIdx ascending). Cards with no paraIdx
+    // (manual citations, fields whose extraction had no locator) sink to
+    // the end so they don't claim low ordinals. Array.prototype.sort is
+    // stable per ES2019, so cards sharing a paraIdx (e.g. name + dob + mrn
+    // all citing the same "RE:" line) keep their staging-loop sub-order —
+    // which matches typical document reading order within a line.
+    out.sort((a, b) => {
+      const pa = a.citation?.paraIdx ?? Number.POSITIVE_INFINITY;
+      const pb = b.citation?.paraIdx ?? Number.POSITIVE_INFINITY;
+      return pa - pb;
+    });
+    // Second pass — assign real ordinals 1..N in the now-sorted order.
+    // Uncited cards still consume an ordinal slot to preserve the rail's
+    // overall numbering continuity (so "of N reviewed" math doesn't drift).
+    let ord = 0;
+    return out.map((c) => {
+      ord += 1;
+      if (c.citation) {
+        return { ...c, citation: { ...c.citation, ordinal: ord } };
+      }
+      return c;
+    });
   }, [rows]);
 
   // Flat citation list — drives the bbox layer + initial-citation focus.
