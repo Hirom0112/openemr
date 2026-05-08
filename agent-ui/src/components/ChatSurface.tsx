@@ -661,7 +661,7 @@ export default function ChatSurface({
     // be inserting an empty assistant bubble.
     const hasUsefulCitations = !!extForMeta
       && Array.isArray(extForMeta.citations)
-      && extForMeta.citations.some((c) => c.source_type === 'document');
+      && extForMeta.citations.some((c) => (c.source_type === 'document' || c.source_type === 'observation'));
     setMessages((prev) => {
       // Find the prior post-ingest message for this refKey so we can copy
       // its staging metadata (file_batch_id + pending_extraction_ids) onto
@@ -726,10 +726,9 @@ export default function ChatSurface({
             },
             // When non-null, `readExtraction()` picks this up so fact:obs
             // chip clicks resolve against the same citation list the
-            // pre-approval message used. The existing W2 chip block above
-            // filters to source_type === 'document', so observation
-            // citations stay invisible there — fact:obs only surfaces via
-            // the synthesis chip.
+            // pre-approval message used. The W2 chip block above accepts
+            // both document- and observation-scoped citations, so lab-report
+            // observations surface as chips alongside the synthesis chip.
             ...(extForMeta ? { extraction: extForMeta } : {}),
             // Authoritative citation resolution map (preferred over the
             // speculative source_id == row_id match in the click handler).
@@ -2155,7 +2154,7 @@ export default function ChatSurface({
                     {(() => {
                       const ext = readExtraction(msg.response);
                       if (!ext || !ext.citations || ext.citations.length === 0) return null;
-                      const docCitations = ext.citations.filter((c) => c.source_type === 'document');
+                      const docCitations = ext.citations.filter((c) => (c.source_type === 'document' || c.source_type === 'observation'));
                       if (docCitations.length === 0) return null;
                       // Pull staging metadata + document_reference_id for
                       // the read-only review-panel route. When both are
