@@ -1,5 +1,7 @@
 # Clinical Co-Pilot — Week 2 Architecture
 
+> **Scope:** This document describes Week 2 — document ingestion, the multi-agent LangGraph supervisor + workers + critic, hybrid RAG over the guideline corpus, and the W2 eval gate. The W1 dispatcher (raw Anthropic SDK + custom Checkpointer; UC-1..UC-5 over FHIR) is documented separately in `W1_ARCHITECTURE.md`. Where the two docs describe the same system component (observability §5.5, FHIR Binary deviation, eval-gate marker structure), this document is the source of truth for W2 surfaces and `W1_ARCHITECTURE.md` for W1 surfaces. Cross-references are inline throughout.
+
 ---
 
 ## Quick Read
