@@ -1034,17 +1034,56 @@ export default function ChatSurface({
       try {
         // Wire 3 — thread prior conversation turns so the chat handler can
         // resolve pronouns ("what about the lactate?") against earlier Q/A.
-        // Only role+content pairs; structured cards (briefing/meds/handoff)
-        // are skipped so the prompt stays compact.
+        // Synthesis cards have empty `narrative` because the rendered
+        // 4-section content lives under metadata.post_ingest_context.synthesis;
+        // render it as plain text with embedded citation tokens (mirrors Wire 1
+        // backend persistence) so the chat handler sees the briefing as
+        // patient context.
+        const renderSynthesisAsText = (s: SynthesisOutput): string => {
+          const lines: string[] = ['Approved-record summary for this document.', ''];
+          if (s.approved_facts.trim()) {
+            lines.push(s.approved_facts.trim(), '');
+          }
+          if (s.clinical_signals.length > 0) {
+            lines.push('Clinical signals:');
+            for (const sig of s.clinical_signals) {
+              const tokens = sig.citation_ids.map((c) => `[${c}]`).join(' ');
+              lines.push(`- ${sig.claim}${tokens ? ' ' + tokens : ''}`);
+            }
+            lines.push('');
+          }
+          if (s.guideline_mappings.length > 0) {
+            lines.push('Guideline mappings:');
+            for (const m of s.guideline_mappings) {
+              lines.push(`- ${m.claim} [guideline:${m.chunk_id}]`);
+            }
+            lines.push('');
+          }
+          if (s.next_steps.length > 0) {
+            lines.push('Suggested next steps:');
+            for (const ns of s.next_steps) lines.push(`- ${ns}`);
+          }
+          return lines.join('\n').trim();
+        };
         const docHistory: { role: 'user' | 'assistant'; content: string }[] = [];
         for (const m of messages) {
           if (m.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
             docHistory.push({ role: 'user', content: m.content });
-          } else if (m.role === 'assistant') {
-            const narrative = m.response?.narrative;
-            if (typeof narrative === 'string' && narrative.trim()) {
-              docHistory.push({ role: 'assistant', content: narrative });
-            }
+            continue;
+          }
+          if (m.role !== 'assistant') continue;
+          const meta = m.response?.metadata as
+            | { post_ingest_context?: { synthesis?: SynthesisOutput | null } }
+            | undefined;
+          const synth = meta?.post_ingest_context?.synthesis;
+          if (synth) {
+            const rendered = renderSynthesisAsText(synth);
+            if (rendered) docHistory.push({ role: 'assistant', content: rendered });
+            continue;
+          }
+          const narrative = m.response?.narrative;
+          if (typeof narrative === 'string' && narrative.trim()) {
+            docHistory.push({ role: 'assistant', content: narrative });
           }
         }
         const docResp = await sendDocumentChatMessage(ingestBaseUrl, docCtx.document_reference_id, {
