@@ -342,6 +342,15 @@ async def _perform_write(row: dict[str, Any]) -> tuple[WriteOutcome, str | None]
     ``"payload_invalid"`` so the caller always has a stable string.
     """
     target_type = str(row.get("target_resource_type") or "")
+    if target_type == "IntakeFormField":
+        # Documents-tab redesign: intake_form fields (allergies, medications,
+        # demographics, family hx, chief concern, code status) extracted from
+        # PDF intake forms and DOCX referral letters have no FHIR writers in
+        # this build. Approval is informational — the extracted text is
+        # citable from the document store; no discrete FHIR write happens.
+        # Returning "written" here lets the row reach a terminal state so the
+        # stuck-approved reaper doesn't keep retrying it.
+        return "written", None
     if target_type == "Task":
         return "failed", "task_writer_unavailable"
     if target_type == "AllergyIntolerance":
@@ -592,10 +601,169 @@ async def stage_allergy(
     )
 
 
+async def stage_intake_field(
+    *,
+    document_id: str,
+    patient_id: str,
+    file_batch_id: str,
+    document_reference_id: str,
+    field_kind: str,
+    field_index: int,
+    payload: dict[str, Any],
+    locator: str | None = None,
+    source_format: str = "pdf",
+    request_id: str | None = None,
+    provider_id: str | None = None,
+) -> int:
+    """Stage one ``IntakeFormField`` row in ``copilot_pending_extractions``.
+
+    ``field_kind`` is one of ``allergy | medication | demographics |
+    family_history | chief_concern | code_status | key_fact``. The
+    deterministic ``target_resource_id`` is
+    ``copilot-{document_id}-intake-{field_kind}-{field_index}``.
+
+    The approve transition for ``IntakeFormField`` rows is informational
+    (no FHIR write) — the extracted text becomes chat-citable from the
+    document store directly. The approve→write dispatcher in
+    ``staging/router.py`` short-circuits this target_resource_type.
+    """
+    from staging import store as _staging_store
+
+    sanitised_kind = re.sub(r"[^\w.-]+", "-", field_kind.strip()) or "field"
+    target_resource_id = (
+        f"copilot-{document_id}-intake-{sanitised_kind}-{field_index}"
+    )
+    pending_id = await _staging_store.stage_pending(
+        document_reference_id=document_reference_id,
+        file_batch_id=file_batch_id,
+        patient_id=patient_id,
+        source_format=source_format,
+        target_resource_type="IntakeFormField",  # type: ignore[arg-type]
+        target_resource_id=target_resource_id,
+        payload=payload,
+        locator=locator,
+        confidence=None,
+        request_id=request_id,
+        provider_id=provider_id,
+    )
+    return pending_id
+
+
+# ─────────────────── Post-approval-context — MySQL read-back ─────────────────
+#
+# The post-approval-context route needs to fan out RAG against approved
+# ``copilot_observations`` rows for a given document. The eval runner has a
+# similar one-shot reader (``evals/runner.py:583``) but uses a separate
+# ``COPILOT_OBSERVATIONS_MYSQL_URL`` env knob. The shared OpenEMR pool used
+# by ``audit/openemr_log.py`` is the correct surface for production reads.
+
+_OBS_READBACK_SQL = (
+    "SELECT id, fhir_resource FROM copilot_observations WHERE document_id=%s"
+)
+
+
+async def read_observations_for_document(
+    document_id: str | int,
+) -> list[dict[str, Any]]:
+    """Read ``copilot_observations`` rows for a given numeric ``document_id``.
+
+    Returns ``[{"id", "fhir_resource", "loinc_code", "display", "value"}, ...]``.
+    Returns ``[]`` if MySQL is unreachable, the table is empty, or aiomysql
+    is not installed — callers must treat this as a soft path (RAG can
+    still fire on intake-field text).
+    """
+    import json as _json
+
+    try:
+        import aiomysql  # type: ignore[import-not-found]
+    except Exception:  # pragma: no cover — optional dep
+        return []
+
+    # Reuse the same connection settings as audit/openemr_log.py — that pool
+    # already targets the OpenEMR app DB where copilot_observations lives.
+    try:
+        conn = await aiomysql.connect(
+            host=settings.openemr_db_host,
+            port=settings.openemr_db_port,
+            user=settings.openemr_db_user,
+            password=settings.openemr_db_password,
+            db=settings.openemr_db_name,
+            autocommit=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — soft path
+        _logger.warning(
+            "observation_readback_connect_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return []
+
+    out: list[dict[str, Any]] = []
+    try:
+        cur = await conn.cursor()
+        await cur.execute(_OBS_READBACK_SQL, (str(document_id),))
+        rows = await cur.fetchall()
+        for row in rows or []:
+            obs_id = row[0]
+            try:
+                fhir_resource = (
+                    _json.loads(row[1])
+                    if isinstance(row[1], (str, bytes))
+                    else (row[1] or {})
+                )
+            except Exception:
+                fhir_resource = {}
+            if not isinstance(fhir_resource, dict):
+                fhir_resource = {}
+
+            loinc_code = ""
+            display = ""
+            coding = (
+                (fhir_resource.get("code") or {}).get("coding")
+                if isinstance(fhir_resource.get("code"), dict)
+                else None
+            )
+            if isinstance(coding, list) and coding:
+                first = coding[0]
+                if isinstance(first, dict):
+                    loinc_code = str(first.get("code") or "")
+                    display = str(first.get("display") or "")
+
+            value: Any = None
+            vq = fhir_resource.get("valueQuantity")
+            if isinstance(vq, dict):
+                value = vq.get("value")
+            elif "valueString" in fhir_resource:
+                value = fhir_resource.get("valueString")
+
+            out.append(
+                {
+                    "id": obs_id,
+                    "fhir_resource": fhir_resource,
+                    "loinc_code": loinc_code,
+                    "display": display,
+                    "value": value,
+                }
+            )
+    except Exception as exc:  # noqa: BLE001 — soft path
+        _logger.warning(
+            "observation_readback_query_failed",
+            extra={"error_type": type(exc).__name__},
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return out
+
+
 __all__ = [
     "deterministic_observation_id",
     "lookup_loinc",
+    "read_observations_for_document",
     "stage_allergy",
+    "stage_intake_field",
     "stage_observation",
     "stage_task",
     "write_observation",

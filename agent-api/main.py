@@ -1694,6 +1694,14 @@ async def _dispatch_multimodal_ingest(
     # 3) Branch by format.
     parse_summary: dict[str, Any] | None = None
     file_batch_id = uuid.uuid4().hex  # one batch per ingest call
+    # B2 / B3 — DOCX (and unknown documents from DOCX) flow their typed
+    # extraction back to the response envelope so the editor can render
+    # an immediate review surface instead of a stub. Lab/HL7/XLSX/TIFF
+    # continue to return ``extraction: None`` (their values are surfaced
+    # via the staging table).
+    dispatch_extraction: dict[str, Any] | None = None
+    dispatch_citations: list[dict[str, Any]] = []
+    dispatch_pending_ids: list[int] = []
     t_parse_start = time.perf_counter()
 
     # PHP custom-observation upsert enforces ``r"^copilot-\d+-..."``; the
@@ -1905,6 +1913,7 @@ async def _dispatch_multimodal_ingest(
     elif detected_format == "docx":
         from documents import docx_loader as _docx_loader
         from extractors import intake as _intake
+        from observations import writer as _obs_writer
         # Loader is referenced via the extractor; the dispatcher just
         # owns the "DOCX → prose intake" routing decision.
         _ = _docx_loader  # keep the import live so the contract is obvious
@@ -1935,6 +1944,204 @@ async def _dispatch_multimodal_ingest(
             "kind": extraction.kind,
             "classifier_confidence": float(extraction.classifier_confidence),
         }
+
+        # B2 — surface the typed extraction in the response envelope.
+        dispatch_extraction = extraction.model_dump(mode="json")
+        try:
+            dispatch_citations = _flatten_citations(extraction)
+        except Exception:  # noqa: BLE001 — soft path
+            dispatch_citations = []
+
+        # B3 — stage IntakeFormField rows per extracted field so the editor
+        # can review them. Approval for IntakeFormField is informational
+        # (no FHIR write) — the staging/router short-circuits the dispatch.
+        def _first_locator_docx(citations: Any) -> str | None:
+            try:
+                if citations and citations[0]:
+                    return citations[0].field_or_chunk_id
+            except Exception:
+                return None
+            return None
+
+        if extraction.kind == "intake_form":
+            demo = getattr(extraction, "demographics", None)
+            if demo is not None:
+                try:
+                    dispatch_pending_ids.append(
+                        await _obs_writer.stage_intake_field(
+                            document_id=doc_id_numeric,
+                            patient_id=patient_id,
+                            file_batch_id=file_batch_id,
+                            document_reference_id=write_result.document_reference_id,
+                            field_kind="demographics",
+                            field_index=0,
+                            payload={"demographics": demo.model_dump(mode="json")},
+                            source_format="docx",
+                            request_id=rid,
+                            provider_id=provider_id,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "intake_field_stage_soft_failed",
+                        extra={"request_id": rid, "format": "docx",
+                               "field_kind": "demographics",
+                               "error_type": type(exc).__name__},
+                    )
+
+            chief = getattr(extraction, "chief_concern", None)
+            if chief is not None:
+                try:
+                    dispatch_pending_ids.append(
+                        await _obs_writer.stage_intake_field(
+                            document_id=doc_id_numeric,
+                            patient_id=patient_id,
+                            file_batch_id=file_batch_id,
+                            document_reference_id=write_result.document_reference_id,
+                            field_kind="chief_concern",
+                            field_index=0,
+                            payload=chief.model_dump(mode="json"),
+                            locator=_first_locator_docx(getattr(chief, "citations", None)),
+                            source_format="docx",
+                            request_id=rid,
+                            provider_id=provider_id,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "intake_field_stage_soft_failed",
+                        extra={"request_id": rid, "format": "docx",
+                               "field_kind": "chief_concern",
+                               "error_type": type(exc).__name__},
+                    )
+
+            for idx, med in enumerate(getattr(extraction, "current_medications", []) or []):
+                try:
+                    dispatch_pending_ids.append(
+                        await _obs_writer.stage_intake_field(
+                            document_id=doc_id_numeric,
+                            patient_id=patient_id,
+                            file_batch_id=file_batch_id,
+                            document_reference_id=write_result.document_reference_id,
+                            field_kind="medication",
+                            field_index=idx,
+                            payload=med.model_dump(mode="json"),
+                            locator=_first_locator_docx(getattr(med, "citations", None)),
+                            source_format="docx",
+                            request_id=rid,
+                            provider_id=provider_id,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "intake_field_stage_soft_failed",
+                        extra={"request_id": rid, "format": "docx",
+                               "field_kind": "medication", "field_index": idx,
+                               "error_type": type(exc).__name__},
+                    )
+
+            for idx, allergy in enumerate(getattr(extraction, "allergies", []) or []):
+                try:
+                    dispatch_pending_ids.append(
+                        await _obs_writer.stage_intake_field(
+                            document_id=doc_id_numeric,
+                            patient_id=patient_id,
+                            file_batch_id=file_batch_id,
+                            document_reference_id=write_result.document_reference_id,
+                            field_kind="allergy",
+                            field_index=idx,
+                            payload=allergy.model_dump(mode="json"),
+                            locator=_first_locator_docx(getattr(allergy, "citations", None)),
+                            source_format="docx",
+                            request_id=rid,
+                            provider_id=provider_id,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "intake_field_stage_soft_failed",
+                        extra={"request_id": rid, "format": "docx",
+                               "field_kind": "allergy", "field_index": idx,
+                               "error_type": type(exc).__name__},
+                    )
+
+            for idx, fam in enumerate(getattr(extraction, "family_history", []) or []):
+                try:
+                    dispatch_pending_ids.append(
+                        await _obs_writer.stage_intake_field(
+                            document_id=doc_id_numeric,
+                            patient_id=patient_id,
+                            file_batch_id=file_batch_id,
+                            document_reference_id=write_result.document_reference_id,
+                            field_kind="family_history",
+                            field_index=idx,
+                            payload=fam.model_dump(mode="json"),
+                            locator=_first_locator_docx(getattr(fam, "citations", None)),
+                            source_format="docx",
+                            request_id=rid,
+                            provider_id=provider_id,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "intake_field_stage_soft_failed",
+                        extra={"request_id": rid, "format": "docx",
+                               "field_kind": "family_history", "field_index": idx,
+                               "error_type": type(exc).__name__},
+                    )
+
+            cs = getattr(extraction, "code_status", None)
+            if cs is not None:
+                try:
+                    dispatch_pending_ids.append(
+                        await _obs_writer.stage_intake_field(
+                            document_id=doc_id_numeric,
+                            patient_id=patient_id,
+                            file_batch_id=file_batch_id,
+                            document_reference_id=write_result.document_reference_id,
+                            field_kind="code_status",
+                            field_index=0,
+                            payload=cs.model_dump(mode="json"),
+                            locator=_first_locator_docx(getattr(cs, "citations", None)),
+                            source_format="docx",
+                            request_id=rid,
+                            provider_id=provider_id,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "intake_field_stage_soft_failed",
+                        extra={"request_id": rid, "format": "docx",
+                               "field_kind": "code_status",
+                               "error_type": type(exc).__name__},
+                    )
+
+        elif extraction.kind == "unknown":
+            for idx, fact in enumerate(getattr(extraction, "key_facts", []) or []):
+                try:
+                    anchor = fact.citations[0] if fact.citations else None
+                    dispatch_pending_ids.append(
+                        await _obs_writer.stage_intake_field(
+                            document_id=doc_id_numeric,
+                            patient_id=patient_id,
+                            file_batch_id=file_batch_id,
+                            document_reference_id=write_result.document_reference_id,
+                            field_kind="key_fact",
+                            field_index=idx,
+                            payload=fact.model_dump(mode="json"),
+                            locator=anchor.field_or_chunk_id if anchor else None,
+                            source_format="docx",
+                            request_id=rid,
+                            provider_id=provider_id,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "intake_field_stage_soft_failed",
+                        extra={"request_id": rid, "format": "docx",
+                               "field_kind": "key_fact", "field_index": idx,
+                               "error_type": type(exc).__name__},
+                    )
 
     elif detected_format == "tiff":
         from documents.tiff_loader import extract_tiff_layout
@@ -2012,8 +2219,8 @@ async def _dispatch_multimodal_ingest(
     return {
         "document_reference_id": write_result.document_reference_id,
         "extraction_id": claim.extraction_id,
-        "extraction": None,
-        "citations": [],
+        "extraction": dispatch_extraction,
+        "citations": dispatch_citations,
         "bbox_layout": [],
         "soft_warns": [],
         "match_provenance": match_provenance,
@@ -2026,7 +2233,10 @@ async def _dispatch_multimodal_ingest(
             if parse_summary
             else None,
             "format": detected_format,
-            "staging": {"file_batch_id": file_batch_id},
+            "staging": {
+                "file_batch_id": file_batch_id,
+                "pending_extraction_ids": dispatch_pending_ids,
+            },
             "parse_summary": parse_summary,
         },
     }
@@ -2063,6 +2273,12 @@ async def document_ingest(
     provider_id = "system"
     if principal is not None:
         provider_id = str(principal.get("provider_id") or principal.get("sub") or "system")
+
+    # One staging batch per ingest call — same shape the multimodal
+    # dispatcher uses (see ``_dispatch_multimodal_ingest``). Generated
+    # eagerly so the cached / 202 / fail branches can echo it back to the
+    # frontend in a uniform metadata envelope.
+    file_batch_id = uuid.uuid4().hex
 
     # 1) Size guard — read with a hard cap above the 25 MB limit so we can
     #    distinguish "exactly at limit" from "well over". The +1 MB allows
@@ -2478,66 +2694,245 @@ async def document_ingest(
         )
         raise HTTPException(status_code=500, detail="Document persist failed") from exc
 
-    # 6a) Phase-2 follow-up: derive one FHIR Observation per extracted
-    #     LabValue with derivedFrom -> DocumentReference. OpenEMR's deployed
-    #     FHIR layer doesn't implement Observation write, so we route through
-    #     the custom oe-module-clinical-copilot endpoint. Failures are
-    #     surfaced as soft-warns; they NEVER fail the ingest.
-    observation_ids: list[str] = []
+    # 6a) Phase 9 Slice 9.7 — stage every derived row instead of writing
+    #     directly. Lab values become ``Observation`` rows; intake fields
+    #     become ``IntakeFormField`` rows; unknown-document key facts also
+    #     stage as ``IntakeFormField`` rows so the editor has a single
+    #     surface to approve/reject from. The clinician approves rows from
+    #     the editor — only then does the Observation row hit FHIR.
     observation_soft_warns: list[dict[str, Any]] = []
-    if extraction.kind == "lab_report":
-        from observations.writer import (
-            deterministic_observation_id as _det_obs_id,
-            lookup_loinc as _lookup_loinc,
-            write_observation as _write_obs,
-        )
+    pending_extraction_ids: list[int] = []
 
-        # Pull the trailing integer from doc references shaped like
-        # "copilot:117" / "rest:9876" / "doc-test-1" so the deterministic
-        # id satisfies the PHP r"^copilot-\d+-..." rule. Fall back to a
-        # hash-derived integer when no trailing int is present.
-        _doc_ref = write_result.document_reference_id
-        _m = re.search(r"(\d+)$", _doc_ref or "")
-        _doc_id_int = _m.group(1) if _m else str(abs(hash(_doc_ref)) % (10**9))
+    # Pull the trailing integer from doc references shaped like
+    # "copilot:117" / "rest:9876" / "doc-test-1" so the deterministic id
+    # satisfies the PHP r"^copilot-\d+-..." rule. Fall back to a
+    # hash-derived integer when no trailing int is present.
+    _doc_ref = write_result.document_reference_id
+    _m = re.search(r"(\d+)$", _doc_ref or "")
+    _doc_id_int = _m.group(1) if _m else str(abs(hash(_doc_ref)) % (10**9))
+
+    if extraction.kind == "lab_report":
+        from observations import writer as _obs_writer
 
         for value in getattr(extraction, "values", []) or []:
+            anchor = value.citations[0] if value.citations else None
             try:
-                _code, _ = _lookup_loinc(value.normalized_test_name)
-                _obs_id = _det_obs_id(_doc_id_int, _code)
-                await _write_obs(
+                _pending_id = await _obs_writer.stage_observation(
                     document_id=_doc_id_int,
                     patient_id=patient_id,
                     lab_value=value,
-                    observation_id=_obs_id,
+                    file_batch_id=file_batch_id,
+                    document_reference_id=write_result.document_reference_id,
+                    locator=anchor.field_or_chunk_id if anchor else None,
+                    source_format=("png" if (format_hint or "").lower() == "png" else "pdf"),
+                    request_id=rid,
+                    provider_id=provider_id,
                 )
-                observation_ids.append(_obs_id)
-            except Exception as obs_exc:  # noqa: BLE001 — soft-fail boundary
+                pending_extraction_ids.append(_pending_id)
+            except Exception as stage_exc:  # noqa: BLE001 — soft-fail per row
                 logger.warning(
-                    "observation_write_soft_failed",
+                    "observation_stage_soft_failed",
                     extra={
                         "request_id": rid,
                         "extraction_id": claim.extraction_id,
                         "normalized_test_name": value.normalized_test_name,
-                        "error_type": type(obs_exc).__name__,
+                        "error_type": type(stage_exc).__name__,
                     },
                 )
                 observation_soft_warns.append(
                     {
-                        "code": "observation_write_failed",
+                        "code": "observation_stage_failed",
                         "field": value.normalized_test_name,
                     }
                 )
 
-        if observation_ids:
+    elif extraction.kind == "intake_form":
+        from observations import writer as _obs_writer
+
+        _src = ("png" if (format_hint or "").lower() == "png" else "pdf")
+
+        def _first_locator(citations: Any) -> str | None:
             try:
-                await _store.record_observation_ids(
-                    extraction_id=claim.extraction_id,
-                    ids=observation_ids,
+                if citations and citations[0]:
+                    return citations[0].field_or_chunk_id
+            except Exception:
+                return None
+            return None
+
+        # Demographics — one row carrying the whole demographics block.
+        demo = getattr(extraction, "demographics", None)
+        if demo is not None:
+            try:
+                pending_extraction_ids.append(
+                    await _obs_writer.stage_intake_field(
+                        document_id=_doc_id_int,
+                        patient_id=patient_id,
+                        file_batch_id=file_batch_id,
+                        document_reference_id=write_result.document_reference_id,
+                        field_kind="demographics",
+                        field_index=0,
+                        payload={"demographics": demo.model_dump(mode="json")},
+                        source_format=_src,
+                        request_id=rid,
+                        provider_id=provider_id,
+                    )
                 )
-            except Exception as rec_exc:  # pragma: no cover — best-effort
+            except Exception as stage_exc:  # noqa: BLE001
                 logger.warning(
-                    "observation_record_ids_failed",
-                    extra={"request_id": rid, "error": str(rec_exc)},
+                    "intake_field_stage_soft_failed",
+                    extra={"request_id": rid, "field_kind": "demographics",
+                           "error_type": type(stage_exc).__name__},
+                )
+
+        chief = getattr(extraction, "chief_concern", None)
+        if chief is not None:
+            try:
+                pending_extraction_ids.append(
+                    await _obs_writer.stage_intake_field(
+                        document_id=_doc_id_int,
+                        patient_id=patient_id,
+                        file_batch_id=file_batch_id,
+                        document_reference_id=write_result.document_reference_id,
+                        field_kind="chief_concern",
+                        field_index=0,
+                        payload=chief.model_dump(mode="json"),
+                        locator=_first_locator(getattr(chief, "citations", None)),
+                        source_format=_src,
+                        request_id=rid,
+                        provider_id=provider_id,
+                    )
+                )
+            except Exception as stage_exc:  # noqa: BLE001
+                logger.warning(
+                    "intake_field_stage_soft_failed",
+                    extra={"request_id": rid, "field_kind": "chief_concern",
+                           "error_type": type(stage_exc).__name__},
+                )
+
+        for idx, med in enumerate(getattr(extraction, "current_medications", []) or []):
+            try:
+                pending_extraction_ids.append(
+                    await _obs_writer.stage_intake_field(
+                        document_id=_doc_id_int,
+                        patient_id=patient_id,
+                        file_batch_id=file_batch_id,
+                        document_reference_id=write_result.document_reference_id,
+                        field_kind="medication",
+                        field_index=idx,
+                        payload=med.model_dump(mode="json"),
+                        locator=_first_locator(getattr(med, "citations", None)),
+                        source_format=_src,
+                        request_id=rid,
+                        provider_id=provider_id,
+                    )
+                )
+            except Exception as stage_exc:  # noqa: BLE001
+                logger.warning(
+                    "intake_field_stage_soft_failed",
+                    extra={"request_id": rid, "field_kind": "medication", "field_index": idx,
+                           "error_type": type(stage_exc).__name__},
+                )
+
+        for idx, allergy in enumerate(getattr(extraction, "allergies", []) or []):
+            try:
+                pending_extraction_ids.append(
+                    await _obs_writer.stage_intake_field(
+                        document_id=_doc_id_int,
+                        patient_id=patient_id,
+                        file_batch_id=file_batch_id,
+                        document_reference_id=write_result.document_reference_id,
+                        field_kind="allergy",
+                        field_index=idx,
+                        payload=allergy.model_dump(mode="json"),
+                        locator=_first_locator(getattr(allergy, "citations", None)),
+                        source_format=_src,
+                        request_id=rid,
+                        provider_id=provider_id,
+                    )
+                )
+            except Exception as stage_exc:  # noqa: BLE001
+                logger.warning(
+                    "intake_field_stage_soft_failed",
+                    extra={"request_id": rid, "field_kind": "allergy", "field_index": idx,
+                           "error_type": type(stage_exc).__name__},
+                )
+
+        for idx, fam in enumerate(getattr(extraction, "family_history", []) or []):
+            try:
+                pending_extraction_ids.append(
+                    await _obs_writer.stage_intake_field(
+                        document_id=_doc_id_int,
+                        patient_id=patient_id,
+                        file_batch_id=file_batch_id,
+                        document_reference_id=write_result.document_reference_id,
+                        field_kind="family_history",
+                        field_index=idx,
+                        payload=fam.model_dump(mode="json"),
+                        locator=_first_locator(getattr(fam, "citations", None)),
+                        source_format=_src,
+                        request_id=rid,
+                        provider_id=provider_id,
+                    )
+                )
+            except Exception as stage_exc:  # noqa: BLE001
+                logger.warning(
+                    "intake_field_stage_soft_failed",
+                    extra={"request_id": rid, "field_kind": "family_history", "field_index": idx,
+                           "error_type": type(stage_exc).__name__},
+                )
+
+        cs = getattr(extraction, "code_status", None)
+        if cs is not None:
+            try:
+                pending_extraction_ids.append(
+                    await _obs_writer.stage_intake_field(
+                        document_id=_doc_id_int,
+                        patient_id=patient_id,
+                        file_batch_id=file_batch_id,
+                        document_reference_id=write_result.document_reference_id,
+                        field_kind="code_status",
+                        field_index=0,
+                        payload=cs.model_dump(mode="json"),
+                        locator=_first_locator(getattr(cs, "citations", None)),
+                        source_format=_src,
+                        request_id=rid,
+                        provider_id=provider_id,
+                    )
+                )
+            except Exception as stage_exc:  # noqa: BLE001
+                logger.warning(
+                    "intake_field_stage_soft_failed",
+                    extra={"request_id": rid, "field_kind": "code_status",
+                           "error_type": type(stage_exc).__name__},
+                )
+
+    elif extraction.kind == "unknown":
+        from observations import writer as _obs_writer
+
+        _src = ("png" if (format_hint or "").lower() == "png" else "pdf")
+        for idx, fact in enumerate(getattr(extraction, "key_facts", []) or []):
+            try:
+                anchor = fact.citations[0] if fact.citations else None
+                pending_extraction_ids.append(
+                    await _obs_writer.stage_intake_field(
+                        document_id=_doc_id_int,
+                        patient_id=patient_id,
+                        file_batch_id=file_batch_id,
+                        document_reference_id=write_result.document_reference_id,
+                        field_kind="key_fact",
+                        field_index=idx,
+                        payload=fact.model_dump(mode="json"),
+                        locator=anchor.field_or_chunk_id if anchor else None,
+                        source_format=_src,
+                        request_id=rid,
+                        provider_id=provider_id,
+                    )
+                )
+            except Exception as stage_exc:  # noqa: BLE001
+                logger.warning(
+                    "intake_field_stage_soft_failed",
+                    extra={"request_id": rid, "field_kind": "key_fact", "field_index": idx,
+                           "error_type": type(stage_exc).__name__},
                 )
 
     # 7) Audit — two events. detail_json is structured codes only; never
@@ -2637,13 +3032,15 @@ async def document_ingest(
             "request_id": rid,
             "size_bytes": size_bytes,
             "page_count": page_count,
-            "observation_ids": observation_ids,
-            # Phase 9 Slice 9.3 — staging + parse_summary additions.
-            # PDF/PNG ingest path stays on direct write_observation per
-            # the slice's "do NOT migrate W2 callers" rule, so both
-            # fields stay None on this branch. Multimodal lanes
-            # (HL7/XLSX/DOCX/TIFF) populate these via Slice 9.4–9.6.
-            "staging": None,
+            # Phase 9 Slice 9.7 — PDF/PNG path now stages every derived
+            # row (Observations + IntakeFormFields). The frontend reads
+            # ``staging.pending_extraction_ids`` and routes them to the
+            # editor; approval is what triggers the FHIR write. Mirrors
+            # the multimodal lanes' metadata shape.
+            "staging": {
+                "file_batch_id": file_batch_id,
+                "pending_extraction_ids": pending_extraction_ids,
+            },
             "parse_summary": None,
         },
     }
@@ -3137,6 +3534,263 @@ async def document_post_ingest_context(
                 "request_id": rid,
                 "patient_id": body.patient_id,
                 "document_reference_id": body.document_reference_id,
+            },
+        }
+    except Exception:
+        _outcome = "error"
+        raise
+    finally:
+        _duration_s = time.perf_counter() - started
+        _duration_ms = int(_duration_s * 1000)
+        agent_post_ingest_requests_total.labels(
+            endpoint=_endpoint_label, outcome=_outcome
+        ).inc()
+        agent_post_ingest_duration_seconds.labels(
+            endpoint=_endpoint_label
+        ).observe(_duration_s)
+        _log_tool_outcome(
+            tool_name=_endpoint_label,
+            duration_ms=_duration_ms,
+            cache="n/a",
+            patient_id=body.patient_id,
+            extra={"endpoint": _endpoint_label, "outcome": _outcome},
+        )
+
+
+# ── Post-approval-context (B5) ──────────────────────────────────────────────
+#
+# After the clinician decides every staged row for a document, the editor
+# fires this endpoint to fan out RAG against the *approved* facts (vs the
+# raw extraction). Approved Observations live in MySQL ``copilot_observations``
+# (lab values that survived review) and approved IntakeFormField rows live
+# in postgres ``copilot_pending_extractions`` with state='approved'. The
+# response shape mirrors ``/document/post-ingest-context``.
+
+class PostApprovalContextRequest(BaseModel):
+    patient_id: str
+
+
+def _build_rag_query_from_approved_facts(
+    *,
+    observations: list[dict[str, Any]],
+    intake_payloads: list[dict[str, Any]],
+) -> str:
+    """Concatenate approved facts into a short (<200 char) RAG query.
+
+    Lab Observations contribute LOINC display + numeric value; intake
+    fields contribute their primary text (substance / value / name).
+    Order: observations first (typically more clinically actionable),
+    then intake. Never echoes raw values into logs — callers must log
+    only the prefix.
+    """
+    tokens: list[str] = []
+
+    for obs in observations:
+        display = obs.get("display") or ""
+        if isinstance(display, str) and display.strip():
+            tokens.append(display.strip().split("[")[0].strip().lower())
+        if len(tokens) >= 5:
+            break
+
+    if len(tokens) < 5:
+        for payload in intake_payloads:
+            if not isinstance(payload, dict):
+                continue
+            # Allergy / family-history shapes carry a top-level key.
+            text = (
+                payload.get("substance")
+                or payload.get("name")
+                or payload.get("text")
+                or ""
+            )
+            if not text:
+                # TextField shape — {"value": "...", "citations": [...]}
+                v = payload.get("value")
+                if isinstance(v, str):
+                    text = v
+            # CodeStatus
+            if not text:
+                v = payload.get("value")
+                if isinstance(v, str):
+                    text = v
+            if isinstance(text, str) and text.strip():
+                tokens.append(text.strip())
+            if len(tokens) >= 5:
+                break
+
+    query = " ".join(tokens).strip()
+    if not query:
+        return ""
+    return query[:199]
+
+
+_APPROVED_INTAKE_SQL = (
+    "SELECT id, payload FROM copilot_pending_extractions "
+    "WHERE document_reference_id = $1 "
+    # IntakeFormField rows go pending → approved → written (the writer
+    # short-circuits to 'written' immediately because there's no FHIR write
+    # to attempt). 'written' is the terminal "reviewed and committed" state
+    # for these rows, so we treat both 'approved' and 'written' as "decided
+    # approved" here.
+    "  AND state IN ('approved', 'written') "
+    "  AND target_resource_type = 'IntakeFormField'"
+)
+
+
+@app.post("/document/{document_reference_id:path}/post-approval-context")
+async def document_post_approval_context(
+    document_reference_id: str,
+    body: PostApprovalContextRequest,
+) -> dict[str, Any]:
+    """Fan out RAG against the approved facts for ``document_reference_id``.
+
+    Reads:
+      * approved Observations from MySQL ``copilot_observations``
+        (numeric document_id derived from the trailing int of the doc ref)
+      * approved ``IntakeFormField`` rows from postgres
+        ``copilot_pending_extractions``
+
+    Returns the same response shape as ``/document/post-ingest-context``.
+    Empty guidelines is a valid 200 response.
+    """
+    from observability.tool_logging import log_tool_outcome as _log_tool_outcome
+    from observations import writer as _obs_writer
+
+    rid = request_id_var.get() or uuid.uuid4().hex
+    started = time.perf_counter()
+    _endpoint_label = "post_approval_context"
+    _outcome = "success"
+
+    try:
+        # 1) Approved Observations — numeric doc id from trailing digits.
+        _m = re.search(r"(\d+)$", document_reference_id or "")
+        _doc_id_int = (
+            _m.group(1)
+            if _m
+            else str(abs(hash(document_reference_id)) % (10**9))
+        )
+
+        try:
+            obs_rows = await _obs_writer.read_observations_for_document(_doc_id_int)
+        except Exception as exc:  # noqa: BLE001 — soft path
+            logger.warning(
+                "post_approval_context_obs_read_failed",
+                extra={"request_id": rid, "error_type": type(exc).__name__},
+            )
+            obs_rows = []
+
+        # 2) Approved IntakeFormField rows from postgres.
+        intake_payloads: list[dict[str, Any]] = []
+        try:
+            from audit import writer as _audit_writer
+            pool = await _audit_writer.get_pool()
+            if pool is not None:
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        _APPROVED_INTAKE_SQL, document_reference_id
+                    )
+                for row in rows or []:
+                    payload = row["payload"]
+                    if isinstance(payload, str):
+                        try:
+                            import json as _json
+                            payload = _json.loads(payload)
+                        except Exception:
+                            payload = None
+                    if isinstance(payload, dict):
+                        intake_payloads.append(payload)
+        except Exception as exc:  # noqa: BLE001 — soft path
+            logger.warning(
+                "post_approval_context_intake_read_failed",
+                extra={"request_id": rid, "error_type": type(exc).__name__},
+            )
+
+        # 3) Build a deterministic RAG query string from approved facts.
+        query = _build_rag_query_from_approved_facts(
+            observations=obs_rows,
+            intake_payloads=intake_payloads,
+        )
+
+        guideline_dicts: list[dict[str, Any]] = []
+        if query:
+            from rag import retrieve as _rag_retrieve
+            try:
+                snippets = await _rag_retrieve.search(query, k=5)
+            except Exception as exc:  # noqa: BLE001 — retriever boundary
+                logger.warning(
+                    "post_approval_context_retriever_failed",
+                    extra={
+                        "request_id": rid,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                snippets = []
+            for s in snippets:
+                d = s._asdict()
+                ivd = d.get("indexed_version_date")
+                if ivd is not None and not isinstance(ivd, str):
+                    try:
+                        d["indexed_version_date"] = ivd.isoformat()
+                    except Exception:
+                        d["indexed_version_date"] = str(ivd)
+                content = d.get("content")
+                if isinstance(content, str) and len(content) > 400:
+                    d["content"] = content[:400]
+                guideline_dicts.append(
+                    {
+                        "chunk_id": d.get("chunk_id"),
+                        "source_id": d.get("source_id"),
+                        "document_title": d.get("document_title"),
+                        "section": d.get("section"),
+                        "page_number": d.get("page_number"),
+                        "content": d.get("content"),
+                        "relevance_score": d.get("relevance_score"),
+                    }
+                )
+
+        # 4) Deterministic clinical summary — count-only, no values.
+        n_obs = len(obs_rows)
+        n_intake = len(intake_payloads)
+        if n_obs == 0 and n_intake == 0:
+            summary = (
+                "No approved facts on file for this document — "
+                "all extracted rows were rejected or are still pending review."
+            )
+        else:
+            parts: list[str] = []
+            if n_obs:
+                parts.append(
+                    f"{n_obs} approved lab observation(s)"
+                )
+            if n_intake:
+                parts.append(f"{n_intake} approved intake field(s)")
+            summary = (
+                "Approved record on file: "
+                + " and ".join(parts)
+                + ". Guidelines retrieved against the approved findings."
+            )
+
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        logger.info(
+            "post_approval_context_completed",
+            extra={
+                "request_id": rid,
+                "query_prefix": query[:30],
+                "n_guidelines": len(guideline_dicts),
+                "n_obs": n_obs,
+                "n_intake": n_intake,
+                "duration_ms": duration_ms,
+            },
+        )
+
+        return {
+            "summary": summary,
+            "query_used": query,
+            "guidelines": guideline_dicts,
+            "metadata": {
+                "request_id": rid,
+                "patient_id": body.patient_id,
+                "document_reference_id": document_reference_id,
             },
         }
     except Exception:
