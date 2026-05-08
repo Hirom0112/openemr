@@ -52,11 +52,11 @@ const resolvedFlu: FhirCondition = {
 };
 
 describe("MedicalProblemsCardView (render)", () => {
-  it("renders 'None' empty state when there are no visible problems", () => {
+  it("renders 'Nothing Recorded' empty state when there are no visible problems", () => {
     render(<MedicalProblemsCardView conditions={[]} />);
     const empty = screen.getByTestId("empty-card");
     expect(empty.textContent).toContain("Medical Problems");
-    expect(empty.textContent).toContain("None");
+    expect(empty.textContent).toContain("Nothing Recorded");
   });
 
   it("renders a row for an active problem with onset date and status badge", () => {
@@ -92,10 +92,10 @@ describe("MedicalProblemsCardView (render)", () => {
     );
   });
 
-  it("collapses to the 'None' empty state when every condition is resolved", () => {
+  it("collapses to the 'Nothing Recorded' empty state when every condition is resolved", () => {
     render(<MedicalProblemsCardView conditions={[resolvedFlu]} />);
     const empty = screen.getByTestId("empty-card");
-    expect(empty.textContent).toContain("None");
+    expect(empty.textContent).toContain("Nothing Recorded");
     expect(screen.queryByTestId("problem-row")).toBeNull();
   });
 

@@ -102,7 +102,10 @@ export function PrescriptionsCardView({
   prescriptions,
 }: PrescriptionsCardViewProps): React.ReactElement {
   if (prescriptions.length === 0) {
-    return <EmptyCard title={CARD_TITLE} message="None" />;
+    // Match the empty-state copy used by the other clinical cards;
+    // the Prescriptions Smarty fragment has no separate empty string,
+    // so we align with the Twig clinical-card convention.
+    return <EmptyCard title={CARD_TITLE} message="Nothing Recorded" />;
   }
 
   return (

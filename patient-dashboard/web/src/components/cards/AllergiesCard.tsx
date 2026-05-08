@@ -106,11 +106,10 @@ export function AllergiesCardView({
   allergies,
 }: AllergiesCardViewProps): React.ReactElement {
   if (allergies.length === 0) {
-    // Brief: "if total=0 (or array is empty), render
-    // <EmptyCard title='Allergies' message='None' />".
-    // Note: original screenshot 21 shows "No Known Allergies"; the brief
-    // explicitly overrides to "None". Deviation logged in the report-back.
-    return <EmptyCard title={CARD_TITLE} message="None" />;
+    // Original Twig (`templates/patient/card/allergies.html.twig:34`)
+    // renders the literal "Nothing Recorded" — match that copy
+    // verbatim so empty-state strings agree across all cards.
+    return <EmptyCard title={CARD_TITLE} message="Nothing Recorded" />;
   }
 
   const visible = allergies.slice(0, MAX_VISIBLE);

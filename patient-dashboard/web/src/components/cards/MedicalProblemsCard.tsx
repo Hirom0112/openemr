@@ -174,7 +174,8 @@ export function MedicalProblemsCardView({
   const visible = filterVisibleProblems(conditions);
 
   if (visible.length === 0) {
-    return <EmptyCard title={CARD_TITLE} message="None" />;
+    // Mirror `templates/patient/card/medical_problems.html.twig:13`.
+    return <EmptyCard title={CARD_TITLE} message="Nothing Recorded" />;
   }
 
   return (

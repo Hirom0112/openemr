@@ -137,10 +137,10 @@ const stringOnly: FhirObservation = {
 };
 
 describe("VitalsCardView (render)", () => {
-  it("renders the EmptyCard with 'No vitals recorded' for an empty bundle", () => {
+  it("renders the EmptyCard with the original's empty copy for an empty bundle", () => {
     render(<VitalsCardView observations={[]} />);
     expect(screen.getByTestId("empty-card")).toBeTruthy();
-    expect(screen.getByText("No vitals recorded")).toBeTruthy();
+    expect(screen.getByText("No vitals have been documented.")).toBeTruthy();
     expect(screen.queryByTestId("vitals-list")).toBeNull();
   });
 

@@ -59,10 +59,10 @@ const penicillin: FhirAllergyIntolerance = {
 };
 
 describe("AllergiesCardView (render)", () => {
-  it("renders the EmptyCard with 'None' when the array is empty", () => {
+  it("renders the EmptyCard with 'Nothing Recorded' when the array is empty", () => {
     render(<AllergiesCardView allergies={[]} />);
     expect(screen.getByTestId("empty-card")).toBeTruthy();
-    expect(screen.getByText("None")).toBeTruthy();
+    expect(screen.getByText("Nothing Recorded")).toBeTruthy();
     // Loaded-state list is not rendered.
     expect(screen.queryByTestId("allergies-list")).toBeNull();
   });

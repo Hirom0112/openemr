@@ -63,7 +63,7 @@ describe("MedicationsCardView (render)", () => {
     expect(screen.getByTestId("medications-edit")).toBeTruthy();
   });
 
-  it("renders the EmptyCard 'None' state when filterMedications returns nothing", () => {
+  it("renders the EmptyCard 'Nothing Recorded' state when filterMedications returns nothing", () => {
     const meds = filterMedications([]);
     render(<MedicationsCardView medications={meds} />);
 
@@ -71,7 +71,7 @@ describe("MedicationsCardView (render)", () => {
     expect(screen.getByTestId("empty-card").textContent).toContain(
       "Medications",
     );
-    expect(screen.getByTestId("empty-card").textContent).toContain("None");
+    expect(screen.getByTestId("empty-card").textContent).toContain("Nothing Recorded");
   });
 
   it("uses filterMedications to drop status=stopped rows before render", () => {

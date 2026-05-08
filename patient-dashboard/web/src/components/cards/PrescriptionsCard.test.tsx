@@ -48,13 +48,13 @@ const anotherPlan: FhirMedicationRequest = {
 };
 
 describe("PrescriptionsCardView (render)", () => {
-  it("renders 'None' when the filtered list is empty (the synthetic-data default)", () => {
+  it("renders 'Nothing Recorded' when the filtered list is empty (the synthetic-data default)", () => {
     render(<PrescriptionsCardView prescriptions={[]} />);
 
-    // EmptyCard chrome: title + 'None' message.
+    // EmptyCard chrome: title + 'Nothing Recorded' message.
     expect(screen.getByTestId("empty-card")).toBeTruthy();
     expect(screen.getByText("Prescriptions")).toBeTruthy();
-    expect(screen.getByText("None")).toBeTruthy();
+    expect(screen.getByText("Nothing Recorded")).toBeTruthy();
     // The loaded card chrome should not render in the empty state.
     expect(screen.queryByTestId("prescriptions-card")).toBeNull();
     expect(screen.queryByTestId("prescriptions-list")).toBeNull();

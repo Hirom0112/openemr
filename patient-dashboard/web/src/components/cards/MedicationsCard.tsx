@@ -92,7 +92,8 @@ export function MedicationsCardView({
   medications,
 }: MedicationsCardViewProps): React.ReactElement {
   if (medications.length === 0) {
-    return <EmptyCard title={CARD_TITLE} message="None" />;
+    // Mirror `templates/patient/card/medication.html.twig:13`.
+    return <EmptyCard title={CARD_TITLE} message="Nothing Recorded" />;
   }
 
   return (

@@ -370,7 +370,8 @@ export function VitalsCardView({
   const rows = grouped.filter((obs) => formatObservationValue(obs) !== null);
 
   if (rows.length === 0) {
-    return <EmptyCard title={CARD_TITLE} message="No vitals recorded" />;
+    // Mirror `interface/patient_file/summary/vitals_fragment.php:30`.
+    return <EmptyCard title={CARD_TITLE} message="No vitals have been documented." />;
   }
 
   // Fixed display order, mirroring the case-branch sequence in the
