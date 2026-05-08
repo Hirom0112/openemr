@@ -361,7 +361,7 @@ agent_resolver_duration_seconds = Histogram(
 # ``parsers-hl7-isolated`` forbids ``parsers.hl7 -> agent``; centralising
 # in this module would invert that boundary. The marker stays so a single
 # ``grep agent_hl7_parse`` surfaces the catalog entry. Slice 9.10's §5.5
-# metric-table update in ARCHITECTURE.md cross-references the same names.
+# metric-table update in W1_ARCHITECTURE.md cross-references the same names.
 
 # ── Phase 9 Slice 9.5 — XLSX parser ─────────────────────────────────────────
 # Metrics ``agent_xlsx_parse_total{outcome}``,
@@ -372,7 +372,7 @@ agent_resolver_duration_seconds = Histogram(
 # in this module would invert that boundary. The marker stays so a single
 # ``grep agent_xlsx_parse`` surfaces the catalog entry. Mirrors the HL7
 # carve-out above. Slice 9.10's §5.5 metric-table update in
-# ARCHITECTURE.md cross-references the same names.
+# W1_ARCHITECTURE.md cross-references the same names.
 
 # ── Phase 9 Slice 9.7 — cross-source conflict pass ──────────────────────────
 # Metric ``agent_cross_source_conflict_total{outcome, source_pair, tier}``

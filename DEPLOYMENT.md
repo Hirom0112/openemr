@@ -181,7 +181,7 @@ Agent services are added to the existing Railway project when the code exists. D
 | prometheus | Stage 3 | Docker image |
 | Langfuse | Stage 3 | Langfuse Cloud free tier — no Railway service needed |
 
-**Langfuse:** Use the Cloud free tier. The scrubbed event stream (ARCHITECTURE.md §5.2) contains no PHI — only operational metadata with hashed IDs. No BAA required. Eliminates a self-hosted service and its PostgreSQL dependency from the Railway project.
+**Langfuse:** Use the Cloud free tier. The scrubbed event stream (W1_ARCHITECTURE.md §5.2) contains no PHI — only operational metadata with hashed IDs. No BAA required. Eliminates a self-hosted service and its PostgreSQL dependency from the Railway project.
 
 ---
 

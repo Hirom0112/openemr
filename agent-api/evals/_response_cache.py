@@ -15,7 +15,7 @@ import time, spread across many modules, and may include dynamic snippets.
 We can't reliably enumerate them from outside the graph. Instead we expose a
 manual-bump mechanism: whenever prompts change, increment ``EVAL_CACHE_VERSION``
 (or set ``EVAL_CACHE_PROMPT_HASH`` to a known sentinel). This is documented
-in the commit body and the ARCHITECTURE.md prompt-cache section.
+in the commit body and the W1_ARCHITECTURE.md prompt-cache section.
 
 Cache mode — ``EVAL_USE_CACHE`` env var
 -----------------------------------------

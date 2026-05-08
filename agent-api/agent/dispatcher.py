@@ -3,7 +3,7 @@
 Single entry point for all conversational physician queries:
     POST /agent/query → dispatch(message, session_id, session_context, checkpointer)
 
-Design constraints (from ARCHITECTURE.md §4 and CLAUDE.md):
+Design constraints (from W1_ARCHITECTURE.md §4 and CLAUDE.md):
 - cache_control: {"type": "ephemeral"} on system prompt (block 1) and census
   context (block 2).  Pass criterion: cache-hit input tokens ≥70% of total
   input tokens for UC-2/3/4 calls within a session.
@@ -1898,7 +1898,7 @@ async def dispatch(
                             )
 
                     # Census scope enforcement — block FHIR tool calls for out-of-census patients.
-                    # Compensating control for AUDIT finding #6 (ARCHITECTURE.md §6.1).
+                    # Compensating control for AUDIT finding #6 (W1_ARCHITECTURE.md §6.1).
                     census_ids: list[str] = session_context.get("patient_ids", [])
                     requested_pid: str | None = tool_input.get("patient_id")
 

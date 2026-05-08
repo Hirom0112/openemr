@@ -19,7 +19,7 @@ Design contract
   pool ``demographics/quarantine.py`` uses).
 * Every state mutation emits one ``copilot_audit_events`` row via
   ``audit.writer.emit`` with PHI-safe ``detail_json`` (codes/counts only —
-  NEVER values, prose, or raw clinical fields). See ARCHITECTURE.md §9.2.
+  NEVER values, prose, or raw clinical fields). See W1_ARCHITECTURE.md §9.2.
 * Functions raise :class:`StagingError` with a stable ``code`` string the
   HTTP layer maps to a 4xx response (404 not_found, 409 conflict).
 """

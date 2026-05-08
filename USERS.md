@@ -1,6 +1,6 @@
 # Clinical Co-Pilot — Users & Use Cases
 
-This document defines the target user, their workflow, and the specific use cases the Clinical Co-Pilot agent must solve. It is the source of truth that ARCHITECTURE.md must trace back to. Every agent capability built must point to a use case defined here.
+This document defines the target user, their workflow, and the specific use cases the Clinical Co-Pilot agent must solve. It is the source of truth that W1_ARCHITECTURE.md must trace back to. Every agent capability built must point to a use case defined here.
 
 ---
 

@@ -18,7 +18,7 @@ in the audit trail.
 Privacy
 -------
 The PDF bytes and their base64 encoding are NEVER logged.  Per
-``ARCHITECTURE.md`` §5.2 / §9.2 only sizes and ids cross the log boundary.
+``W1_ARCHITECTURE.md`` §5.2 / §9.2 only sizes and ids cross the log boundary.
 """
 
 from __future__ import annotations

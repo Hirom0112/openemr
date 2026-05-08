@@ -7,7 +7,7 @@ boundary. Instead, the parser owns its own instruments;
 ``agent/metrics`` carries a marker comment pointing operators here so a
 single ``grep agent_xlsx_parse`` still surfaces the catalog entry.
 
-Names match the §5.5 metric table in ``ARCHITECTURE.md`` (updated by
+Names match the §5.5 metric table in ``W1_ARCHITECTURE.md`` (updated by
 Slice 9.10) and the dispatcher's structured log events
 (``xlsx_parse_completed`` / ``xlsx_parse_failed``) per the CLAUDE.md
 "Observability — verifiable latency claims" checklist.

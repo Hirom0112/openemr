@@ -8,7 +8,7 @@ Instead, the staging package owns its own instruments; ``agent/metrics``
 carries a marker comment pointing operators here so a single
 ``grep agent_staging_`` still surfaces the catalog entry.
 
-The names + labels match the §5.5 metric table in ``ARCHITECTURE.md``
+The names + labels match the §5.5 metric table in ``W1_ARCHITECTURE.md``
 (updated by Slice 9.10) and the structured log events emitted from
 ``staging/store.py`` and ``staging/router.py``.
 """

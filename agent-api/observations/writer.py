@@ -17,7 +17,7 @@ Privacy
 -------
 PSR-3 logging only. Never logs raw values, citations, prompt text, or
 free-text clinical fields. Counts and durations only — see
-``ARCHITECTURE.md`` §5.2 / §9.2.
+``W1_ARCHITECTURE.md`` §5.2 / §9.2.
 """
 
 from __future__ import annotations

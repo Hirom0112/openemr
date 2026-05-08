@@ -8,7 +8,7 @@ defensible, and traceable to the project source documents:
 
 - `USERS.md` defines the user, workflow, use cases, edge cases, and pilot
   success metrics.
-- `ARCHITECTURE.md` defines the agent architecture, verification layer,
+- `W1_ARCHITECTURE.md` defines the agent architecture, verification layer,
   observability model, and initial evaluation framework.
 - `AUDIT.md` defines the pre-integration risks the eval suite must not ignore.
 
@@ -181,7 +181,7 @@ Use one of these policies:
 
 ## Test Matrix
 
-The existing 47-test plan in `ARCHITECTURE.md` is a useful first LLM regression
+The existing 47-test plan in `W1_ARCHITECTURE.md` is a useful first LLM regression
 slice. It should not be treated as the whole safety suite. The defensible suite
 should include deterministic, fixture, LLM, latency, and pilot layers.
 

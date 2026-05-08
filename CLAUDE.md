@@ -197,8 +197,8 @@ Checklist for any new instrumented call site:
 - [ ] Emit one structured log event via `observability.tool_logging.log_tool_outcome` (or an equivalent helper) with `duration_ms` and `cache=hit|miss|n/a`. Do not concatenate values into the message — use PSR-3-style `extra={}` fields so they survive `JsonLogFormatter`.
 - [ ] Increment a Prometheus counter (`agent_data_cache_hits_total{cache=...}`, `agent_prewarm_runs_total{outcome=...}`, etc.) or observe a histogram (`agent_prewarm_duration_seconds`, `agent_checkpointer_op_duration_seconds`) at the same boundary.
 - [ ] Rely on the ambient `request_id` ContextVar — do not pass it as a parameter. `RequestIdMiddleware` in `agent-api/main.py` binds it from the inbound `X-Request-ID` header for the lifetime of each request.
-- [ ] Update the catalog in `ARCHITECTURE.md` §5.5 (metric and log-event tables) when a new metric or event name is introduced.
-- [ ] Never log raw prompt text, completion text, or free-text clinical values — see §5.2 of `ARCHITECTURE.md` for the scrubbed event schema.
+- [ ] Update the catalog in `W1_ARCHITECTURE.md` §5.5 (metric and log-event tables) when a new metric or event name is introduced.
+- [ ] Never log raw prompt text, completion text, or free-text clinical values — see §5.2 of `W1_ARCHITECTURE.md` for the scrubbed event schema.
 
 Tests run with: `python3 -m pytest agent-api/tests`.
 

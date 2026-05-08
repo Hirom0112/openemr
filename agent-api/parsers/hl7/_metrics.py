@@ -9,7 +9,7 @@ instruments; ``agent/metrics`` carries a marker comment pointing
 operators here so a single ``grep agent_hl7_parse`` still surfaces the
 catalog entry.
 
-The names + labels match the §5.5 metric table in ``ARCHITECTURE.md``
+The names + labels match the §5.5 metric table in ``W1_ARCHITECTURE.md``
 (updated by Slice 9.10) and the dispatcher's structured log events
 (``hl7_parse_completed`` / ``hl7_parse_failed``) per the CLAUDE.md
 "Observability — verifiable latency claims" checklist (one metric +

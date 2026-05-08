@@ -33,7 +33,7 @@ The following files currently use Pydantic ``model_validate_json`` to parse
 free-text JSON from LLM responses.  They must be migrated to
 ``messages.create(tools=[...])`` using the schemas defined here.  The
 Pydantic-JSON path must NOT remain as a live fallback alongside tool_use
-(ARCHITECTURE.md §4.4 explicitly prohibits it).
+(W1_ARCHITECTURE.md §4.4 explicitly prohibits it).
 
   briefing/generator.py   — BriefingResponse via model_validate_json
   triage/explainer.py     — one-liner explanation via direct prompt

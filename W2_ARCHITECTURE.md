@@ -1444,7 +1444,7 @@ If a post-pilot owner is not named for any subsystem, the honest-degradation pri
 | `W2_ARCHITECTURE.md` | This document |
 | `README.md` | Add W1/W2 separation section |
 | `EVAL.md` | Add W2 eval suite section |
-| `ARCHITECTURE.md` §5.5 | Add new metric and event-type rows |
+| `W1_ARCHITECTURE.md` §5.5 | Add new metric and event-type rows |
 
 ---
 

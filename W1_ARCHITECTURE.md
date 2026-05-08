@@ -1,5 +1,7 @@
 # Clinical Co-Pilot — Architecture
 
+> **Scope:** This document describes the Week 1 dispatcher architecture (raw Anthropic SDK + custom Checkpointer). Week 2 (document ingestion, multi-agent graph, hybrid RAG, eval gate) is documented separately in `W2_ARCHITECTURE.md`. Where the two docs describe the same system component, `W2_ARCHITECTURE.md` is the current source of truth.
+
 ---
 
 ## Quick Read

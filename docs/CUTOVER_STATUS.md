@@ -38,7 +38,7 @@ Before retiring legacy endpoints, all of the following must be true:
 - [ ] All PENDING gates above are PASSED
 - [ ] `LEGACY_ENDPOINTS_ENABLED=false` tested in staging — no dependent client breaks
 - [ ] One full release cycle elapsed with legacy endpoints behind the flag
-- [ ] `ARCHITECTURE.md` updated to reflect shipped state (human review required)
+- [ ] `W1_ARCHITECTURE.md` updated to reflect shipped state (human review required)
 
 ## Retirement procedure
 

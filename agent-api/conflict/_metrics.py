@@ -10,7 +10,7 @@ single ``grep agent_cross_source_conflict_`` still surfaces the catalog
 entry. Same pattern as ``parsers/hl7/_metrics`` and ``staging/_metrics``.
 
 The metric name + labels match the §5.5 metric table in
-``ARCHITECTURE.md`` (updated by Slice 9.10) and the structured log
+``W1_ARCHITECTURE.md`` (updated by Slice 9.10) and the structured log
 event ``cross_source_conflict_pass_complete`` emitted from
 ``graph/nodes/cross_source_conflict.py``.
 """

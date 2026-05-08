@@ -15,7 +15,7 @@ written against a stale mental model bypasses them silently.
 
 ## Layer 1 — Design docs (intent)
 
-- `ARCHITECTURE.md`, `W2_ARCHITECTURE.md` — system design, dispatcher,
+- `W1_ARCHITECTURE.md`, `W2_ARCHITECTURE.md` — system design, dispatcher,
   verification, eval gates, W2 graph + RAG
 - `USERS.md` — Dr. Chen, UC-1..UC-5, ranking weights (UC-1 is rules-driven,
   not LLM)

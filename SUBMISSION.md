@@ -60,7 +60,7 @@ VERIFY: PASS
 | `W2_ARCHITECTURE.md` §4.2.1 / §4.2.2 | Custom-upload deployment deviation and security tradeoff. |
 | `docs/SECURITY_TRADEOFFS.md` | Full analysis of the shared-HMAC tradeoff and reversibility plan. |
 | `docs/latency_cost_report.md` | Live `/metrics` scrape — p50/p95 latency, cost per 100 turns, 98% prompt-cache hit rate. |
-| `ARCHITECTURE.md` §5.5 | Observability metric and event-type catalog (W1 + W2 entries). |
+| `W1_ARCHITECTURE.md` §5.5 | Observability metric and event-type catalog (W1 + W2 entries). |
 | `EVAL.md` | W1 + W2 eval suite description. |
 | `docs/DEMO_SCRIPT.md` | Reproducible 4-minute demo script. |
 
@@ -75,7 +75,7 @@ VERIFY: PASS
 | Pillar 3 — Hybrid RAG (§6) | Sparse (tsvector) + dense (Voyage embeddings) merged, reranked with Cohere Rerank 3 | **Live** at `POST /evidence/search`. Indexing pipeline built; corpus loaded. |
 | Pillar 4 — Eval Gate (§11) | 50 cases, 6 boolean rubrics, baseline + diff, CI hard-fail | **Live.** `evals/baseline.json` + `evals/diff_baseline.py` + `.github/workflows/copilot-eval.yml` job `w2-eval`. Verified by PR #1. |
 | Citation contract (§8) | 5-field shape with bbox-grounded fidelity check | Live; per-value fidelity check runs in critic. |
-| Observability (§10, ARCHITECTURE.md §5.5) | Per-event structured logs + Prometheus metrics, no PHI | Live; `agent_w2_*` metric family populated, audit dual-target preserved (§9.4 / §4.2.2). |
+| Observability (§10, W1_ARCHITECTURE.md §5.5) | Per-event structured logs + Prometheus metrics, no PHI | Live; `agent_w2_*` metric family populated, audit dual-target preserved (§9.4 / §4.2.2). |
 
 ---
 

@@ -475,7 +475,7 @@ def test_out_of_census_patient_access_is_blocked(session_ctx, session_id):
     """
     Physician queries a patient NOT on the active census.
 
-    Expected behavior (ARCHITECTURE.md §6.1): the dispatcher's census scope
+    Expected behavior (W1_ARCHITECTURE.md §6.1): the dispatcher's census scope
     enforcement intercepts the tool call and does NOT execute a FHIR lookup
     for the out-of-census patient. The out-of-census patient_id must not
     appear in any successful tool call input.

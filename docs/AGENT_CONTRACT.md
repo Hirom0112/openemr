@@ -1,7 +1,7 @@
 # Clinical Co-Pilot — Agent Contract
 
 **Status:** Authoritative — this is a grading artifact. It must be committed before Phase 8 Phase 1 begins. Any changes to the dispatcher envelope shape, session state fields, cutover gates, or claim taxonomy must update this document first.
-**Cross-reference:** `ARCHITECTURE.md`, `USERS.md`, `docs/UX_SPEC.md`
+**Cross-reference:** `W1_ARCHITECTURE.md`, `USERS.md`, `docs/UX_SPEC.md`
 
 This document defines the observable contract between the agent-api and the rest of the system. It is the source of truth for: what gates must pass before dispatcher cutover, what state the dispatcher loads per turn, which tools are justified by which user requirements, and what limitations the verification layer has.
 
@@ -63,7 +63,7 @@ These fields accumulate over the session and are bounded to prevent unbounded gr
 
 - **Session TTL:** 12 hours from `session_start_utc`. This covers a full day shift. At TTL expiry, the entire session key namespace is deleted from Redis. A new session requires a fresh "Go" press.
 - **Conversation history max turns:** 20. When the history length reaches 20 turns, the oldest turn is evicted (FIFO) before appending the new turn. The system prompt and census context blocks are never evicted — they are not in the history list.
-- **Redis failure fallback:** If Redis is unavailable, the dispatcher operates stateless for the current request: no history, no `last_viewed_patient_id`, no `last_tool_called`. See `ARCHITECTURE.md §3.4` for full degraded-mode behavior.
+- **Redis failure fallback:** If Redis is unavailable, the dispatcher operates stateless for the current request: no history, no `last_viewed_patient_id`, no `last_tool_called`. See `W1_ARCHITECTURE.md §3.4` for full degraded-mode behavior.
 
 ---
 
@@ -78,13 +78,13 @@ Every physician-facing capability must trace to a use case in USERS.md. This tab
 | `query_patient_records` | UC-3 (Targeted Record Query) | Produces direct answers to follow-up questions during rounding. Default search windows: 24 months encounters, 12 months labs. Extended search on explicit physician request. Multi-turn continuity maintained via session history. | Full justification. The conversational form of "why is bed 7 first?" routes through this tool as a UC-3 query. |
 | `get_medication_safety` | UC-4 (Medication Safety Surface) | Produces the chart-data-only safety surface: documented allergies, active conditions, relevant labs (electrolytes, renal, hepatic), active medications. | Full justification. Never recommends dosing, never diagnoses interactions. Surfaces chart data only. |
 | `generate_handoff` | UC-5 (End-of-Rounds Handoff Generation) | Produces one structured paragraph per patient: diagnosis, key morning event, current plan, one open item. Full census, parallel LLM calls inside one tool. Clipboard-copy only in v1. | Full justification. No auto-persistence to EHR in v1 per USERS.md §5 UC-5 persistence policy. |
-| `get_triage_rationale` | UC-3 / ARCHITECTURE.md §4.7 | Click-to-expand rationale for a specific patient. Returns per-criterion scoring breakdown and plain-language explanation. Invoked directly via `POST /agent/triage_rationale` — NOT dispatched through the conversational loop. | **Partial justification — document engineering rationale explicitly:** USERS.md UC-1 implies rationale explanability ("she can ask 'why is bed 7 first?' and get a one-sentence answer"). The click-to-expand UI form is an ARCHITECTURE.md §4.7 design decision, not a USERS.md-specified endpoint. The two paths (conversational "why is bed 7?" → dispatcher → UC-3 query; UI expand tap → direct `POST /agent/triage_rationale`) must produce equivalent rationale content. Engineering rationale for the direct endpoint: the 2-second click-to-expand latency target (CLAUDE.md latency budgets) cannot be met through the dispatcher loop (tool selection + tool execution + final response = 3+ steps). The direct endpoint bypasses dispatcher overhead for a deterministic, bounded, latency-sensitive operation. |
+| `get_triage_rationale` | UC-3 / W1_ARCHITECTURE.md §4.7 | Click-to-expand rationale for a specific patient. Returns per-criterion scoring breakdown and plain-language explanation. Invoked directly via `POST /agent/triage_rationale` — NOT dispatched through the conversational loop. | **Partial justification — document engineering rationale explicitly:** USERS.md UC-1 implies rationale explanability ("she can ask 'why is bed 7 first?' and get a one-sentence answer"). The click-to-expand UI form is an W1_ARCHITECTURE.md §4.7 design decision, not a USERS.md-specified endpoint. The two paths (conversational "why is bed 7?" → dispatcher → UC-3 query; UI expand tap → direct `POST /agent/triage_rationale`) must produce equivalent rationale content. Engineering rationale for the direct endpoint: the 2-second click-to-expand latency target (CLAUDE.md latency budgets) cannot be met through the dispatcher loop (tool selection + tool execution + final response = 3+ steps). The direct endpoint bypasses dispatcher overhead for a deterministic, bounded, latency-sensitive operation. |
 
 ---
 
 ## 5. Verification Layer Limitations
 
-Cross-reference: `ARCHITECTURE.md §4.4` ("Known limitations of the verification layer")
+Cross-reference: `W1_ARCHITECTURE.md §4.4` ("Known limitations of the verification layer")
 
 The verification layer is mandatory on every LLM response. It performs source attribution and domain constraint checks. It is not optional and cannot be bypassed.
 
@@ -170,7 +170,7 @@ These steps require Railway access and must be run after `python3 synthetic_data
 
 **Status: PARTIALLY BLOCKED**
 
-This section documents the status of the `code_status` and `isolation` field prerequisites defined in `ARCHITECTURE.md §3.1`.
+This section documents the status of the `code_status` and `isolation` field prerequisites defined in `W1_ARCHITECTURE.md §3.1`.
 
 ### 7.1 `code_status` — Status: IMPLEMENTED (via FHIR Observation, not Patient extension)
 
@@ -191,7 +191,7 @@ This approach is functionally equivalent to a Patient resource extension for the
 
 ### 7.2 `isolation` — Status: NOT IMPLEMENTED — BLOCKING
 
-**ARCHITECTURE.md §3.1** lists `isolation` as a hard prerequisite column for `patient_data`. **USERS.md §4** lists isolation status as a required field in the information needs per patient and as an always-shown field in the UC-2 expanded briefing (section 6: "Code status and isolation — always shown, always explicit").
+**W1_ARCHITECTURE.md §3.1** lists `isolation` as a hard prerequisite column for `patient_data`. **USERS.md §4** lists isolation status as a required field in the information needs per patient and as an always-shown field in the UC-2 expanded briefing (section 6: "Code status and isolation — always shown, always explicit").
 
 Current state (verified 2026-04-29):
 
@@ -199,7 +199,7 @@ Current state (verified 2026-04-29):
 - No `isolation` handling exists anywhere in `agent-api/` Python source files (grep confirmed zero matches).
 - The `briefing/context_builder.py` and `briefing/generator.py` files reference code status but have no isolation extraction.
 
-**Consequence:** Any test that verifies isolation status surfacing passes for the wrong reason — the verification layer cannot flag a missing isolation field if no isolation field is ever populated. This is the exact failure mode ARCHITECTURE.md §3.1 warns about: "blank code status auto-flag tests will silently pass for the wrong reason."
+**Consequence:** Any test that verifies isolation status surfacing passes for the wrong reason — the verification layer cannot flag a missing isolation field if no isolation field is ever populated. This is the exact failure mode W1_ARCHITECTURE.md §3.1 warns about: "blank code status auto-flag tests will silently pass for the wrong reason."
 
 **BLOCK:** Phase 8 Phase 1 (tool schemas) and all subsequent phases that depend on isolation surfacing must not proceed until:
 

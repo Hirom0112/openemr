@@ -7,7 +7,7 @@ dispatcher sends *to* a tool (those input schemas are in agent/schemas.py).
 
 Every LLM generation call in this project must use one of these schemas.
 Free-text JSON parsing (model_validate_json, json.loads on raw text) is
-prohibited by ARCHITECTURE.md §4.4.
+prohibited by W1_ARCHITECTURE.md §4.4.
 """
 
 from typing import Any

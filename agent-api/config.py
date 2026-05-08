@@ -146,7 +146,7 @@ class Settings(BaseSettings):
     # safety on every login — so when the physician clicks Brief / Meds
     # later, they read truly fresh data, not whatever was cached from the
     # previous shift. Cost: ~$0.15 per login for a 10-patient census
-    # (full breakdown in ARCHITECTURE.md §7.1.1).
+    # (full breakdown in W1_ARCHITECTURE.md §7.1.1).
     #
     # DEFAULT: True (clinical correctness wins for the current single-
     # provider demo + pilot scope). Set to False for cost-sensitive
