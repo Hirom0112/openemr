@@ -567,20 +567,22 @@ When adding a new tool, cache, or background task, follow the same pattern: emit
 
 ### 6.1 Test Suite Structure
 
-The evaluation suite contains 47 test cases organized into five categories. A 100% pass rate is required on all hard-failure categories before any physician-facing session. The suite is executed on the synthetic FHIR dataset with a fixed seed for reproducibility. It is run on every prompt change, every model version change, and every tool definition change.
+> **Status note (2026-W2 update).** The 47-test, five-category framework below is the original W1 design plan; it remains the design intent and is partially codified in W1 test docstrings (`tests/test_triage_rules.py`, `tests/test_query_router.py`, `tests/test_medication_safety.py`, `tests/test_verification.py` each declare which slice of the 47 they cover). Live enforcement, however, has shifted to two pytest markers — `hard_failure` (100% gate) and `clinical_accuracy` (95% gate) — declared in `agent-api/pytest.ini` and required by `agent-api/tests/conftest.py:21 REQUIRED_MARKERS`. Each test in the W1 suite carries one of the two markers; the category labels in the table below describe the *intent* but are not pytest markers themselves. The W2 eval gate (W2_ARCHITECTURE.md §11) is a separate, additive layer.
 
-**CI gate.** The eval suite runs as a required step in the CI pipeline. Any commit that modifies any of the following files triggers the full 47-test suite automatically:
+The original W1 evaluation framework targets 47 test cases organized into five categories, on the synthetic FHIR dataset with a fixed seed for reproducibility, run on every prompt change, every model version change, and every tool definition change.
+
+**CI gate (current).** The full pytest suite runs on every PR. The `hard_failure` marker enforces 100% pass; the `clinical_accuracy` marker enforces 95%. Both are declared mandatory in `tests/conftest.py`. The W2 eval gate (`.github/workflows/copilot-eval.yml`) runs alongside, gating regression against `evals/baseline.json`. Any commit that modifies any of the following files triggers the full pytest suite automatically:
 
 - `agent_api/prompts/system_prompt.txt` — any wording change
 - `agent_api/tools/` — any tool definition change
 - `agent_api/rules_engine_config.yaml` — any priority weight or threshold change
 - `agent_api/config.py` or `.env` — any `CLAUDE_MODEL_ID` change
 
-Merges to the main branch are blocked if any hard-failure category is below 100%. Merges are blocked if either the clinical accuracy or latency categories are below 95%. A passing eval run is required — not optional. The intent is that "run on every prompt change" is enforced by the pipeline, not by individual discipline.
+Merges to the main branch are blocked on any `hard_failure`-marked test failing. Merges are blocked if `clinical_accuracy`-marked tests fall below 95%. A passing eval run is required — not optional.
 
-If a model version bump causes a hard-failure regression, the previous `CLAUDE_MODEL_ID` value is restored immediately and the new model is evaluated against the full suite before any re-attempt.
+If a model version bump causes a hard-failure regression, the previous `CLAUDE_MODEL_ID` value is restored immediately and the new model is evaluated against the full suite + `diff_baseline.py` before any re-attempt.
 
-| Category | Test Count | Pass Threshold | Description |
+| Category (design intent) | Test Count (planned) | Pass Threshold | Description |
 |---|---|---|---|
 | Hard failure — wrong patient | 8 | 100% | Agent returns data for a patient not on the census or outside scope without triggering the confirmation prompt |
 | Hard failure — stale data | 6 | 100% | Agent presents a critical value without flagging that the observation timestamp is older than 30 minutes |
@@ -588,10 +590,10 @@ If a model version bump causes a hard-failure regression, the previous `CLAUDE_M
 | Hard failure — scope enforcement | 5 | 100% | Agent responds to a query that requires cross-coverage access without issuing the confirmation prompt |
 | Hard failure — graceful degradation | 6 | 100% | Agent fails silently, returns a hallucinated response, or blocks OpenEMR access when the FHIR feed is unavailable |
 | Clinical accuracy — auto-flags | 8 | 95% | Agent correctly surfaces all auto-highlight triggers defined in USERS.md §4 for patients meeting each triggering condition |
-| Latency — per use case | 5 | 95% | Agent meets the latency target for each of the five use cases under the synthetic dataset load |
+| Latency — per use case | 5 | 95% (design intent — not enforced; see Item 17 / `docs/latency_cost_report.md` and USERS.md §SLA targets for tracking) | Agent meets the latency target for each of the five use cases under the synthetic dataset load |
 | Conversation continuity | 4 | 100% | Agent maintains full conversation context across a simulated 20-minute interruption and resumes without requiring re-explanation |
 
-One failing test in any hard-failure category stops the ship. The agent does not enter any physician-facing session with a hard-failure category below 100%.
+The category labels above describe the original design intent; the live gate is enforced by the two pytest markers (`hard_failure`, `clinical_accuracy`). One failing test marked `hard_failure` stops the ship.
 
 ### 6.2 Synthetic Dataset Requirements
 
@@ -614,7 +616,7 @@ The synthetic FHIR dataset must cover at least 12 patients and must include at l
 
 ### 7.1 Per-Request Cost Model
 
-Pricing is based on `${CLAUDE_MODEL_ID}` (set to `claude-sonnet-4-6` at time of writing — update to the current Sonnet model at deployment time and re-run the full 47-test eval suite before promoting to production). Input tokens at $3.00 per million, output tokens at $15.00 per million. Cached input tokens at $0.30 per million (see §4.3 for caching strategy).
+Pricing is based on `${CLAUDE_MODEL_ID}` (set to `claude-sonnet-4-6` at time of writing — update to the current Sonnet model at deployment time and re-run the full pytest suite + diff_baseline.py before promoting to production). Input tokens at $3.00 per million, output tokens at $15.00 per million. Cached input tokens at $0.30 per million (see §4.3 for caching strategy).
 
 | Use Case | Avg Input Tokens | Avg Output Tokens | Cost per Request | Notes |
 |---|---|---|---|---|
@@ -819,7 +821,7 @@ Determine whether the incident meets the HIPAA definition of a breach under §16
 - Responsible role for notification: designated Privacy Officer (to be named at deployment).
 
 **Step 5 — Post-incident.**
-Run the full 47-test eval suite against the current system state before re-enabling the agent. Rotate all secrets. Review and tighten the minimum-necessary PHI filter in the context construction layer based on what the incident exposed.
+Run the full pytest suite + diff_baseline.py against the current system state before re-enabling the agent. Rotate all secrets. Review and tighten the minimum-necessary PHI filter in the context construction layer based on what the incident exposed.
 
 **Pre-production gate:** The incident response path above must be reviewed by the designated Privacy Officer and documented as approved before the BAA with Anthropic is signed and before real patient data enters any LLM prompt.
 
@@ -877,7 +879,7 @@ Every OpenEMR upstream release is a merge that this fork owns in perpetuity. Ope
 
 1. Pull upstream changes into `clinical-copilot` and resolve merge conflicts against the compose additions and the PHP module.
 2. Verify that the FHIR API surface has not changed in ways that break the agent's resource mapping (§3.2). OpenEMR's FHIR layer has evolved between releases — endpoint paths, resource field names, and SMART scope requirements have all changed in prior versions.
-3. Re-run the full 47-test eval suite against the updated OpenEMR image.
+3. Re-run the full pytest suite + diff_baseline.py against the updated OpenEMR image.
 4. Validate that the PHP module still loads correctly under the new OpenEMR release.
 
 This is not a one-time cost. It is a recurring operational commitment that requires a named owner and a budgeted maintenance window per release cycle. It should be factored into the project timeline before committing to repo co-location as the permanent model.
