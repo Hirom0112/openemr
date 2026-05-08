@@ -188,7 +188,12 @@ def _hydrate_citation(cit: Citation, block_index: dict[str, LayoutBlock]) -> Cit
 def _hydrate_lab_report_citations(
     report: LabReport, blocks: List[LayoutBlock]
 ) -> LabReport:
-    """Walk every LabValue.citations and stamp bbox/page from the layout."""
+    """Walk every LabValue.citations AND every demographics sub-field's
+    citations, stamping bbox/page from the layout. Without demographics
+    hydration the bbox layer can't draw a highlight when the user clicks
+    a Name/DOB/MRN card on a lab-report review panel — the LLM's
+    field_or_chunk_id is set but bbox/page stay None.
+    """
     block_index = _index_blocks(blocks)
     new_values = [
         v.model_copy(
@@ -198,7 +203,24 @@ def _hydrate_lab_report_citations(
         )
         for v in report.values
     ]
-    return report.model_copy(update={"values": new_values})
+    update: dict = {"values": new_values}
+    demo = getattr(report, "patient_demographics", None)
+    if demo is not None:
+        new_demo_fields: dict = {}
+        for sub in ("name", "dob", "sex", "mrn", "address"):
+            tf = getattr(demo, sub, None)
+            if tf is None:
+                continue
+            new_demo_fields[sub] = tf.model_copy(
+                update={
+                    "citations": [
+                        _hydrate_citation(c, block_index) for c in tf.citations
+                    ]
+                }
+            )
+        if new_demo_fields:
+            update["patient_demographics"] = demo.model_copy(update=new_demo_fields)
+    return report.model_copy(update=update)
 
 
 def _unknown_key_facts(blocks: List[LayoutBlock], document_reference_id: str) -> List[KeyFact]:
