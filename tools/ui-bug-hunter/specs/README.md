@@ -41,9 +41,9 @@ cached in `.auth/{admin,sara}.json` (gitignored) by `global-setup.ts`.
 ## Credentials
 
 `global-setup.ts` logs in as both `admin` and `sara` and persists cookies to
-`.auth/`. It tries the password `pass` first.
+`.auth/`. Admin password is `pass`; sara's demo password is `chen`.
 
-If sara's password isn't `pass`, set the env var:
+If sara's password isn't `chen` (e.g. on a non-default deploy), set the env var:
 
 ```bash
 SARA_PASSWORD=correct-horse npm test

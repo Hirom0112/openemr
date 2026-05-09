@@ -43,3 +43,7 @@ already run. Re-running is safe and cheap.
 1. Set `COPILOT_AGENT_API_URL` on the OpenEMR Railway service.
 2. Trigger a redeploy of the OpenEMR service so the new env var is applied.
 3. Run `scripts/seed-railway.sh` once. Subsequent deploys do not need it.
+
+## Probing the deployed MySQL
+
+`railway run -s <service> -- <cmd>` runs locally with env injected, so `MYSQL_HOST=mysql.railway.internal` won't resolve from your laptop. Use `railway ssh --service clinical-copilot-openemr '<cmd>'` to execute inside the container instead — that's how to run ad-hoc `mysql`/`php` probes against the deployed DB.

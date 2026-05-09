@@ -24,7 +24,7 @@ const systemPrompt = `You are a defensive QA agent hunting bugs in the OpenEMR w
 
 Target: ${targetUrl}
 Login: ${username} / ${password}
-There is also a "Co-Pilot" tab (clinical-copilot feature). A provider login \`sara\` / \`pass\` exists if you want to test it.
+There is also a "Co-Pilot" tab (clinical-copilot feature). A provider login \`sara\` / \`chen\` exists if you want to test it.
 
 Mission (PRIORITY ORDER):
 
@@ -34,7 +34,7 @@ Mission (PRIORITY ORDER):
    - Type messages in the chat input box. Try: a normal clinical question ("what's the status of patient pt-001?"), an empty submit, a 5000-character string, weird unicode (emoji, RTL marks, null bytes), HTML/JS injection (\`<script>alert(1)</script>\`), SQL-looking input, and rapid repeated submits.
    - Verify chat responses render, streaming works (if any), and rationale expansion is under 2 seconds.
    - Switch to another nav tab and back — Co-Pilot state must persist.
-   - Try logging in as \`sara\`/\`pass\` (provider) to compare behavior.
+   - Try logging in as \`sara\`/\`chen\` (provider) to compare behavior.
    - Watch the network tab for calls to \`/agent\`, \`/triage\`, \`/briefing\` endpoints — flag any 4xx/5xx, hangs, or malformed responses.
 
 2. **Broad UI sweep — secondary.** Click through other nav items (Calendar, Flow, Recalls, Messages, Patient, Reports, Admin). Try invalid input in forms (empty required fields, oversized strings, weird unicode, SQL/HTML-looking strings).

@@ -98,6 +98,7 @@ On the deployed pilot, documents currently round-trip via a custom JWT-protected
 | Service    | URL                       | Credentials          |
 |------------|---------------------------|----------------------|
 | OpenEMR    | http://localhost:8300      | admin / pass         |
+| OpenEMR (provider) | http://localhost:8300      | sara / chen          |
 | phpMyAdmin | http://localhost:8310      | openemr / openemr    |
 
 ## Stopping and resetting
@@ -120,7 +121,8 @@ The following warnings appear in logs in the dev environment and are expected â€
 ## Deployed
 
 - **OpenEMR (Railway):** https://clinical-copilot-openemr-production.up.railway.app/interface/login/login.php?site=default
-- **Login:** `admin` / `pass`
+- **Admin login:** `admin` / `pass`
+- **Provider login:** `sara` / `chen` (Sara Chen â€” Physicians group, `authorized=1`; demo clinician used by the census panel)
 - **Branch:** `clinical-copilot`
 
 ---

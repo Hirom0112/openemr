@@ -15,6 +15,11 @@
 | OpenEMR (chart system of record) | https://clinical-copilot-openemr-production.up.railway.app |
 | Code (W2 branch) | https://github.com/Hirom0112/openemr/tree/clinical-copilot |
 
+**OpenEMR demo logins:**
+
+- Admin: `admin` / `pass`
+- Provider (Sara Chen, Physicians group, `authorized=1`): `sara` / `chen`
+
 Demo video is submitted directly with the deliverable.
 
 ---

@@ -17,9 +17,10 @@ const __dirname = dirname(__filename);
  *   - submits to /interface/login/login.php?site=default
  *   - on success the browser lands on /interface/main/tabs/main.php
  *
- * Sara's password is unknown to this harness. We try `pass` first and fall back
- * to SARA_PASSWORD env var if that fails. If both fail we throw with a clear
- * message — the rest of the suite cannot run without sara's session.
+ * Sara's demo password is `chen`. We try that first and fall back to the
+ * SARA_PASSWORD env var if that fails (e.g. on a non-default deploy). If both
+ * fail we throw with a clear message — the rest of the suite cannot run
+ * without sara's session.
  */
 
 const BASE_URL = process.env.TARGET_URL || 'http://localhost:8300';
@@ -62,7 +63,7 @@ async function saveSession(creds: Credentials): Promise<void> {
         `[ui-bug-hunter] login failed for user "${creds.user}". ` +
           `Tried "${creds.primaryPass}"` +
           (creds.fallbackPass ? ` and SARA_PASSWORD fallback` : '') +
-          `. Set SARA_PASSWORD in your environment if sara's password is not "pass", ` +
+          `. Set SARA_PASSWORD in your environment if sara's password is not "chen", ` +
           `e.g. \`SARA_PASSWORD=correct-horse npm test\`.`,
       );
     }
@@ -88,8 +89,8 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
   const saraEnv = process.env.SARA_PASSWORD;
   await saveSession({
     user: 'sara',
-    primaryPass: 'pass',
-    fallbackPass: saraEnv && saraEnv !== 'pass' ? saraEnv : undefined,
+    primaryPass: 'chen',
+    fallbackPass: saraEnv && saraEnv !== 'chen' ? saraEnv : undefined,
     storagePath: resolve(AUTH_DIR, 'sara.json'),
   });
 }
