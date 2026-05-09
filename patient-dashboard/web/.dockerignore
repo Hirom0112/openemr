@@ -1,0 +1,14 @@
+# Exclude build artifacts that the Dockerfile rebuilds inside the container.
+# Without this, `railway up` would upload ~1GB (node_modules + .next) and
+# typically times out before reaching Railway's backend.
+node_modules
+.next
+.next-build
+out
+.git
+.env*
+*.log
+.DS_Store
+coverage
+.cache
+.turbo

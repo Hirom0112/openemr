@@ -1,0 +1,16 @@
+# Exclude build artifacts and local-only state from `railway up` uploads.
+# Dockerfile rebuilds these inside the container — uploading them would
+# bloat the build context to ~1GB and time out before reaching Railway.
+# Mirrors .dockerignore (which only applies once Docker runs; .railwayignore
+# is what the CLI honours when packaging the upload).
+node_modules
+.next
+.next-build
+out
+.git
+.env*
+*.log
+.DS_Store
+coverage
+.cache
+.turbo

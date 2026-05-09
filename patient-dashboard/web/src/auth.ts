@@ -61,6 +61,17 @@ const crossSiteCookies = process.env.NEXTAUTH_URL?.startsWith("https://")
   : undefined;
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  // Explicit basePath for Auth.js action parsing. Without this, Auth.js
+  // derives basePath from NEXTAUTH_URL's path component — which here is
+  // `/dashboard/api/auth` because NEXTAUTH_URL must include the same-origin
+  // `/dashboard` prefix for OAuth callback URL generation. But Next.js's
+  // own `basePath: "/dashboard"` (next.config.ts) strips `/dashboard` from
+  // inbound URLs before this handler runs, so Auth.js sees `/api/auth/...`.
+  // Two layers of basePath stripping that disagree → every action 400s
+  // with `UnknownAction: Cannot parse action at /api/auth/session`. Pinning
+  // basePath here to the post-strip path keeps action parsing correct
+  // while NEXTAUTH_URL keeps the `/dashboard` prefix for callback URLs.
+  basePath: "/api/auth",
   providers: [
     OpenEMR({
       baseUrl,
