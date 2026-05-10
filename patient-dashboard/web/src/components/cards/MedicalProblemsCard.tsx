@@ -33,6 +33,7 @@ import { EmptyCard, ErrorCard } from "@/components/cards/card-states";
 import { FhirClient } from "@/lib/fhir/client";
 import { authSessionTokenProvider } from "@/lib/fhir/token";
 import type { FhirCondition } from "@/lib/fhir/types";
+import { isCopilotCondition } from "./CopilotConditionsCard";
 
 const CARD_TITLE = "Medical Problems";
 
@@ -102,6 +103,15 @@ export function filterVisibleProblems(
   conditions: readonly FhirCondition[],
 ): FhirCondition[] {
   return conditions.filter((c) => {
+    // Exclude copilot-prefixed rows — those are surfaced by
+    // CopilotConditionsCard. The FHIR Condition aggregator returns both
+    // the projected `lists` row (no copilot- prefix) and the canonical
+    // `copilot_conditions` row (copilot- prefix) for the same fact;
+    // each card claims one half of that pair to avoid the user seeing
+    // every copilot-extracted problem twice on the dashboard.
+    if (isCopilotCondition(c)) {
+      return false;
+    }
     const status = getClinicalStatusCode(c);
     // No status -> default to visible (synthetic data may omit it).
     if (status === null) {
