@@ -12,6 +12,7 @@
 namespace OpenEMR\Services\FHIR;
 
 use OpenEMR\BC\ServiceContainer;
+use OpenEMR\Modules\ClinicalCopilot\FHIR\FhirCopilotDocumentReferenceService;
 use OpenEMR\Services\FHIR\DocumentReference\FhirClinicalNotesService;
 use OpenEMR\Services\FHIR\DocumentReference\FhirDocumentReferenceAdvanceCareDirectiveService;
 use OpenEMR\Services\FHIR\DocumentReference\FhirPatientDocumentReferenceService;
@@ -48,6 +49,14 @@ class FhirDocumentReferenceService extends FhirServiceBase implements IPatientCo
         // connected to a patient
         $this->addMappedService(new FhirPatientDocumentReferenceService($fhirApiURL));
         $this->addMappedService(new FhirDocumentReferenceAdvanceCareDirectiveService($fhirApiURL));
+
+        // Co-Pilot FHIR sub-service registration. OpenEMR's
+        // FhirDocumentReferenceService does not expose a plugin hook for
+        // sub-service contributions, so this single registration line is
+        // the documented exception to the "no core edits" rule. See
+        // agent-api/CLAUDE.md rule 8 for the rationale; precedent is the
+        // matching call in FhirObservationService.php.
+        $this->addMappedService(new FhirCopilotDocumentReferenceService($fhirApiURL));
     }
 
     public function setSession(SessionInterface $session): void
