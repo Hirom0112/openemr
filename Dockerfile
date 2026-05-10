@@ -38,10 +38,12 @@ RUN mkdir -p /var/www/localhost/htdocs/openemr/sites/default && \
 # We deliberately do NOT copy vendor/, public/assets/, or sites/ — those are
 # either built/installed by the base image or contain runtime config we are
 # already managing above (sqlconf.php).
-COPY src/        /var/www/localhost/htdocs/openemr/src/
-COPY library/    /var/www/localhost/htdocs/openemr/library/
-COPY interface/  /var/www/localhost/htdocs/openemr/interface/
-COPY templates/  /var/www/localhost/htdocs/openemr/templates/
+COPY src/         /var/www/localhost/htdocs/openemr/src/
+COPY library/     /var/www/localhost/htdocs/openemr/library/
+COPY interface/   /var/www/localhost/htdocs/openemr/interface/
+COPY templates/   /var/www/localhost/htdocs/openemr/templates/
+COPY controllers/ /var/www/localhost/htdocs/openemr/controllers/
+COPY scripts/     /var/www/localhost/htdocs/openemr/scripts/
 # composer.json was updated upstream (PR #11412, 2026-04-02) to register
 # library/global_functions.inc.php in `autoload.files`. The base image's
 # vendor/composer/autoload_files.php predates that change, so functions
