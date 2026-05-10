@@ -68,6 +68,15 @@ RUN chown -R apache:root \
     /var/www/localhost/htdocs/openemr/composer.json \
     /var/www/localhost/htdocs/openemr/composer.lock
 
+# Belt-and-suspenders: the openemr base image's entrypoint chmod's to 0400/
+# 0500 only paths it knows about; new paths (controllers/, scripts/) are
+# untouched and remain at Docker COPY's default ownership/perms. If the
+# build-time chown above is reset by some later layer, world-readable bits
+# guarantee the files stay loadable by the apache child process regardless.
+RUN chmod -R a+rX \
+    /var/www/localhost/htdocs/openemr/controllers/ \
+    /var/www/localhost/htdocs/openemr/scripts/
+
 # Regenerate the composer autoloader so library/global_functions.inc.php
 # (and any other autoload.files entries the base image's autoloader missed)
 # are require'd at runtime. --no-dev keeps the prod-only set; --optimize
