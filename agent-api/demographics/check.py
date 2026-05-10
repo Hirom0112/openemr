@@ -31,14 +31,39 @@ def _normalize_name(value: str) -> str:
     return _WS_RE.sub(" ", value).strip().lower()
 
 
+_EXTERNAL_MRN_PREFIX_RE = re.compile(r"^[A-Z]{2,}[\-_].+", re.IGNORECASE)
+
+
+def _is_external_identifier_system(value: str) -> bool:
+    """True when ``value`` looks like an external identifier system.
+
+    External MRNs surface on referral letters / outside-system documents
+    with a system prefix (``BHS-2847163``, ``MRN-2026-XXXX``,
+    ``SHC_12345``). The chart's MRN is the local FHIR identifier
+    (typically a short numeric or local-system string) — comparing across
+    systems is a category error, not a wrong-patient signal.
+    """
+    return bool(_EXTERNAL_MRN_PREFIX_RE.match(value.strip()))
+
+
 def _mrn_match(
     doc_mrn: str | None, chart_mrn: str
 ) -> Literal["match", "mismatch", "unreadable", "absent"]:
     """Compare document MRN to chart MRN.
 
-    The doc-side accepts the sentinel string ``"UNREADABLE"`` to indicate the
-    OCR layer saw an MRN region but could not transcribe it; ``None`` or
-    empty means the document had no MRN at all.
+    The doc-side accepts the sentinel string ``"UNREADABLE"`` to indicate
+    the OCR layer saw an MRN region but could not transcribe it; ``None``
+    or empty means the document had no MRN at all.
+
+    Identifier-system handling: when the document MRN is from a clearly
+    different identifier system (external prefix like ``BHS-`` /
+    ``MRN-2026-``) than the chart MRN (local numeric / local-system),
+    return ``"absent"`` rather than ``"mismatch"``. The MRN comparison is
+    not meaningful across systems; downstream falls back to name+DOB
+    matching, which is the correct verification mode for outside-system
+    documents (referrals, faxed records). This avoids spurious
+    ``hard_block`` decisions on documents that are correctly attributed
+    by name+DOB but carry an external MRN format.
     """
     if doc_mrn is None or doc_mrn == "":
         return "absent"
@@ -46,6 +71,10 @@ def _mrn_match(
         return "unreadable"
     if doc_mrn.strip() == chart_mrn.strip():
         return "match"
+    # Cross-system: doc has external prefix, chart does not (or vice
+    # versa). Treat as absent so name+DOB carries the verification.
+    if _is_external_identifier_system(doc_mrn) != _is_external_identifier_system(chart_mrn):
+        return "absent"
     return "mismatch"
 
 

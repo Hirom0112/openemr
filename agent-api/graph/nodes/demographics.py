@@ -63,6 +63,35 @@ def _extract_chart_demographics(patient: dict[str, Any]) -> dict[str, str]:
     return {"mrn": mrn, "name": name_str, "dob": dob}
 
 
+def _flatten_doc_demographics(doc_demo: Any) -> dict[str, str | None]:
+    """Coerce a document-side demographics block into flat ``{mrn,name,dob}`` strings.
+
+    The IntakeForm extractor emits demographics as TextField dicts
+    (``{"value": str, "citations": [...], "needs_review": bool}``) so the
+    citation chain survives downstream rubric checks. The pure-function
+    comparator at ``demographics.check.check_demographics`` calls
+    ``.strip()`` on the field, which raises ``AttributeError`` on a dict.
+
+    LabReport / HL7 / workbook paths emit flat strings already; both shapes
+    must continue to work. Missing keys / malformed shapes collapse to
+    ``None`` so the comparator treats them as absent rather than crashing.
+    """
+    if not isinstance(doc_demo, dict):
+        return {"mrn": None, "name": None, "dob": None}
+
+    out: dict[str, str | None] = {}
+    for key in ("mrn", "name", "dob"):
+        raw = doc_demo.get(key)
+        if isinstance(raw, dict):
+            value = raw.get("value")
+            out[key] = value if isinstance(value, str) else None
+        elif isinstance(raw, str):
+            out[key] = raw
+        else:
+            out[key] = None
+    return out
+
+
 async def demographics_node(
     state: W2State,
     *,
@@ -125,7 +154,7 @@ async def demographics_node(
 
     chart = _extract_chart_demographics(chart_patient)
     result = check_demographics(
-        document_demographics=doc_demo,
+        document_demographics=_flatten_doc_demographics(doc_demo),
         chart_patient=chart,
     )
     duration_ms = int((time.monotonic() - t0) * 1000)

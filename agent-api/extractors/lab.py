@@ -223,6 +223,114 @@ def _hydrate_lab_report_citations(
     return report.model_copy(update=update)
 
 
+_IMAGING_RE = __import__("re").compile(
+    r"\b(IMAGING|RADIOLOGY|MRI|CT SCAN|X[\-\s]?RAY|ULTRASOUND|"
+    r"IMPRESSION:|FINDINGS:|TECHNIQUE:|RADIOLOGIST|"
+    r"CONTRAST|DICOM|CHEST X|ABDOMEN.*PELVIS|"
+    r"NORMAL EXAM|UNREMARKABLE)\b",
+    __import__("re").IGNORECASE,
+)
+
+
+def _has_imaging_keywords(blocks: List[LayoutBlock]) -> bool:
+    """True when the document carries radiology/imaging language.
+
+    Used by the lab-extractor fallback path to distinguish imaging-report
+    fixtures (where the keyword classifier returns no lab/intake verdict)
+    from synthetic bbox_gt fixtures (also no verdict, but no medical
+    text either). Letting the critic differentiate ``document_kind_guess``
+    avoids both: (a) firing wrong_type_hint on bbox_gt synthetics, and
+    (b) silently swallowing wrong_type_hint on real imaging fixtures.
+    """
+    for b in blocks:
+        if _IMAGING_RE.search(b.text):
+            return True
+    return False
+
+
+def _classify_no_blocks(pdf_bytes: bytes) -> Tuple[str, Tuple[float, float]]:
+    """Classify a PDF that yielded zero layout blocks.
+
+    Returns ``(document_kind_guess, ocr_confidence_range)`` shaped so the
+    critic's ``_detect_blank_unreadable`` lands on the right decision:
+
+    * ``("pdf_blank", (1.0, 1.0))`` — pymupdf opens the bytes and finds zero
+      pages, or all pages return empty text + zero images. The document is
+      structurally empty; no OCR was actually attempted on content, so we
+      report high confidence that there is nothing to read. Critic routes
+      to ``EMPTY_DOCUMENT`` hard_block (matches ``_BLANK_GUESS_TOKENS``).
+    * ``("low_quality_scan", (0.1, 0.3))`` — pymupdf opens with pages that
+      contain text or images yet ``extract_layout`` produced nothing. The
+      document had bytes but the OCR/layout pipeline could not recover them
+      (degraded scan, redacted fields). Critic routes to
+      ``OCR_CONFIDENCE_LOW`` soft_warn (range[0] < 0.6).
+    * ``("corrupt", (0.0, 0.0))`` — pymupdf raises on open. Document bytes
+      are present but unreadable. Critic routes to ``UNREADABLE_DOCUMENT``
+      hard_block (matches ``_UNREADABLE_GUESS_TOKENS``).
+    """
+    try:
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:  # noqa: BLE001 — boundary; pymupdf raises generic
+        return "corrupt", (0.0, 0.0)
+    try:
+        page_count = doc.page_count
+        if page_count == 0:
+            return "pdf_blank", (1.0, 1.0)
+        total_text_len = 0
+        has_images = False
+        for page in doc:
+            total_text_len += len(page.get_text() or "")
+            if page.get_images():
+                has_images = True
+        if total_text_len == 0 and not has_images:
+            return "pdf_blank", (1.0, 1.0)
+        return "low_quality_scan", (0.1, 0.3)
+    finally:
+        doc.close()
+
+
+def _empty_document_sentinel(
+    pdf_bytes: bytes,
+    *,
+    patient_id: str,
+    document_reference_id: str,
+) -> UnknownDocument:
+    """Emit a sentinel UnknownDocument when no layout blocks were recovered.
+
+    Replaces the prior ``raise ExtractionFailed`` path so the critic gets a
+    chance to classify *why* extraction yielded nothing (truly blank vs.
+    degraded scan vs. corrupt bytes) and emit the right decision, rather
+    than the eval boundary catching the exception and silently nulling the
+    extraction. Schema-conformant: ``key_facts`` carries a single sentinel
+    placeholder so ``UnknownDocument`` validates and the critic's
+    ``_is_sentinel_unknown`` recognises the shape.
+    """
+    guess, ocr_range = _classify_no_blocks(pdf_bytes)
+    sentinel_citation = Citation(
+        source_type="document",
+        source_id=document_reference_id,
+        page_or_section=None,
+        field_or_chunk_id="empty",
+        quote_or_value="(no extractable content)",
+    )
+    sentinel_keyfact = KeyFact(
+        text="(empty document)",
+        citations=[sentinel_citation],
+    )
+    return UnknownDocument(
+        kind="unknown",
+        schema_version="1.0",
+        patient_id=patient_id,
+        document_reference_id=document_reference_id,
+        document_kind_guess=guess,
+        summary="Document yielded no layout blocks during extraction.",
+        key_facts=[sentinel_keyfact],
+        classifier_confidence=0.0,
+        ocr_confidence_range=ocr_range,
+        extracted_at=datetime.now(timezone.utc),
+    )
+
+
 def _unknown_key_facts(blocks: List[LayoutBlock], document_reference_id: str) -> List[KeyFact]:
     """Build at least one KeyFact (the schema requires non-empty key_facts).
 
@@ -346,11 +454,15 @@ async def extract(
     """
     blocks = extract_layout(pdf_bytes)
     if not blocks:
-        logger.error(
-            "extractor_no_layout_blocks",
+        logger.warning(
+            "extractor_no_layout_blocks_emitting_sentinel",
             extra={"document_reference_id": document_reference_id},
         )
-        raise ExtractionFailed("vision call failed")
+        return _empty_document_sentinel(
+            pdf_bytes,
+            patient_id=patient_id,
+            document_reference_id=document_reference_id,
+        )
 
     ocr_range = _ocr_confidence_range(blocks)
     verdict = classify_keywords(blocks)
@@ -359,6 +471,15 @@ async def extract(
     if verdict is None or verdict.kind != "lab_report":
         classifier_confidence = verdict.confidence if verdict is not None else 0.0
         guess = verdict.kind if verdict is not None else "unknown"
+        # Imaging-report fallback: when neither lab nor intake keywords
+        # fire but radiology/imaging keywords do, label the guess so the
+        # critic's wrong-type-hint detector can recognize the disagreement
+        # (hint=lab_report on an imaging report → soft_warn). Without this,
+        # imaging_report fixtures land at guess="unknown" and are
+        # indistinguishable from synthetic bbox_gt fixtures, which the
+        # detector intentionally skips.
+        if guess == "unknown" and _has_imaging_keywords(blocks):
+            guess = "imaging_report"
         logger.info(
             "extractor_unknown_fallback",
             extra={

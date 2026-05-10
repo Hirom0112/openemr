@@ -863,6 +863,7 @@ async def run_case(
             patient_id=str(chart_patient.get("id") or "eval-patient"),
             file_bytes_ref=f"eval-ref-{case_id}",
             doc_type_hint=getattr(case, "doc_type_hint", None),
+            document_modality=getattr(case, "document_modality", None),
         )
 
         config = {"configurable": {"thread_id": f"eval-thread-{case_id}"}}

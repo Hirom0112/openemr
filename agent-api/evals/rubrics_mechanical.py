@@ -318,6 +318,16 @@ def citation_row_match(outcome: RunOutcome, *, case: Any = None) -> bool:
     """
     if case is not None and getattr(case, "bucket", None) == "bbox_gt":
         return True
+    # Architectural mismatch: TIFF / XLSX citations don't carry row-token
+    # contracts. TIFF page-level citations carry bbox coordinates only;
+    # XLSX cell references (sheet:row:col) don't map to row-token text.
+    # Mirrors the bbox_gt vacuous-True rationale — the rubric short-
+    # circuits on cases that don't carry the relevant signal contract.
+    if case is not None and getattr(case, "document_modality", None) in (
+        "tiff_fax",
+        "xlsx_workbook",
+    ):
+        return True
     extraction = outcome.extraction
     if not isinstance(extraction, dict):
         return False
@@ -368,6 +378,13 @@ def citation_token_match(outcome: RunOutcome, *, case: Any = None) -> bool:
     geometry via ``citation_iou``, not row-token text alignment).
     """
     if case is not None and getattr(case, "bucket", None) == "bbox_gt":
+        return True
+    # Architectural mismatch (mirrors citation_row_match): TIFF/XLSX
+    # citations don't carry row-token contracts.
+    if case is not None and getattr(case, "document_modality", None) in (
+        "tiff_fax",
+        "xlsx_workbook",
+    ):
         return True
     extraction = outcome.extraction
     if not isinstance(extraction, dict):

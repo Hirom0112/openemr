@@ -22,6 +22,16 @@ class W2State(TypedDict):
     message: Optional[str]                # textual user query
     file_bytes_ref: Optional[str]         # opaque pointer; raw bytes pass via ctx
     doc_type_hint: Optional[str]
+    # Production-side acquisition mode tag: ``scanned_pdf`` / ``photo_capture``
+    # / ``tiff_fax`` / ``hl7_v2`` / ``xlsx_workbook`` / ``docx_referral``
+    # / ``intake_form`` / ``typed_pdf`` / ``multi_column`` / ``synthetic`` /
+    # ``unknown``. Drives critic policy that varies by acquisition surface
+    # (e.g., OCR_LOW_CONFIDENCE escalates on faxed/scanned medical forms
+    # where degraded transcription affects value fidelity, but is
+    # informational on photo_capture surfaces where extraction emits no
+    # content claims). Optional; production callers leave ``None`` and the
+    # critic falls back to its default policy.
+    document_modality: NotRequired[Optional[str]]
 
     # --- Pipeline outputs ----------------------------------------------
     ocr_layout: NotRequired[List[Dict[str, Any]]]
@@ -57,6 +67,7 @@ def make_initial_state(
     message: Optional[str] = None,
     file_bytes_ref: Optional[str] = None,
     doc_type_hint: Optional[str] = None,
+    document_modality: Optional[str] = None,
 ) -> W2State:
     """Build a W2State with required fields populated and safe defaults."""
     state: W2State = {
@@ -68,6 +79,7 @@ def make_initial_state(
         "message": message,
         "file_bytes_ref": file_bytes_ref,
         "doc_type_hint": doc_type_hint,
+        "document_modality": document_modality,
         "errors": [],
     }
     return state
