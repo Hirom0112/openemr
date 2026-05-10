@@ -103,6 +103,57 @@ finally:
 PY
 )
 
+# ── Ensure "Clinical Copilot Upload" category exists ────────────────────────
+# Required for FHIR DocumentReference search to surface Copilot-uploaded
+# documents (the FHIR projection in src/Services/DocumentService.php joins
+# categories.codes, and a category with no LOINC code resolves to a Data
+# Absent Reason). Idempotent — INSERTs only when the row is missing, and
+# allocates the next free id since `categories` has no auto-increment.
+echo "==> Ensuring 'Clinical Copilot Upload' category exists..."
+python3 - <<'PY'
+import os, sys
+try:
+    import pymysql
+except ImportError:
+    print("pymysql not installed; run: pip3 install pymysql", file=sys.stderr)
+    sys.exit(5)
+
+CATEGORY_NAME = "Clinical Copilot Upload"
+CATEGORY_CODE = "LOINC:34109-9"
+PARENT_ID = 1
+
+conn = pymysql.connect(
+    host=os.environ["MYSQL_HOST"],
+    port=int(os.environ["MYSQL_PORT"]),
+    user=os.environ["MYSQL_USER"],
+    password=os.environ["MYSQL_PASS"],
+    database=os.environ["MYSQL_DB"],
+    connect_timeout=10,
+    autocommit=True,
+)
+try:
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM categories WHERE name = %s LIMIT 1", (CATEGORY_NAME,))
+        row = cur.fetchone()
+        if row:
+            print(f"==> Category '{CATEGORY_NAME}' already exists (id={row[0]}). Skipping insert.")
+        else:
+            cur.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM categories")
+            next_id = int(cur.fetchone()[0])
+            cur.execute(
+                "INSERT INTO categories (id, name, value, parent, lft, rght, aco_spec, codes)"
+                " VALUES (%s, %s, '', %s, 0, 0, 'patients|docs', %s)",
+                (next_id, CATEGORY_NAME, PARENT_ID, CATEGORY_CODE),
+            )
+            try:
+                cur.execute("UPDATE categories_seq SET id = (SELECT MAX(id) FROM categories)")
+            except Exception:
+                pass
+            print(f"==> Inserted category '{CATEGORY_NAME}' (id={next_id}, codes={CATEGORY_CODE}).")
+finally:
+    conn.close()
+PY
+
 if [[ "${probe_count}" -gt 0 ]]; then
     echo "==> Database already seeded (${probe_count} marker row(s) found). Skipping load."
     exit 0

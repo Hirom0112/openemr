@@ -63,7 +63,9 @@ final class UploadController
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'application/hl7-v2',
     ];
-    private const DEFAULT_CATEGORY = 'Medical Record';
+    private const DEFAULT_CATEGORY      = 'Clinical Copilot Upload';
+    private const DEFAULT_CATEGORY_CODE = 'LOINC:34109-9';
+    private const DEFAULT_CATEGORY_PARENT = 1;
 
     /**
      * Entry point. Reads $_SERVER / $_POST / $_FILES, writes a JSON response,
@@ -232,10 +234,18 @@ final class UploadController
     }
 
     /**
-     * Resolve the ``Medical Record`` category id (or first available top-level
-     * category as a safety net). Returns 1 if the categories table is empty
-     * (unconfigured deploy) — Document::createDocument will still write the
-     * row; the document just won't show under a tree node.
+     * Resolve the ``Clinical Copilot Upload`` category id, creating it on
+     * first use if the row does not yet exist. Categorises uploaded docs
+     * under a category whose ``codes`` column carries LOINC ``34109-9``
+     * ("Note") so that the FHIR DocumentReference search surfaces them
+     * (DocumentService joins ``categories.codes`` into the result row;
+     * categories without a code resolve to a Data Absent Reason and are
+     * filtered out by FHIR consumers).
+     *
+     * Falls back to the first top-level category if the create-on-first-use
+     * INSERT fails (e.g. read-only DB user), and finally to 1 if the
+     * categories table is empty entirely. ``Document::createDocument`` will
+     * still write the document row in any case.
      */
     private static function resolveCategoryId(): int
     {
@@ -246,6 +256,37 @@ final class UploadController
         if (is_array($row) && isset($row['id'])) {
             return (int) $row['id'];
         }
+
+        // Create-on-first-use: insert a dedicated category whose codes
+        // column carries the LOINC code that the FHIR DocumentReference
+        // search needs. The categories table has no auto-increment, so
+        // we allocate the next id from MAX(id)+1 and keep categories_seq
+        // in sync (legacy CategoryTree code reads from it). Idempotent in
+        // practice because the SELECT above runs first; on a race a
+        // second row with the same name is benign — the next caller's
+        // SELECT picks whichever id wins.
+        try {
+            $nextRow = sqlQuery("SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM categories");
+            $nextId = (is_array($nextRow) && isset($nextRow['next_id'])) ? (int) $nextRow['next_id'] : 1;
+            sqlStatement(
+                "INSERT INTO categories (id, name, value, parent, lft, rght, aco_spec, codes)"
+                . " VALUES (?, ?, '', ?, 0, 0, 'patients|docs', ?)",
+                [$nextId, self::DEFAULT_CATEGORY, self::DEFAULT_CATEGORY_PARENT, self::DEFAULT_CATEGORY_CODE]
+            );
+            // Keep the legacy sequence table aligned for any code that
+            // reads it; ignored if the table doesn't exist on this build.
+            try {
+                sqlStatement(
+                    "UPDATE categories_seq SET id = (SELECT MAX(id) FROM categories)"
+                );
+            } catch (Throwable $seqErr) {
+                // intentional no-op: categories_seq is informational here
+            }
+            return $nextId;
+        } catch (Throwable $e) {
+            error_log('[clinical-copilot] category create failed: ' . $e->getMessage());
+        }
+
         $fallback = sqlQuery(
             "SELECT id FROM categories WHERE parent = 0 ORDER BY id ASC LIMIT 1"
         );
