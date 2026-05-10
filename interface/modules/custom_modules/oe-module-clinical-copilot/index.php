@@ -93,16 +93,18 @@ if (empty($patientIds) && !empty($_GET['pids'])) {
     $patientIds = array_filter(array_map('intval', explode(',', $_GET['pids'])));
 }
 
-// Auto-populate from open encounters assigned to this provider in the last 7 days.
+// Auto-populate from open encounters assigned to this provider in the last 30 days.
 // date_end IS NULL means the encounter has not been closed/discharged yet.
 // Falls back to this only when neither the session variable nor ?pids= is set.
+// Window widened from 7 → 30 days so the synthetic seed cohort (encounters
+// dated at seed-time, not refreshed daily) doesn't age out of Sara's panel.
 if (empty($patientIds) && $providerId > 0) {
     $encounterResult = sqlStatement(
         "SELECT DISTINCT pid
            FROM form_encounter
           WHERE provider_id = ?
             AND (date_end IS NULL OR date_end = '0000-00-00 00:00:00')
-            AND date >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            AND date >= DATE_SUB(NOW(), INTERVAL 30 DAY)
           ORDER BY date ASC",
         [$providerId]
     );
