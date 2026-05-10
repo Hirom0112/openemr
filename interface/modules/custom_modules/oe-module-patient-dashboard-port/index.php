@@ -22,8 +22,10 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../../../globals.php';
+require_once __DIR__ . '/src/LaunchJwt.php';
 
 use OpenEMR\Common\Acl\AclMain;
+use OpenEMR\Modules\PatientDashboardPort\LaunchJwt;
 
 if (!AclMain::aclCheckCore('patients', 'med')) {
     http_response_code(403);
@@ -73,9 +75,31 @@ $pid = $noPatient ? 0 : (int) $rawPid;
 // blocking that breaks iframe OAuth callbacks. The PATIENT_DASHBOARD_URL
 // env var is still used for the misconfigured-banner check + the
 // fallback "open in new tab" link (when the proxy is unreachable).
-$iframeSrc = ($misconfigured || $noPatient)
+// Mint a short-lived HS256 launch JWT so the Next.js dashboard can
+// establish its own session without bouncing the user through OpenEMR's
+// OAuth login form (which fails on iframe re-auth and produces the
+// "forced re-login" symptom). The shared secret lives in
+// DASHBOARD_LAUNCH_SECRET on both services. If the secret is missing
+// we silently fall back to the OAuth path — the only loss is the
+// launch SSO bridge.
+$launchSecret = (string) (getenv('DASHBOARD_LAUNCH_SECRET') ?: '');
+$authUserId   = (int) ($_SESSION['authUserID'] ?? 0);
+$launchToken  = '';
+if (!$noPatient && !$misconfigured && $launchSecret !== '' && $authUserId > 0) {
+    try {
+        $launchToken = LaunchJwt::mint($authUserId, $pid, $launchSecret);
+    } catch (\Throwable $e) {
+        error_log('[patient-dashboard-port] launch JWT mint failed: ' . $e->getMessage());
+        $launchToken = '';
+    }
+}
+
+$iframeBase = ($misconfigured || $noPatient)
     ? ''
     : '/dashboard/patient/' . rawurlencode((string) $pid);
+$iframeSrc = ($iframeBase !== '' && $launchToken !== '')
+    ? $iframeBase . '?launch=' . rawurlencode($launchToken)
+    : $iframeBase;
 
 ?>
 <!DOCTYPE html>

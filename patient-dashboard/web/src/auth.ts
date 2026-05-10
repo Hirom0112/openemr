@@ -1,5 +1,7 @@
 import NextAuth from "next-auth";
+import Credentials from "next-auth/providers/credentials";
 import OpenEMR from "@/lib/auth/openemr-provider";
+import { verifyLaunchToken } from "@/lib/launch-jwt";
 
 const baseUrl = process.env.OPENEMR_BASE_URL ?? "https://localhost:9300";
 
@@ -30,6 +32,49 @@ async function refreshAccessToken(refreshToken: string): Promise<{
     throw new Error(`Refresh failed (${response.status}): ${errBody}`);
   }
 
+  return response.json();
+}
+
+/**
+ * Password-grant token exchange used by the SSO launch bridge. The
+ * launch JWT proves the user already authenticated against OpenEMR
+ * (the PHP module verified the session + ACL before minting the JWT),
+ * but the dashboard still needs a real OpenEMR access token to call
+ * FHIR APIs. We exchange via the password grant against a service
+ * account configured by `DASHBOARD_LAUNCH_OAUTH_USER` /
+ * `DASHBOARD_LAUNCH_OAUTH_PASSWORD`. OpenEMR must have
+ * `oauth_password_grant` enabled.
+ */
+async function exchangeLaunchForAccessToken(): Promise<{
+  access_token: string;
+  refresh_token?: string;
+  expires_in: number;
+}> {
+  const user = process.env.DASHBOARD_LAUNCH_OAUTH_USER ?? "";
+  const password = process.env.DASHBOARD_LAUNCH_OAUTH_PASSWORD ?? "";
+  if (user === "" || password === "") {
+    throw new Error(
+      "DASHBOARD_LAUNCH_OAUTH_USER / DASHBOARD_LAUNCH_OAUTH_PASSWORD not configured",
+    );
+  }
+  const body = new URLSearchParams({
+    grant_type: "password",
+    username: user,
+    password,
+    scope:
+      "openid fhirUser offline_access user/Patient.read user/AllergyIntolerance.read user/Condition.read user/MedicationRequest.read user/CareTeam.read user/Observation.read",
+    client_id: process.env.OPENEMR_OAUTH_CLIENT_ID ?? "",
+    client_secret: process.env.OPENEMR_OAUTH_CLIENT_SECRET ?? "",
+  });
+  const response = await fetch(`${baseUrl}/oauth2/default/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`Launch token exchange failed (${response.status}): ${errBody}`);
+  }
   return response.json();
 }
 
@@ -78,12 +123,50 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       clientId: process.env.OPENEMR_OAUTH_CLIENT_ID,
       clientSecret: process.env.OPENEMR_OAUTH_CLIENT_SECRET,
     }),
+    Credentials({
+      id: "launch",
+      name: "OpenEMR Launch JWT",
+      credentials: {
+        launch: { label: "Launch token", type: "text" },
+      },
+      // Verifies the HS256 launch JWT minted by the OpenEMR module
+      // and exchanges for an OpenEMR access token via password grant.
+      // We stash the token on the returned user object; the jwt
+      // callback below promotes it into the session JWT (matching the
+      // shape used by the OAuth provider so the rest of the app can
+      // treat both flows identically).
+      async authorize(credentials) {
+        const launch = credentials?.launch;
+        if (typeof launch !== "string" || launch.length === 0) {
+          return null;
+        }
+        const secret = process.env.DASHBOARD_LAUNCH_SECRET ?? "";
+        try {
+          const claims = verifyLaunchToken(launch, secret);
+          const tokens = await exchangeLaunchForAccessToken();
+          const expiresAt =
+            Math.floor(Date.now() / 1000) + tokens.expires_in;
+          return {
+            id: claims.sub,
+            name: `OpenEMR user ${claims.sub}`,
+            // Stashed for the jwt callback. Not part of the standard
+            // User contract — augmented in src/types/next-auth.d.ts.
+            launchAccessToken: tokens.access_token,
+            launchRefreshToken: tokens.refresh_token,
+            launchExpiresAt: expiresAt,
+          };
+        } catch (err) {
+          console.error("[auth/launch] handshake rejected", err);
+          return null;
+        }
+      },
+    }),
   ],
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
   ...(crossSiteCookies ? { cookies: crossSiteCookies } : {}),
   callbacks: {
-    async jwt({ token, account, profile }) {
+    async jwt({ token, account, profile, user }) {
       // Initial sign-in: persist OAuth tokens + fhirUser claim.
       if (account) {
         token.accessToken = account.access_token;
@@ -94,6 +177,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             : Math.floor(Date.now() / 1000) + 3600;
         if (profile?.fhirUser) {
           token.fhirUser = profile.fhirUser;
+        }
+        return token;
+      }
+
+      // Credentials sign-in via the launch bridge: tokens are stashed
+      // on the user object (Credentials providers do not produce an
+      // `account`). Promote them to the JWT shape used by the OAuth
+      // provider so downstream code is provider-agnostic.
+      if (user && typeof user.launchAccessToken === "string") {
+        token.accessToken = user.launchAccessToken;
+        if (typeof user.launchRefreshToken === "string") {
+          token.refreshToken = user.launchRefreshToken;
+        }
+        if (typeof user.launchExpiresAt === "number") {
+          token.expiresAt = user.launchExpiresAt;
         }
         return token;
       }

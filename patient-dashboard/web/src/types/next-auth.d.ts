@@ -16,6 +16,10 @@ declare module "next-auth" {
 
   interface User {
     fhirUser?: string | null;
+    /** Set by the `launch` Credentials provider (see auth.ts). */
+    launchAccessToken?: string;
+    launchRefreshToken?: string;
+    launchExpiresAt?: number;
   }
 
   interface Profile {
