@@ -13,6 +13,10 @@
 !interface/**
 !templates/
 !templates/**
+!controllers/
+!controllers/**
+!scripts/
+!scripts/**
 # composer.json + lock are needed by the autoload-regen step in the
 # Dockerfile (see comment on the COPY composer.* line). Without these
 # whitelist entries, the * blocklist excludes them from the build
