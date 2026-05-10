@@ -342,6 +342,84 @@ async def _write_via_rest(
     )
 
 
+async def _mirror_to_legacy_documents(
+    *,
+    patient_id: str,
+    pdf_bytes: bytes,
+    mime_type: str,
+    display: str | None,
+    doc_type_hint: str | None,
+    document_reference_id: str,
+) -> int | None:
+    """Best-effort mirror of a FHIR-written document into OpenEMR's legacy
+    ``documents`` table via the custom-module ``UploadController.php``.
+
+    Phase 6.1 (W2 follow-up). After a successful FHIR ``Binary`` +
+    ``DocumentReference`` write (path ``"fhir"``) — or its legacy REST
+    fallback (path ``"rest_fallback"``) — the document is invisible to
+    OpenEMR's chart Documents tab because the chart UI reads the
+    ``documents`` table, not the FHIR Binary store. This helper POSTs the
+    same bytes to the JWT-protected custom upload endpoint so the file
+    appears alongside other chart docs under the "Clinical Copilot Upload"
+    category (LOINC ``34109-9``).
+
+    Returns the legacy ``documents.id`` on success, or ``None`` on any
+    failure. NEVER raises — the primary FHIR write must remain durable.
+    """
+    token = _mint_copilot_jwt()
+    if token is None:
+        _logger.info(
+            "legacy_mirror_skipped_no_jwt_secret",
+            extra={"document_reference_id": document_reference_id},
+        )
+        return None
+
+    url = _custom_upload_url()
+    filename = (display or "document") + _extension_for_mime(mime_type)
+    files = {"file": (filename, pdf_bytes, mime_type)}
+    data: dict[str, str] = {
+        "patient_id": patient_id,
+        "fhir_doc_ref_id": document_reference_id,
+    }
+    if doc_type_hint:
+        data["doc_type_hint"] = doc_type_hint
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                url,
+                files=files,
+                data=data,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or "documentId" not in payload:
+            _logger.warning(
+                "legacy_mirror_no_document_id",
+                extra={"document_reference_id": document_reference_id},
+            )
+            return None
+        document_id = int(payload["documentId"])
+        _logger.info(
+            "legacy_mirror_ok",
+            extra={
+                "document_reference_id": document_reference_id,
+                "legacy_document_id": document_id,
+            },
+        )
+        return document_id
+    except Exception as exc:  # noqa: BLE001 — best-effort, never propagate
+        _logger.warning(
+            "legacy_mirror_failed",
+            extra={
+                "document_reference_id": document_reference_id,
+                "error": str(exc),
+            },
+        )
+        return None
+
+
 async def write_document(
     *,
     patient_id: str,
@@ -430,6 +508,20 @@ async def write_document(
             "binary_id": result.binary_id,
         },
     )
+
+    # Phase 6.1: mirror to legacy ``documents`` table so the file appears in
+    # OpenEMR's chart Documents tab. Skip when ``copilot_custom`` (already
+    # written there directly) or ``local_disk_fallback`` (no DB hop).
+    if result.path in ("fhir", "rest_fallback"):
+        await _mirror_to_legacy_documents(
+            patient_id=patient_id,
+            pdf_bytes=pdf_bytes,
+            mime_type=mime_type,
+            display=display,
+            doc_type_hint=doc_type_hint,
+            document_reference_id=result.document_reference_id,
+        )
+
     return result
 
 
