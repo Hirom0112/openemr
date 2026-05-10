@@ -320,6 +320,77 @@ def apply_icd10_guardrail(
     return problem_list_items
 
 
+# ── Family-history column-shift guardrail ──────────────────────────────
+#
+# Failure mode (observed on Reyes p03 intake): the LLM puts a
+# living-status word ("Alive", "Living", "Deceased") into the
+# ``age_at_onset`` slot of a FamilyHistoryItem because the source
+# document's columns are aligned in a way that confuses the vision
+# model. ``age_at_onset`` is supposed to carry a numeric / year value
+# (or "Unknown"); ``status`` is the slot for living-status text.
+#
+# This guardrail walks ``family_history``; for any row whose
+# ``age_at_onset`` matches a living-status word AND whose ``status`` is
+# empty, it moves the value over and clears ``age_at_onset``. Idempotent.
+
+_LIVING_STATUS_RE = re.compile(
+    r"^\s*(alive|living|deceased|dead)\s*$",
+    re.IGNORECASE,
+)
+
+
+def apply_family_history_status_guardrail(
+    family_history_items: List[Any],
+    *,
+    document_reference_id: str | None = None,
+) -> List[Any]:
+    """Repair the ``age_at_onset`` ↔ ``status`` column-shift bug in place.
+
+    For each FamilyHistoryItem whose ``age_at_onset`` is a bare
+    living-status word (``Alive``, ``Living``, ``Deceased``, ``Dead``;
+    case-insensitive; whitespace tolerant), and whose ``status`` is
+    empty / missing, move the word into ``status`` and null out
+    ``age_at_onset``. All other fields (relation, condition, citations,
+    snomed_code) are preserved.
+
+    Returns the (mutated) list of items.
+    """
+    if not family_history_items:
+        return family_history_items
+    for item in family_history_items:
+        age = getattr(item, "age_at_onset", None)
+        if not isinstance(age, str) or not age.strip():
+            continue
+        if not _LIVING_STATUS_RE.match(age):
+            continue
+        existing_status = getattr(item, "status", None)
+        if isinstance(existing_status, str) and existing_status.strip():
+            # Status already populated — just clear the bad age_at_onset.
+            try:
+                mutated = item.model_copy(update={"age_at_onset": None})
+            except Exception:
+                continue
+        else:
+            try:
+                mutated = item.model_copy(
+                    update={"status": age.strip(), "age_at_onset": None},
+                )
+            except Exception:
+                continue
+        idx = family_history_items.index(item)
+        family_history_items[idx] = mutated
+        logger.info(
+            "family_history_column_shift_repaired",
+            extra={
+                "document_reference_id": document_reference_id,
+                "moved_value": age.strip(),
+                "relation": getattr(item, "relation", None),
+                "condition": getattr(item, "condition", None),
+            },
+        )
+    return family_history_items
+
+
 def _value_in_block(value: str, block_text: str) -> bool:
     """True iff `block_text` overlaps `value` above the floor.
 
@@ -1608,6 +1679,15 @@ async def extract_intake(
         )
         final = final.model_copy(update={"problem_list": guarded})
 
+    # Family-history column-shift repair — moves "Alive"/"Living"/
+    # "Deceased" out of age_at_onset and into status.
+    if final.family_history:
+        repaired = apply_family_history_status_guardrail(
+            list(final.family_history),
+            document_reference_id=document_reference_id,
+        )
+        final = final.model_copy(update={"family_history": repaired})
+
     logger.info(
         "extractor_intake_ok",
         extra={
@@ -1885,6 +1965,16 @@ async def extract_intake_from_docx(
             document_reference_id=document_reference_id,
         )
         final = final.model_copy(update={"problem_list": guarded})
+
+    # Family-history column-shift repair (prose path) — same fix as the
+    # vision path. The prose extractor sees the same column-shift bug
+    # when the source narrates "Mother (Alive)" inline.
+    if final.family_history:
+        repaired = apply_family_history_status_guardrail(
+            list(final.family_history),
+            document_reference_id=document_reference_id,
+        )
+        final = final.model_copy(update={"family_history": repaired})
 
     logger.info(
         "extractor_intake_prose_ok",

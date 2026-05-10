@@ -379,6 +379,56 @@ function _normalizeCitationDict(c: unknown): {
   return { page: pageNum, bbox, fieldOrChunkId, quote, paraIdx };
 }
 
+/**
+ * Recursively walk a payload tree and replace bbox + page on every
+ * citation whose `field_or_chunk_id` matches. Mirrors the server-side
+ * `_walk_and_update_citations` logic in `agent-api/staging/store.py`.
+ *
+ * Used after a successful PATCH /pending-extractions/{id}/citation-bbox
+ * to keep the locally-cached row in sync with the server, so subsequent
+ * UI operations see the new bbox as the source of truth (not just the
+ * `editedBboxes` override).
+ */
+function _patchCitationInPayload(
+  payload: unknown,
+  fieldOrChunkId: string,
+  newBbox: [number, number, number, number],
+  newPage: number,
+): unknown {
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) {
+      return node.map(walk);
+    }
+    if (!node || typeof node !== 'object') {
+      return node;
+    }
+    const obj = node as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === 'citations' && Array.isArray(v)) {
+        out[k] = v.map((c) => {
+          if (
+            c &&
+            typeof c === 'object' &&
+            (c as Record<string, unknown>).field_or_chunk_id === fieldOrChunkId
+          ) {
+            const cc = { ...(c as Record<string, unknown>) };
+            cc.bbox = [...newBbox];
+            cc.page = newPage;
+            if ('polygon' in cc) cc.polygon = null;
+            return cc;
+          }
+          return walk(c);
+        });
+      } else {
+        out[k] = walk(v);
+      }
+    }
+    return out;
+  };
+  return walk(payload);
+}
+
 /** Pull the first/primary citation off a row payload. */
 function _primaryCitation(row: PendingExtractionRow): {
   page: number;
@@ -941,6 +991,30 @@ export default function DocumentReviewPanel(
         });
         // eslint-disable-next-line no-console
         console.log('[bbox-edit] PATCH ok', resp);
+        // Sync the row's stored citation bbox so subsequent reads of
+        // `c.bbox` (via `cards`/`cardCitations` useMemo) match the
+        // server-side truth. Without this, the override in
+        // `editedBboxes` is the only source of the new bbox; if the
+        // override is ever cleared (e.g. row re-fetch, panel re-mount,
+        // or a future bbox-edit on the same card whose `before` capture
+        // pulls from the stale row), the bbox snaps back to the
+        // pre-edit value. Walking the row payload mirrors the
+        // server-side `_walk_and_update_citations` logic.
+        setRows((prev) =>
+          prev.map((lr) => {
+            if (lr.row.id !== cit.rowId) return lr;
+            const updatedPayload = _patchCitationInPayload(
+              lr.row.payload,
+              cit.fieldOrChunkId,
+              newBbox,
+              page,
+            ) as Record<string, unknown>;
+            return {
+              ...lr,
+              row: { ...lr.row, payload: updatedPayload },
+            };
+          }),
+        );
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('[bbox-edit] PATCH failed — reverting', err);
@@ -949,6 +1023,16 @@ export default function DocumentReviewPanel(
           delete next[cardId];
           return next;
         });
+        // Surface the failure to the operator. The 503 case (dev gate
+        // off in production / staging) and the 400 case (geometry out
+        // of bounds) both land here; without a visible signal the
+        // "edit reverts on save" looked like a silent UI bug.
+        if (typeof window !== 'undefined') {
+          const msg =
+            err instanceof Error ? err.message : 'Bbox edit failed.';
+          // eslint-disable-next-line no-alert
+          window.alert(`Bbox edit failed: ${msg}`);
+        }
       }
     },
     [baseUrl, cards],

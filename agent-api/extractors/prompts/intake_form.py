@@ -81,6 +81,15 @@ HARD RULES (the agent will reject your output otherwise):
       STATUS       → status     (optional — map "Active"→"active",
                      "Resolved"→"resolved", "Inactive"/"Hx"→
                      "inactive"; omit when not stated)
+  CRITICAL ROW-COMPLETENESS RULE: Emit ONE ProblemListItem per data
+  row in the table. If the table has N data rows, ``problem_list``
+  MUST contain N items. Iterate EVERY row, including rows where
+  the ICD-10, SNOMED, ONSET, or STATUS cells are blank. A row with
+  only a condition value is still a complete row — emit it. Do NOT
+  collapse, summarize, deduplicate, or skip rows. The single most
+  common failure on this section is emitting only the first row of
+  a 3-row table — count the rows in the image and verify the output
+  has the same count before submitting.
   Each ProblemListItem MUST have ≥1 citation pointing to the bbox
   where the condition value appears. Example for the row
   "Atrial fibrillation | I48.91 | 2022 | Active" cited at p1-b015::
@@ -92,6 +101,25 @@ HARD RULES (the agent will reject your output otherwise):
                        "page_or_section": "1",
                        "field_or_chunk_id": "p1-b015",
                        "quote_or_value": "I48.91"}]}
+  Multi-row example for a 3-row PMH table::
+      Row 1: "Type 2 diabetes mellitus | E11.9 | 2015 | Active"  → p1-b020
+      Row 2: "Mild depression          |       | 2019 |       "  → p1-b021
+      Row 3: "Prediabetes              | R73.03|      | Active"  → p1-b022
+  produces THREE ProblemListItems::
+      [{"condition": "Type 2 diabetes mellitus", "icd10_code": "E11.9",
+        "onset_date": "2015", "status": "active",
+        "citations": [{... "field_or_chunk_id": "p1-b020", ...}]},
+       {"condition": "Mild depression", "onset_date": "2019",
+        "citations": [{... "field_or_chunk_id": "p1-b021", ...}]},
+       {"condition": "Prediabetes", "icd10_code": "R73.03",
+        "status": "active",
+        "citations": [{... "field_or_chunk_id": "p1-b022", ...}]}]
+- Patient-vs-relative separation rule: a condition belonging to the
+  PATIENT'S OWN past medical history goes ONLY in ``problem_list``.
+  ``family_history`` is reserved exclusively for blood-relatives'
+  conditions (mother, father, sibling, etc.). Never duplicate a
+  patient's own PMH row into family_history; never put a relative's
+  condition in problem_list.
   ICD-10 GROUNDING RULE (HARD): only emit ``icd10_code`` if the
   code appears LITERALLY in the source document. Do NOT infer
   ICD-10 codes from condition names — even if you "know" Atrial
@@ -118,13 +146,23 @@ HARD RULES (the agent will reject your output otherwise):
 - For each FamilyHistoryItem, in addition to relation + condition,
   populate when the source document grounds them:
     age_at_onset  — string. The age at which the relative was
-                    diagnosed with the condition. Verbatim from the
-                    OCR (e.g. "61", "50s", "~1999", "Unknown").
+                    diagnosed with the condition. MUST be numeric
+                    or contain a year/decade (e.g. "61", "50s",
+                    "~1999", "in their 30s", "Unknown"). NEVER put
+                    "Alive", "Living", "Deceased", "Dead", or any
+                    other living-status word here — those belong
+                    EXCLUSIVELY in ``status``. If the only value
+                    in the AGE-AT-ONSET column for a row is a
+                    living-status word (no number, no year), leave
+                    ``age_at_onset`` omitted/null and put the word
+                    in ``status`` instead. This is a column-shift
+                    error the validator post-corrects, but get it
+                    right at the source.
     status        — string. Living-or-deceased context. Verbatim
-                    from the OCR (e.g. "deceased age 72",
-                    "living (age 84, on insulin)", "living").
-                    Treat blank "Living?" cells as omitted, not
-                    "unknown".
+                    from the OCR (e.g. "deceased age 72", "Alive",
+                    "Living", "living (age 84, on insulin)",
+                    "Deceased"). Treat blank "Living?" cells as
+                    omitted, not "unknown".
     snomed_code   — string. The SNOMED code as printed in the
                     document (e.g. "22298006", "44054006"). NEVER
                     invent a code; if the document shows
@@ -156,6 +194,14 @@ SECTION_HEADERS: dict[str, tuple[str, ...]] = {
     "medication": ("MEDICATION", "MEDS", "RX"),
     "allergy": ("ALLERG", "NKDA"),
     "family": ("FAMILY",),
+    "problem_list": (
+        "PROBLEM",
+        "CONDITION",
+        "DIAGNOS",
+        "PMH",
+        "PAST MEDICAL",
+        "MEDICAL HISTORY",
+    ),
 }
 
 

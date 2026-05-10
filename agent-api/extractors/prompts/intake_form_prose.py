@@ -100,6 +100,24 @@ HARD RULES:
       status       optional — map "active"→"active",
                    "resolved"→"resolved", "history of"/"former"→
                    "inactive"; omit when not stated
+  CRITICAL ROW-COMPLETENESS RULE: emit ONE ProblemListItem per
+  distinct condition mentioned. If the PMH list enumerates N
+  conditions ("PMH: A, B, C"), ``problem_list`` MUST contain N
+  items. Iterate every comma-separated entry, every bullet, every
+  table row — including ones missing ICD-10 / onset / status.
+  Do NOT collapse, summarize, deduplicate, or skip entries.
+- Patient-vs-relative separation rule: a condition belonging to the
+  PATIENT'S OWN past medical history goes ONLY in ``problem_list``.
+  ``family_history`` is reserved exclusively for blood-relatives'
+  conditions (mother, father, sibling, etc.). Never duplicate a
+  patient's own PMH into family_history; never put a relative's
+  condition in problem_list.
+- For each FamilyHistoryItem, ``age_at_onset`` MUST be numeric or
+  contain a year/decade (e.g. "61", "50s", "~1999"). NEVER put
+  "Alive", "Living", "Deceased", or any living-status word in
+  ``age_at_onset`` — those belong exclusively in ``status``. If
+  only a living-status word is present, leave ``age_at_onset``
+  omitted and put the word in ``status``.
   Each ProblemListItem MUST cite a paragraph (or run) where the
   condition value appears. Example for "PMH: Atrial fibrillation
   (I48.91), Hyperlipidemia, BPH" cited at para=18::
