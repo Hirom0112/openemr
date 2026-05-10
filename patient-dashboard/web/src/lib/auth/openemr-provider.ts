@@ -30,6 +30,13 @@ const SCOPES = [
   "user/MedicationRequest.read",
   "user/CareTeam.read",
   "user/Observation.read",
+  // Lab DocumentReference modal proxies the underlying bytes through
+  // /apis/default/fhir/Binary/<uuid>; without Binary.read the upstream
+  // returns 404 and CopilotLabsCard's preview link surfaces "Document
+  // not found". DocumentReference.read is requested alongside so the
+  // metadata fetch path stays consistent with the bytes path.
+  "user/Binary.read",
+  "user/DocumentReference.read",
 ].join(" ");
 
 export default function OpenEMR<P extends OpenEMRProfile>(

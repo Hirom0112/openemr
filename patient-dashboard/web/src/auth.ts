@@ -62,7 +62,7 @@ async function exchangeLaunchForAccessToken(): Promise<{
     username: user,
     password,
     scope:
-      "openid fhirUser offline_access user/Patient.read user/AllergyIntolerance.read user/Condition.read user/MedicationRequest.read user/CareTeam.read user/Observation.read",
+      "openid fhirUser offline_access user/Patient.read user/AllergyIntolerance.read user/Condition.read user/MedicationRequest.read user/CareTeam.read user/Observation.read user/Binary.read user/DocumentReference.read",
     client_id: process.env.OPENEMR_OAUTH_CLIENT_ID ?? "",
     client_secret: process.env.OPENEMR_OAUTH_CLIENT_SECRET ?? "",
   });
