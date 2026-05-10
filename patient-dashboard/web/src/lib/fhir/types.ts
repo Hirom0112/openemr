@@ -140,6 +140,10 @@ export type FhirConditionCategory =
   | "encounter-diagnosis"
   | "health-concern";
 
+export interface FhirAnnotation {
+  text?: string;
+}
+
 export interface FhirCondition {
   resourceType: "Condition";
   id: string;
@@ -151,6 +155,13 @@ export interface FhirCondition {
   onsetDateTime?: string;
   recordedDate?: string;
   subject?: FhirReference;
+  /**
+   * Co-Pilot rows pack the source-document reference and citation locators
+   * into the first note's `text` as `"DocumentReference/<uuid> · Source: <locator>"`.
+   * Condition has no top-level `derivedFrom` slot in FHIR R4, so the note
+   * is the human-readable proxy. Parsed by `parseDocumentReference()` below.
+   */
+  note?: FhirAnnotation[];
 }
 
 // MedicationRequest
@@ -270,6 +281,13 @@ export interface FhirObservation {
   effectiveDateTime?: string;
   component?: FhirObservationComponent[];
   subject?: FhirReference;
+  /**
+   * Co-Pilot rows put the source DocumentReference here (e.g.
+   * `derivedFrom[0].reference = "DocumentReference/<uuid>"`).
+   */
+  derivedFrom?: FhirReference[];
+  /** Co-Pilot rows: `note[0].text = "Source: <locator>, ..."`. */
+  note?: FhirAnnotation[];
 }
 
 // Bundle

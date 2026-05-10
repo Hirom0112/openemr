@@ -27,7 +27,9 @@ import * as React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyCard, ErrorCard } from "@/components/cards/card-states";
+import { DocumentSourceLink } from "@/components/DocumentSourceLink";
 import { FhirClient } from "@/lib/fhir/client";
+import { parseConditionSource } from "@/lib/fhir/document-source";
 import { authSessionTokenProvider } from "@/lib/fhir/token";
 import type { FhirCondition } from "@/lib/fhir/types";
 
@@ -111,6 +113,29 @@ export function sortConditionsByDateDesc(conditions: FhirCondition[]): FhirCondi
     });
 }
 
+/**
+ * Source cell — turns the parsed `DocumentReference/<uuid> · Source: <locator>`
+ * note into a clickable link that opens the bytes in an in-app preview. When
+ * no DocumentReference uuid is present we fall back to the original plain
+ * text (em-dash when even that's missing).
+ */
+function ConditionSourceCell({
+    c,
+    fallback,
+}: {
+    c: FhirCondition;
+    fallback: string | null;
+}): React.ReactElement {
+    const parsed = parseConditionSource(c);
+    return (
+        <DocumentSourceLink
+            uuid={parsed?.uuid ?? ""}
+            caption={parsed?.locator ?? null}
+            fallbackText={fallback}
+        />
+    );
+}
+
 export function CopilotConditionsCardSkeleton(): React.ReactElement {
     return (
         <Card size="sm" data-testid="copilot-conditions-card-skeleton" aria-busy="true">
@@ -183,11 +208,8 @@ export function CopilotConditionsCardView({
                                     <td className="py-1 pr-3 text-muted-foreground">
                                         {onset ?? "—"}
                                     </td>
-                                    <td
-                                        className="py-1 text-xs text-muted-foreground"
-                                        title={source ?? undefined}
-                                    >
-                                        {source ?? "—"}
+                                    <td className="py-1 text-xs">
+                                        <ConditionSourceCell c={c} fallback={source} />
                                     </td>
                                 </tr>
                             );

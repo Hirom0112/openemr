@@ -29,7 +29,9 @@ import * as React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyCard, ErrorCard } from "@/components/cards/card-states";
+import { DocumentSourceLink } from "@/components/DocumentSourceLink";
 import { FhirClient } from "@/lib/fhir/client";
+import { parseObservationSource } from "@/lib/fhir/document-source";
 import { authSessionTokenProvider } from "@/lib/fhir/token";
 import type { FhirObservation } from "@/lib/fhir/types";
 
@@ -110,6 +112,28 @@ export function sortByDateDesc(observations: FhirObservation[]): FhirObservation
     });
 }
 
+/**
+ * Source cell — converts the FHIR `derivedFrom` DocumentReference + the
+ * "Source: <locator>" annotation into an in-app preview link. Falls back to
+ * the original plain-text rendering when no DocumentReference is attached.
+ */
+function ObservationSourceCell({
+    obs,
+    fallback,
+}: {
+    obs: FhirObservation;
+    fallback: string | null;
+}): React.ReactElement {
+    const parsed = parseObservationSource(obs);
+    return (
+        <DocumentSourceLink
+            uuid={parsed?.uuid ?? ""}
+            caption={parsed?.locator ?? null}
+            fallbackText={fallback}
+        />
+    );
+}
+
 export function CopilotLabsCardSkeleton(): React.ReactElement {
     return (
         <Card size="sm" data-testid="copilot-labs-card-skeleton" aria-busy="true">
@@ -179,11 +203,8 @@ export function CopilotLabsCardView({
                                     <td className="py-1 pr-3 text-muted-foreground">
                                         {date ?? "—"}
                                     </td>
-                                    <td
-                                        className="py-1 text-xs text-muted-foreground"
-                                        title={source ?? undefined}
-                                    >
-                                        {source ?? "—"}
+                                    <td className="py-1 text-xs">
+                                        <ObservationSourceCell obs={obs} fallback={source} />
                                     </td>
                                 </tr>
                             );
