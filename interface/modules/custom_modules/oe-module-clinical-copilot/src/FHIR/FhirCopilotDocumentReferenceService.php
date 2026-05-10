@@ -56,7 +56,9 @@ use OpenEMR\Common\Database\QueryUtils;
 use OpenEMR\Common\Uuid\UuidRegistry;
 use OpenEMR\FHIR\R4\FHIRDomainResource\FHIRDocumentReference;
 use OpenEMR\Services\FHIR\DocumentReference\Trait\FhirDocumentReferenceTrait;
+use OpenEMR\Services\FHIR\FhirCodeSystemConstants;
 use OpenEMR\Services\FHIR\FhirProvenanceService;
+use OpenEMR\Services\FHIR\UtilsService;
 use OpenEMR\Services\FHIR\FhirServiceBase;
 use OpenEMR\Services\FHIR\IPatientCompartmentResourceService;
 use OpenEMR\Services\FHIR\IResourceUSCIGProfileService;
@@ -310,6 +312,29 @@ class FhirCopilotDocumentReferenceService extends FhirServiceBase implements IPa
             return json_encode($docReference);
         }
         return $docReference;
+    }
+
+    /**
+     * Override the trait's `populateCategories` because the inherited shape —
+     * `$dataRecord['codes'] = [$code => ['code'=>..., 'system'=>..., 'description'=>...]]`
+     * — collapses one level when handed to `UtilsService::createCodeableConcept`,
+     * which iterates `foreach ($diagnosisCodes as $code => $codeValues)` and
+     * treats each value as an inner code-dict. With our flat array, $codeValues
+     * comes out as a string and emits malformed `{"code":"code"}` / `{"code":"system"}` entries.
+     *
+     * Mirror `FhirDocumentReferenceAdvanceCareDirectiveService::populateCategories`
+     * (src/Services/FHIR/DocumentReference/FhirDocumentReferenceAdvanceCareDirectiveService.php:168)
+     * — emit a single LOINC coding directly.
+     */
+    protected function populateCategories(FHIRDocumentReference $docReference, array $dataRecord): void
+    {
+        $docReference->addCategory(UtilsService::createCodeableConcept([
+            self::CATEGORY_CODE_LOINC => [
+                'code' => self::CATEGORY_CODE_LOINC,
+                'system' => FhirCodeSystemConstants::LOINC,
+                'description' => self::CATEGORY_NAME,
+            ],
+        ]));
     }
 
     public function createProvenanceResource($dataRecord, $encode = false)
