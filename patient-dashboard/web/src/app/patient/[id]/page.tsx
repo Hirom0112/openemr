@@ -22,6 +22,12 @@ import CareTeamCard, {
 import VitalsCard, {
     VitalsCardSkeleton,
 } from "@/components/cards/VitalsCard";
+import CopilotLabsCard, {
+    CopilotLabsCardSkeleton,
+} from "@/components/cards/CopilotLabsCard";
+import CopilotConditionsCard, {
+    CopilotConditionsCardSkeleton,
+} from "@/components/cards/CopilotConditionsCard";
 import { ErrorCard } from "@/components/cards/card-states";
 import { FhirClient } from "@/lib/fhir/client";
 import { authSessionTokenProvider } from "@/lib/fhir/token";
@@ -110,6 +116,14 @@ export default async function PatientPage({
 
                     <Suspense fallback={<VitalsCardSkeleton />}>
                         <VitalsCard patientUuid={patientUuid} />
+                    </Suspense>
+
+                    <Suspense fallback={<CopilotConditionsCardSkeleton />}>
+                        <CopilotConditionsCard patientUuid={patientUuid} />
+                    </Suspense>
+
+                    <Suspense fallback={<CopilotLabsCardSkeleton />}>
+                        <CopilotLabsCard patientUuid={patientUuid} />
                     </Suspense>
                 </>
             ) : (
