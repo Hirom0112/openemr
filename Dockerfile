@@ -63,6 +63,8 @@ RUN chown -R apache:root \
     /var/www/localhost/htdocs/openemr/library/ \
     /var/www/localhost/htdocs/openemr/interface/ \
     /var/www/localhost/htdocs/openemr/templates/ \
+    /var/www/localhost/htdocs/openemr/controllers/ \
+    /var/www/localhost/htdocs/openemr/scripts/ \
     /var/www/localhost/htdocs/openemr/composer.json \
     /var/www/localhost/htdocs/openemr/composer.lock
 
