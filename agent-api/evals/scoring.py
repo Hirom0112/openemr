@@ -234,11 +234,24 @@ def aggregate(scores: List[CaseScore]) -> Dict[str, float]:
         empty["provenance_chain"] = 0.0
         return empty
 
-    n = len(scores)
     out: Dict[str, float] = {}
+    n = len(scores)
+    # Tri-state-aware aggregation:
+    #   bool True/False → counted in numerator (True) and denominator
+    #   None            → "rubric doesn't apply to this case" — excluded
+    #                     from BOTH numerator and denominator (legitimate skip,
+    #                     mirrors the provenance_chain pattern below).
+    # NOTE: this is distinct from EvalConfigError raised in rubrics_llm —
+    # that's "infrastructure misconfigured, abort entire eval", not a
+    # per-case skip. None here means the rubric author returned None for a
+    # legitimate "not applicable" reason; the raise means we can't even run.
     for name in _RUBRIC_FIELDS:
-        passed = sum(1 for s in scores if getattr(s, name))
-        out[name] = passed / n
+        applicable = [getattr(s, name) for s in scores if getattr(s, name) is not None]
+        if not applicable:
+            out[name] = 1.0 if n else 0.0
+            continue
+        passed = sum(1 for v in applicable if v)
+        out[name] = passed / len(applicable)
 
     fp = sum(1 for s in scores if s.is_critic_false_positive)
     out["critic_false_positive_rate"] = fp / n

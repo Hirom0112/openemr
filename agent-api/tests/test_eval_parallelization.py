@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import types
 from dataclasses import dataclass, field
@@ -199,6 +200,11 @@ def _run(tmp_path: Path, batch_size: int, max_cases: int | None = None) -> dict:
 
     from evals import run_full_suite
     _stub_bbox_rubrics()
+
+    # Phase 5A''' — _run_async now hard-aborts when ANTHROPIC_API_KEY is
+    # absent and LLM judges are in scope. These tests patch out run_case /
+    # score_case entirely (no real judge calls), so a stub key is sufficient.
+    os.environ.setdefault("ANTHROPIC_API_KEY", "test-key-not-real")
 
     argv = [
         "--output", str(out_json),

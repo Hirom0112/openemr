@@ -374,6 +374,29 @@ def _repoint_trace_capture(path: Optional[Path]):
 
 
 async def _run_async(args: argparse.Namespace) -> tuple[list[dict], list[Any], list[Any], dict[str, Any], dict[str, Any]]:
+    # Phase 5A''' — fail-fast startup check for LLM-judge config. Before any
+    # case runs, if LLM-judged rubrics are in scope and ANTHROPIC_API_KEY is
+    # absent, raise EvalConfigError immediately. The prior silent-True
+    # short-circuit in rubrics_llm._client_or_none produced fake 1.0
+    # pass-rates for safe_refusal / factually_consistent (Phase 5A' regression).
+    from evals import EvalConfigError  # type: ignore
+    _llm_rubrics = ("factually_consistent", "safe_refusal")
+    _skip_llm = bool(getattr(args, "skip_llm_judges", False))
+    _key_present = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    logger.info(
+        "eval.startup_config",
+        extra={
+            "anthropic_client": "present" if _key_present else "absent",
+            "llm_judges_in_scope": (not _skip_llm),
+            "llm_rubrics": list(_llm_rubrics),
+        },
+    )
+    if (not _skip_llm) and (not _key_present):
+        raise EvalConfigError(
+            f"ANTHROPIC_API_KEY is required for LLM-judge rubrics ({list(_llm_rubrics)}). "
+            "Set it in .env or environment, or exclude these rubrics with --skip-llm-judges."
+        )
+
     # Lazy imports — let tests patch these.
     from tests.fixtures.w2_eval_cases import CASES  # type: ignore
     from evals.runner import run_case as _run_case_raw  # type: ignore
@@ -948,6 +971,16 @@ def main(argv: list[str] | None = None) -> int:
             "Cache key: sha256(fixture_bytes || EVAL_CACHE_PROMPT_HASH || "
             "EVAL_MODEL_ID || EVAL_CACHE_VERSION). "
             "Bump EVAL_CACHE_VERSION to invalidate when prompts change."
+        ),
+    )
+    parser.add_argument(
+        "--skip-llm-judges",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip the LLM-judged rubrics (factually_consistent, safe_refusal). "
+            "Allows the suite to run without ANTHROPIC_API_KEY for mechanical-only "
+            "smoke checks. Without this flag, an absent key aborts at startup."
         ),
     )
     parser.add_argument(

@@ -183,8 +183,12 @@ def test_aggregate_provenance_failures_reduce_rate() -> None:
 
 @pytest.mark.asyncio
 async def test_score_case_surfaces_provenance_field(monkeypatch) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    rubrics_llm._warned_no_key = False
+    # Phase 5A''' — LLM-judge rubrics now hard-raise on missing key. Stub
+    # the key + judge call; this test only asserts the provenance field.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+    from unittest.mock import AsyncMock, patch
+    monkeypatch.setattr(rubrics_llm, "_judge_cache_read", lambda key: None)
+    monkeypatch.setattr(rubrics_llm, "_judge_cache_write", lambda key, **kw: None)
     case = _StubCase(
         expected_provenance={
             "observations_min": 1,
@@ -203,5 +207,6 @@ async def test_score_case_surfaces_provenance_field(monkeypatch) -> None:
         observations=[_good_observation()],
         ocr_layout=_ocr_layout(),
     )
-    score = await score_case(case, outcome)
+    with patch.object(rubrics_llm, "_ask_yes_no", new=AsyncMock(return_value="yes")):
+        score = await score_case(case, outcome)
     assert score.provenance_chain is True

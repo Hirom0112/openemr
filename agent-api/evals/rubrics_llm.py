@@ -41,6 +41,7 @@ from typing import Any, Iterable, Optional, Tuple
 
 import anthropic
 
+from . import EvalConfigError
 from .runner import RunOutcome
 
 logger = logging.getLogger(__name__)
@@ -182,19 +183,23 @@ _SAFE_REFUSAL_SYSTEM = (
 )
 
 
-_warned_no_key = False
+def _require_client(rubric_name: str) -> anthropic.AsyncAnthropic:
+    """Construct the Anthropic client or raise EvalConfigError.
 
+    Phase 5A''' — replaces the prior silent-True short-circuit. An absent
+    ``ANTHROPIC_API_KEY`` previously caused every LLM-judge rubric to
+    return ``True``, producing fake 1.0 pass-rates. We now fail fast so
+    a misconfigured eval cannot masquerade as a passing run.
 
-def _client_or_none() -> Optional[anthropic.AsyncAnthropic]:
-    global _warned_no_key
+    Distinct from the legitimate per-case ``None`` skip path used by
+    info-only rubrics (e.g. ``nearest_label_grounded``) — that means
+    "rubric doesn't apply to this case". This raise means
+    "infrastructure misconfigured, abort the entire eval".
+    """
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        if not _warned_no_key:
-            logger.warning(
-                "eval_judge_no_api_key",
-                extra={"detail": "ANTHROPIC_API_KEY absent — judge defaults to advisory PASS."},
-            )
-            _warned_no_key = True
-        return None
+        raise EvalConfigError(
+            f"ANTHROPIC_API_KEY required for LLM-judge rubric: {rubric_name}"
+        )
     return anthropic.AsyncAnthropic()
 
 
@@ -322,9 +327,7 @@ async def factually_consistent(outcome: RunOutcome, case: Any) -> bool:
     confidently grounded. Cached on disk by (rubric, case_id, payload)
     so re-runs over the same case do not pay 3× the API cost.
     """
-    client = _client_or_none()
-    if client is None:
-        return True
+    client = _require_client("factually_consistent")
 
     payload = _build_factual_payload(outcome, case)
     case_id = str(getattr(case, "case_id", "<unknown>"))
@@ -375,9 +378,7 @@ async def safe_refusal(outcome: RunOutcome, case: Any) -> bool:
     if expected == "pass":
         return True
 
-    client = _client_or_none()
-    if client is None:
-        return True
+    client = _require_client("safe_refusal")
 
     payload = _build_refusal_payload(outcome, case)
     case_id = str(getattr(case, "case_id", "<unknown>"))

@@ -350,6 +350,18 @@ async def critic_node(state: W2State) -> dict[str, Any]:
             _stale_guideline_softwarns(state.get("retrieval"), datetime.now(timezone.utc))
         )
 
+        # ── Decision escalation (Phase 5A') ─────────────────────────────────
+        # Several upstream branches *append* to ``soft_warns`` (OCR low
+        # confidence in ``_check_document_path``, demographic soft-warn from
+        # the comparator fold-in, stale-guideline) without escalating the
+        # categorical ``decision``. Per W2_ARCHITECTURE §5.6/§5.8 a populated
+        # soft_warn list is by definition a soft_warn outcome — anything that
+        # was going to ``pass`` while a soft_warn is queued must be escalated
+        # so the downstream UI surfaces the warning. Hard-blocks are never
+        # downgraded; any pre-existing ``hard_block`` decision stays as-is.
+        if decision == "pass" and soft_warns:
+            decision = "soft_warn"
+
     except Exception as exc:  # noqa: BLE001 — fail closed at the boundary
         logger.exception(
             "graph_critic_error",
