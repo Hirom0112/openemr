@@ -68,9 +68,11 @@ use OpenEMR\Services\FHIR\Traits\VersionedProfileTrait;
 use OpenEMR\Services\Search\FhirSearchParameterDefinition;
 use OpenEMR\Services\Search\ReferenceSearchValue;
 use OpenEMR\Services\Search\SearchFieldType;
+use OpenEMR\Services\Search\ReferenceSearchField;
 use OpenEMR\Services\Search\ServiceField;
 use OpenEMR\Services\Search\TokenSearchField;
 use OpenEMR\Services\Search\TokenSearchValue;
+use OpenEMR\Services\Search\BasicSearchField;
 use OpenEMR\Validators\ProcessingResult;
 use Throwable;
 
@@ -136,15 +138,29 @@ class FhirCopilotDocumentReferenceService extends FhirServiceBase implements IPa
         $processingResult = new ProcessingResult();
 
         try {
-            $where = ['d.deleted = 0', 'c.name = ?'];
+            // Defense in depth: orphan rows (NULL pd.uuid) leak empty
+            // subject references and bypass any patient filter, so drop
+            // them at the SQL level. Documents that can't resolve to a
+            // patient aren't useful in a FHIR Bundle.
+            $where = ['d.deleted = 0', 'c.name = ?', 'pd.uuid IS NOT NULL'];
             $bind  = [self::CATEGORY_NAME];
 
-            // patient (UUID) — extract bare hex and bind via UNHEX.
+            // patient (UUID) — the FHIR `patient` param is a REFERENCE
+            // search field; the upstream factory builds a
+            // ReferenceSearchField (NOT a TokenSearchField). Both shapes
+            // must be accepted, otherwise the filter silently drops and
+            // every row of the category is returned (PHI leak).
+            $patientFilterPresent = false;
             if (isset($openEMRSearchParameters['puuid'])) {
                 $puuidHex = self::extractHexFromSearchField($openEMRSearchParameters['puuid']);
+                $patientFilterPresent = true;
                 if ($puuidHex !== null) {
                     $where[] = 'pd.uuid = UNHEX(?)';
                     $bind[]  = $puuidHex;
+                } else {
+                    // Filter present but unparseable — return zero rows
+                    // rather than leaking the unfiltered category.
+                    return $processingResult;
                 }
             }
 
@@ -226,11 +242,11 @@ class FhirCopilotDocumentReferenceService extends FhirServiceBase implements IPa
         }
 
         return [
-            'uuid'          => $row['uuid'],
+            'uuid'          => self::hexToCanonicalUuid($row['uuid'] ?? null),
             'name'          => $row['name'] ?? '',
             'mimetype'      => $row['mimetype'] ?? '',
             'date'          => $row['date'] ?? null,
-            'puuid'         => $row['puuid'] ?? null,
+            'puuid'         => self::hexToCanonicalUuid($row['puuid'] ?? null),
             'euuid'         => null,
             'encounter_date' => null,
             'deleted'       => (int) ($row['deleted'] ?? 0),
@@ -254,26 +270,66 @@ class FhirCopilotDocumentReferenceService extends FhirServiceBase implements IPa
      * UnHEX-binds them itself, but we're running our own SQL — so we walk
      * the structure and pull the raw UUID hex.
      */
+    /**
+     * Convert a 32-char bare hex UUID into the canonical 8-4-4-4-12
+     * hyphenated form. Pass-through for null / empty / unexpected length
+     * (already-hyphenated values stay hyphenated).
+     */
+    private static function hexToCanonicalUuid(?string $hex): ?string
+    {
+        if ($hex === null || $hex === '') {
+            return $hex;
+        }
+        $bare = strtolower(str_replace('-', '', $hex));
+        if (preg_match('/^[0-9a-f]{32}$/', $bare) !== 1) {
+            // Not a 32-char hex — return as-is rather than mangle.
+            return $hex;
+        }
+        return substr($bare, 0, 8) . '-'
+            . substr($bare, 8, 4) . '-'
+            . substr($bare, 12, 4) . '-'
+            . substr($bare, 16, 4) . '-'
+            . substr($bare, 20, 12);
+    }
+
     private static function extractHexFromSearchField(mixed $field): ?string
     {
-        if (!($field instanceof TokenSearchField)) {
+        // ReferenceSearchField (built for FHIR `patient`) and TokenSearchField
+        // (built for `_id`) both extend BasicSearchField and expose getValues().
+        if (!($field instanceof BasicSearchField)) {
             return null;
         }
         foreach ($field->getValues() as $value) {
             $candidate = null;
             if ($value instanceof ReferenceSearchValue) {
-                $candidate = $value->getId();
+                // ReferenceSearchValue wraps a UUID in raw bytes when
+                // isUuid=true (see ReferenceSearchValue::__construct).
+                // Convert via the human-readable accessor, which round-trips
+                // bytes → canonical string for us. Falls back to getId()
+                // for the !isUuid case.
+                $candidate = $value->getHumanReadableId();
+                if ($candidate === null || $candidate === '') {
+                    $candidate = $value->getId();
+                }
             } elseif ($value instanceof TokenSearchValue) {
                 $candidate = $value->getCode();
             } elseif (is_string($value)) {
                 $candidate = $value;
             }
             if (!is_string($candidate) || $candidate === '') {
+                // Last-ditch: a raw 16-byte binary UUID slipped through.
+                if (is_string($candidate) && strlen($candidate) === 16) {
+                    return strtolower(bin2hex($candidate));
+                }
                 continue;
             }
             $hex = strtolower(str_replace('-', '', $candidate));
             if (preg_match('/^[0-9a-f]{32}$/', $hex) === 1) {
                 return $hex;
+            }
+            // 16-byte binary form (some callers pass bytes directly).
+            if (strlen($candidate) === 16) {
+                return strtolower(bin2hex($candidate));
             }
             // Fall back: maybe the value already contains the resource type
             // prefix ("Patient/abc-..."). Strip and retry.
