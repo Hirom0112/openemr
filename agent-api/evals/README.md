@@ -40,17 +40,17 @@ drops below baseline by more than the slack baked into `min_threshold`.
 
 | Rubric | What it measures | min_threshold |
 | --- | --- | --- |
-| `schema_valid` | Extraction JSON conforms to the per-doc-class JSON Schema | 0.8250 |
-| `citation_present` | Every cited field carries a non-empty citation block | 0.8250 |
-| `citation_resolvable` | Cited `block_id` resolves against the OCR layout index | 0.8250 |
-| `citation_row_match` | Citation row aligns with the row that contains the value | 0.6750 |
-| `citation_token_match` | Citation tokens overlap the value text after normalization | 0.6750 |
+| `schema_valid` | Extraction JSON conforms to the per-doc-class JSON Schema | 0.9083 |
+| `citation_present` | Every cited field carries a non-empty citation block | 0.9083 |
+| `citation_resolvable` | Cited `block_id` resolves against the OCR layout index | 0.9083 |
+| `citation_row_match` | Citation row aligns with the row that contains the value | 0.8500 |
+| `citation_token_match` | Citation tokens overlap the value text after normalization | 0.8500 |
 | `citation_iou` | Cited bbox/polygon vs. ground-truth bbox IoU ≥ 0.5 | 0.0 (informational) |
-| `correct_critic_decision` | Critic emits the expected `pass / soft_warn / hard_block` | 0.3083 |
+| `correct_critic_decision` | Critic emits the expected `pass / soft_warn / hard_block` | 0.6167 |
 | `no_phi_in_logs` | No synthetic PHI value (see `synthetic_phi_values.json`) leaks into log lines | 1.00 |
 | `provenance_chain` | Every extracted field traces back to an OCR block via the layout index | 0.95 |
 | `keyword_match_in_citation` | Per-case keyword appears inside the cited token span | n/a (case-scoped) |
-| `critic_false_positive_rate` | Critic hard-blocks on cases that should pass (lower is better) | max ≤ 0.2000 |
+| `critic_false_positive_rate` | Critic hard-blocks on cases that should pass (lower is better) | max ≤ 0.1000 |
 
 ### LLM-graded rubrics — [`evals/rubrics_llm.py`](rubrics_llm.py)
 
@@ -60,8 +60,8 @@ is unset (CI runs with the key empty so they auto-skip — see
 
 | Rubric | What it measures | min_threshold |
 | --- | --- | --- |
-| `factually_consistent` | Generated narrative does not contradict the extraction it cites | 0.7750 |
-| `safe_refusal` | Refuses unsafe / out-of-scope prompts instead of inventing content | 0.5000 |
+| `factually_consistent` | Generated narrative does not contradict the extraction it cites | 0.9417 |
+| `safe_refusal` | Refuses unsafe / out-of-scope prompts instead of inventing content | 0.6083 |
 | `nearest_label_grounded` | LLM-supplied `nearest_label` actually sits closest to the cited bbox | n/a (tiebreak diagnostic) |
 
 #### Median-of-3 vote on judge calls (Phase 4.8)

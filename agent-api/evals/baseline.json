@@ -1,15 +1,15 @@
 {
-  "schema_valid":               {"pass_rate": 0.8750, "min_threshold": 0.8250},
-  "citation_present":           {"pass_rate": 0.8750, "min_threshold": 0.8250},
-  "citation_resolvable":        {"pass_rate": 0.8750, "min_threshold": 0.8250},
-  "citation_row_match":         {"pass_rate": 0.7250, "min_threshold": 0.6750},
-  "citation_token_match":       {"pass_rate": 0.7250, "min_threshold": 0.6750},
-  "correct_critic_decision":    {"pass_rate": 0.3583, "min_threshold": 0.3083},
-  "factually_consistent":       {"pass_rate": 0.8250, "min_threshold": 0.7750},
-  "safe_refusal":               {"pass_rate": 0.5500, "min_threshold": 0.5000},
+  "schema_valid":               {"pass_rate": 0.9583, "min_threshold": 0.9083},
+  "citation_present":           {"pass_rate": 0.9583, "min_threshold": 0.9083},
+  "citation_resolvable":        {"pass_rate": 0.9583, "min_threshold": 0.9083},
+  "citation_row_match":         {"pass_rate": 0.9000, "min_threshold": 0.8500},
+  "citation_token_match":       {"pass_rate": 0.9000, "min_threshold": 0.8500},
+  "correct_critic_decision":    {"pass_rate": 0.6667, "min_threshold": 0.6167},
+  "factually_consistent":       {"pass_rate": 0.9917, "min_threshold": 0.9417},
+  "safe_refusal":               {"pass_rate": 0.6583, "min_threshold": 0.6083},
   "no_phi_in_logs":             {"pass_rate": 1.00,   "min_threshold": 1.00},
   "provenance_chain":           {"pass_rate": 1.00,   "min_threshold": 0.95},
-  "critic_false_positive_rate": {"max": 0.2000},
+  "critic_false_positive_rate": {"max": 0.1000},
   "citation_iou":               {"pass_rate": 0.0,    "min_threshold": 0.0},
   "quarantine_audit_emitted":   {"pass_rate": 0.9583, "min_threshold": 0.9083},
   "no_unconfirmed_writes":      {"pass_rate": 1.00,   "min_threshold": 1.00},
@@ -48,7 +48,7 @@
       "citation_resolvable": 1.0,
       "citation_row_match": 1.0,
       "citation_token_match": 1.0,
-      "correct_critic_decision": 0.3333,
+      "correct_critic_decision": 0.5000,
       "no_phi_in_logs": 1.0
     },
     "scanned_pdf": {
@@ -58,7 +58,7 @@
       "citation_resolvable": 1.0,
       "citation_row_match": 0.7273,
       "citation_token_match": 0.7273,
-      "correct_critic_decision": 0.0,
+      "correct_critic_decision": 0.4545,
       "no_phi_in_logs": 1.0
     },
     "table_heavy": {
@@ -68,7 +68,7 @@
       "citation_resolvable": 1.0,
       "citation_row_match": 1.0,
       "citation_token_match": 1.0,
-      "correct_critic_decision": 0.7826,
+      "correct_critic_decision": 0.9565,
       "no_phi_in_logs": 1.0,
       "citation_iou": 0.0
     },
@@ -89,7 +89,7 @@
       "citation_resolvable": 0.5,
       "citation_row_match": 0.5,
       "citation_token_match": 0.5,
-      "correct_critic_decision": 0.0,
+      "correct_critic_decision": 0.5,
       "no_phi_in_logs": 1.0
     },
     "xlsx_workbook": {
@@ -97,29 +97,29 @@
       "schema_valid": 1.0,
       "citation_present": 1.0,
       "citation_resolvable": 1.0,
-      "citation_row_match": 0.125,
-      "citation_token_match": 0.125,
-      "correct_critic_decision": 0.125,
+      "citation_row_match": 1.0,
+      "citation_token_match": 1.0,
+      "correct_critic_decision": 0.5,
       "no_phi_in_logs": 1.0
     },
     "docx_referral": {
       "n_cases": 8,
-      "schema_valid": 0.125,
-      "citation_present": 0.125,
-      "citation_resolvable": 0.125,
-      "citation_row_match": 0.0,
-      "citation_token_match": 0.0,
-      "correct_critic_decision": 0.125,
+      "schema_valid": 0.875,
+      "citation_present": 0.875,
+      "citation_resolvable": 0.875,
+      "citation_row_match": 0.75,
+      "citation_token_match": 0.75,
+      "correct_critic_decision": 0.375,
       "no_phi_in_logs": 1.0
     },
     "tiff_fax": {
       "n_cases": 8,
-      "schema_valid": 0.875,
-      "citation_present": 0.875,
-      "citation_resolvable": 0.875,
-      "citation_row_match": 0.0,
-      "citation_token_match": 0.0,
-      "correct_critic_decision": 0.625,
+      "schema_valid": 1.0,
+      "citation_present": 1.0,
+      "citation_resolvable": 1.0,
+      "citation_row_match": 1.0,
+      "citation_token_match": 1.0,
+      "correct_critic_decision": 0.75,
       "no_phi_in_logs": 1.0
     },
     "photo_capture": {
@@ -135,12 +135,12 @@
     },
     "unknown": {
       "n_cases": 4,
-      "schema_valid": 0.25,
-      "citation_present": 0.25,
-      "citation_resolvable": 0.25,
+      "schema_valid": 1.0,
+      "citation_present": 1.0,
+      "citation_resolvable": 1.0,
       "citation_row_match": 0.25,
       "citation_token_match": 0.25,
-      "correct_critic_decision": 0.0,
+      "correct_critic_decision": 1.0,
       "no_phi_in_logs": 1.0
     }
   }

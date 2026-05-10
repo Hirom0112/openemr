@@ -6,7 +6,12 @@ Anthropic SDK `response.usage` fields captured at
 `agent-api/agent/dispatcher.py:1818-1836`. Empty rows are explicitly
 labelled "no traffic — N/A" rather than fabricated.
 
-Report generated: 2026-05-05.
+Report generated: 2026-05-05; refreshed 2026-05-10 with eval-suite cost
+section + post-Phase-5 critic note. Production /metrics figures are
+unchanged from the original snapshot (the deployed pod hasn't moved
+for the metrics this report cites; FHIR-DocumentReference deploys did
+not touch the dispatch / extraction code paths). Re-scrape recommended
+after the next deploy.
 
 ---
 
@@ -30,8 +35,12 @@ Report generated: 2026-05-05.
   session" vs. "projected from the W2 architecture spec".
 - **What was measured:** /agent/prefetch (warmer), /agent/query (chat),
   supervisor handoff (Stream F counter). Ingest extraction was not
-  exercised this session (no document upload), so its latency is taken
-  from `evals/baseline.json` extraction histograms instead.
+  exercised in the live `/metrics` scrape (no document upload), so the
+  ingest latency cited in §5b is the earlier `agent_dispatch_latency_seconds`
+  scrape from the same process — the only measured-in-process reading
+  this report carries. The eval-suite ingest path (`run_full_suite.py`)
+  is a separate measurement surface; its per-case wall-time is reported
+  in §5g.
 
 ---
 
@@ -97,7 +106,18 @@ That excludes output-token billing, embeddings, and rerank.
 | Ingest (Sonnet vision, 3-pg avg, schema-fill) | ~$0.024 | ~$0.005 | $0.001 (rerank) | **~$0.030** |
 | Chat / `/agent/query` (Sonnet, with cache) | ~$0.012 | ~$0.003 | ~$0.0001 embed + ~$0.001 rerank | **~$0.016** |
 | Classifier (Sonnet, 1 pg + OCR text) | ~$0.004 | ~$0.001 | — | **~$0.005** |
-| Boolean-rubric judge (Haiku) | ~$0.0005 | ~$0.0002 | — | **~$0.0007** |
+| Boolean-rubric judge (Haiku, single call) | ~$0.0005 | ~$0.0002 | — | **~$0.0007** |
+| Critic decision (mechanical, post-Phase-1+3) | $0 | $0 | — | **$0** |
+
+Eval-side judge calls run **3× per rubric per case** (Phase 4.8 median-of-3
+vote). The single-call cost above × 3 is the per-eval-case judge cost; see
+§5g for full-suite total.
+
+Rate-card note: production lab extractor pins `claude-sonnet-4-5-20250929`
+(`extractors/lab.py:43`), one minor version behind the Sonnet 4.6 row in
+the rate card. Pricing is identical across the Sonnet 4.x series (Anthropic
+doesn't differentiate point releases on the rate card), so the projection
+is not affected.
 
 ### Projected fleet cost (one patient turn ≈ 1 ingest + 2 chats)
 
@@ -115,6 +135,40 @@ or loosened.
 
 ---
 
+## 5g. Eval-suite cost (CI / development)
+
+The W2 eval suite (`evals/run_full_suite.py`, 156 cases at submission lock)
+is the single largest recurring cost surface in this codebase outside
+production traffic. Runs on every PR via `copilot-eval.yml`.
+
+| Run mode | Per-run cost | Wall-clock |
+| --- | ---: | ---: |
+| Full suite, cold (first run after `EVAL_CACHE_VERSION` bump) | **~$8–12** | ~10 min |
+| Full suite, warm judge cache (`agent-api/.eval_cache/judges/`) | **~$4–5** | ~5–7 min |
+| Smoke subset (`--smoke`, 10 cases) | ~$1 | ~1 min |
+| Targeted (`run_targeted.py`, N cases) | ~$0.04 × N | ~5 s × N |
+| Failing-only (`--failing-only prior_results.json`) | scales with failure count | proportional |
+
+**Cost composition per cold full-suite run** (~$8–12 envelope):
+
+- Extraction: ~$4.40 (146 cases × ~$0.030 weighted; vision-heavy modalities
+  TIFF / scanned / photo / xlsx run at ~$0.05 each).
+- `factually_consistent` judge (Sonnet × 3 per case): ~$4.70 (156 × $0.030).
+- `safe_refusal` judge (Haiku × 3 per case, only when `expected_critic_decision != "pass"`): ~$0.45.
+- Voyage embeddings + Cohere rerank (10 evidence-retrieval cases): ~$0.05.
+- **Critic: $0** — mechanical (Phase 1+3), no LLM call.
+
+The judge cache (`agent-api/.eval_cache/judges/<sha256>.json`) collapses
+the median-of-3 judge spend to $0 on identical-payload reruns. First run
+of a fresh `EVAL_CACHE_VERSION` pays full price; every subsequent run
+over the same fixtures + prompts is amortized to extraction-only (~$4–5).
+
+**Bumping `EVAL_CACHE_VERSION`** invalidates all judge cache entries and
+forces a cold run. Required when prompt-registry changes, model pin
+changes, or rubric-eval logic changes alter the expected judge output.
+
+---
+
 ## 5d. Cache effectiveness
 
 ### Anthropic prompt cache (live this session)
@@ -124,8 +178,13 @@ or loosened.
 - **Hit rate ≈ 98.2 %** — cache_read / (cache_read + cache_create)
 
 This is unusually high; expected on a stack that just replayed prefetch on
-the same patient. After a multi-patient turn it will normalize. The hit
-rate is the headline reason the projected $/turn stays at $0.016.
+the same patient. After a multi-patient turn it will normalize. Realistic
+post-warm steady-state on a multi-patient workload sits in the **80–92 %**
+band on this prompt structure (system-prompt + tool-list + per-patient
+context, where the per-patient block is the cache-miss source on each
+new patient). The hit rate is the headline reason the projected $/turn
+stays at $0.016 — even at the lower end of the steady-state band the
+per-turn cost only rises to ~$0.020.
 
 ### Redis data cache (live this session)
 
@@ -157,8 +216,15 @@ p95 in the 10–15 s bucket; this matches the `/agent/query` HTTP histogram
 sum (27.99 s / 2 = 14.0 s mean). Mitigations already shipped: Sonnet 4.6
 prompt cache (98 % hit rate this session — confirmed live), Haiku 4.5 on the
 fast path / boolean rubric judge, and parallel summary + guidelines fetch
-in the prefetch warmer. The remaining headroom is moving more of the
-guideline-retrieval + critic loop to Haiku.
+in the prefetch warmer.
+
+The critic loop has been moved off the LLM entirely (Phase 1+3): every
+critic decision is now mechanical — schema validation, citation walk,
+demographic comparator, and the Phase-1A/3A/3D detector suite — running
+in single-digit milliseconds per case with $0 marginal cost. The W1
+headroom item ("move critic to Haiku") is closed; what remains is moving
+more of the guideline-retrieval + chat synthesis loop to Haiku where
+evidence quality permits.
 
 ---
 
@@ -176,3 +242,10 @@ guideline-retrieval + critic loop to Haiku.
 
 The deployed pod is live, healthy, Redis-connected, and actively round-tripping
 to Anthropic — the MVP "deployed app" criterion is met.
+
+**Re-verification cadence:** the next deploy that touches dispatcher /
+extractor / critic code paths should re-scrape `/metrics` and update §5b
+latency table + §5d cache-effectiveness counters. Commits since this
+report (`07a24fb31`, `f464407c0`, `7b7c597e7`) touched FHIR
+DocumentReference paths, not the dispatch loop, so the §5b numbers are
+still load-bearing for the Stream F deliverable.

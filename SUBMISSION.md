@@ -174,13 +174,116 @@ Mitigation: implemented median-of-3 sampling for LLM-judge rubrics. Each judge c
 
 ## Effect on numbers
 
-Several rubrics dropped meaningfully when sampling variance was eliminated:
+Two waves of change moved the numbers. **Wave A** (the six-issue audit
+above) eliminated sampling variance — several rubrics moved to honest
+deterministic readings:
 
 - factually_consistent: 98.86% → 82.5% (median-of-3 is mathematically stricter than the prior single-rerun rule; not a regression)
 - citation_row_match: 93% → 72.5% (real, was inflated by silent bbox_gt exclusion + lucky sampling)
 - citation_resolvable: 97% → 87.5% (same)
 
+**Wave B** (post-MVP critic policy + extractor sentinel work) lifted the
+post-audit baseline to its current state. Top-line vs the audited
+baseline:
+
+| Rubric | Audit baseline | Current | Δ |
+| --- | --- | --- | --- |
+| schema_valid                | 87.5% | 95.8% | +8.3 |
+| citation_present            | 87.5% | 95.8% | +8.3 |
+| citation_resolvable         | 87.5% | 95.8% | +8.3 |
+| citation_row_match          | 72.5% | 90.0% | +17.5 |
+| citation_token_match        | 72.5% | 90.0% | +17.5 |
+| correct_critic_decision     | 35.8% | 66.7% | +30.9 |
+| factually_consistent        | 82.5% | 99.2% | +16.7 |
+| safe_refusal                | 55.0% | 65.8% | +10.8 |
+| critic_false_positive_rate  | (≤20% gate) | 4.2% | well under gate |
+
+Where the lift came from:
+
+- **Demographics shape-flatten helper.** `IntakeForm.demographics` ships
+  `TextField` dicts (so citations survive); the comparator was calling
+  `.strip()` on the dict and crashing the graph for any IntakeForm-
+  producing modality. Patched in `graph/nodes/demographics.py`. Recovered
+  every cascading rubric (schema_valid, citation_present,
+  citation_resolvable) for docx_referral and adjacent modalities.
+- **Sentinel extraction for empty/encrypted/corrupt PDFs.** The lab
+  extractor's no-layout-blocks branch previously raised
+  `ExtractionFailed`; the eval boundary swallowed the exception and
+  silently set `extraction=None`. The critic now receives a schema-
+  conformant `UnknownDocument` whose `document_kind_guess` and
+  `ocr_confidence_range` route through a blank/unreadable/low-OCR
+  taxonomy, producing the right `hard_block` / `soft_warn` decision.
+- **Critic detection rules (Phase 3 Type-A).** Added detectors for
+  intra-document numeric conflicts (same-date duplicate test rows),
+  classifier disagreement with `doc_type_hint`, and mixed-content /
+  multi-patient packets. These fire `soft_warn` on the cases the
+  fixture corpus expects.
+- **Single-line layout-guard fix in `_check_document_path`.** Step 4
+  (citation fidelity) walked an empty layout dict for HL7 / XLSX /
+  DOCX lanes that legitimately have no `ocr_layout`. Every citation
+  resolved to `None`, surfacing as `CITATION_UNRESOLVABLE` →
+  `hard_block`. Adding `elif layout:` flips ~18 nominal cases (typed_pdf
+  evidence_retrieval × 10, hl7_v2 nominals × 4, xlsx_workbook fulls × 4)
+  from spurious hard_block to pass.
+- **MRN cross-system fallback.** Documents from outside systems carry
+  external-prefix MRNs (`BHS-2847163`, `MRN-2026-XXXXX`); the chart's
+  MRN is local-system. `_mrn_match` now returns `absent` for cross-
+  system identifiers so name+DOB carry the verification, instead of
+  returning a spurious `mismatch` that triggered hard_block on
+  correctly-attributed referrals.
+
 Committed baseline reflects honest deterministic measurements. Floors set at pass_rate − 0.05 per project convention.
+
+## Per-modality OCR escalation policy (modality-aware)
+
+The Phase-5A' "any soft_warn promotes pass→soft_warn" rule was uniform
+across modalities. That over-fired on raster surfaces whose extraction
+emits no value-fidelity claims (`photo_capture`, `synthetic`,
+`tiff_fax`): on those surfaces an `OCR_LOW_CONFIDENCE` flag is
+informational — there's nothing the clinician can be asked to "verify
+against source" because the document doesn't surface clinical values.
+
+The escalation is now keyed on `state["document_modality"]`. The eval
+runner pulls it from each case's fixture; production callers in the
+HTTP dispatcher pass it through from upload acquisition mode. On
+`photo_capture` / `synthetic` / `tiff_fax`, an `OCR_LOW_CONFIDENCE`
+soft_warn alone does NOT escalate `pass` → `soft_warn`. On every other
+modality (faxed `scanned_pdf` lab forms, real-content `lab_report` /
+`intake_form` / `workbook`), it still does — degraded OCR there
+directly threatens value transcription accuracy.
+
+Trade-off: `tiff_fax_005` (low-quality 1-bit TIFF, expected
+`soft_warn`) lands at `pass` under this policy; case-level metadata
+beyond modality (the bucket-level `low_quality_scan` tag) would be
+needed to differentiate it from the four `tiff_fax` nominals that
+expect `pass`. Documented as a known small loss in exchange for
+photo_capture moving from 0% to 100% on `correct_critic_decision`.
+
+## Decision-space ambiguity (typed_pdf, intake_form)
+
+Two modalities sit flat at moderate `correct_critic_decision`:
+`typed_pdf` (59.3%) and `intake_form` (53.8%). The remaining failing
+cases are not critic bugs — they are cases where the fixture's
+`expected_critic_decision` and the system's actual decision are both
+defensible against the case content, but the rubric scores exact-
+string equality with no tolerance for principled disagreement. Three
+sub-patterns:
+
+- Cases that opted into `soft_warn` for "missing field X" where the
+  schema legitimately doesn't require X for the document class.
+- Cases that opted into `pass` where the system flags an
+  `intra_doc_conflict` the fixture author considered benign.
+- Cases that opted into `pass` where MRN comparison legitimately
+  surfaces `MRN_MATCH_DOB_MISMATCH` (real demographic divergence in
+  the fixture content).
+
+Treating these as critic bugs would push us toward Type-B measurement
+tuning (changing the system to match the test). The honest move is to
+leave the system's decision as-is and acknowledge the ambiguity here.
+A future pass that adds principled-disagreement tolerance to
+`correct_critic_decision` (e.g., grade soft_warn as ≥pass when
+soft-warn codes are consistent) would lift these without changing
+production behavior — explicitly *not* part of this commit.
 
 ## What this audit changed
 
@@ -191,7 +294,10 @@ Committed baseline reflects honest deterministic measurements. Floors set at pas
 
 ## Deferred follow-ups (named, not hidden)
 
-- DOCX referral extractor produces non-conformant IntakeForm payloads on most fixtures (Phase 5 work).
+- ~~DOCX referral extractor produces non-conformant IntakeForm payloads on most fixtures (Phase 5 work).~~ **Done** (Phase 5A): the bug was in `graph/nodes/demographics.py`, not the DOCX extractor. Schema_valid 12.5% → 87.5%.
 - 4 of 5 audit/writeback rubrics fire vacuous-True until approval-flow runner exists. Rubric wiring correct; upstream code is the gap.
 - HTTP /document/ingest dispatcher and graph extractor share underlying parsers but have separate entry points. Consolidation deferred to post-submission cleanup.
 - HL7 segment offsets and XLSX cell references don't map to bbox citations. Per-modality citation rubric branches in place; architectural mismatch documented.
+- `tiff_fax_005` low-quality-scan fixture lands at `pass` under the modality-aware OCR escalation policy when bucket-level metadata would route it to `soft_warn`. Pass `case.bucket` through W2State to recover this case (~30 min).
+- 3 `scanned_pdf` reportlab-disguised text-PDF fixtures expect `soft_warn` for `ocr_confidence_low` but extract cleanly at OCR confidence 1.0 — the fixture content doesn't actually exercise low-OCR. Either regenerate as real-OCR fixtures or move them to a different bucket.
+- `tiff_fax_007` wrong-cover demographics check skipped because the TIFF extraction returns `kind=unknown` with no demographics block to compare. Demographics extraction for TIFF cover-sheet metadata is a Phase 6 item.
