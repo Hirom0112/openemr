@@ -63,15 +63,9 @@ if (is_string($envDashboardUrl) && $envDashboardUrl !== '') {
 // active patient into both the top-level $_SESSION (legacy) and the
 // nested OpenEMR session bag (post-HttpSessionFactory). Read both.
 $oemrSession = $_SESSION['OpenEMR'] ?? [];
-$pid = $oemrSession['pid'] ?? $_SESSION['pid'] ?? null;
-if (!is_numeric($pid) || (int) $pid <= 0) {
-    // Fallback to the verification patient (Gloria, pid 4) when no
-    // active patient is set. Lets the menu tab open a useful page even
-    // when launched without picking a patient first; in production the
-    // grader's flow always picks a patient before clicking the tab.
-    $pid = 4;
-}
-$pid = (int) $pid;
+$rawPid = $oemrSession['pid'] ?? $_SESSION['pid'] ?? null;
+$noPatient = !is_numeric($rawPid) || (int) $rawPid <= 0;
+$pid = $noPatient ? 0 : (int) $rawPid;
 
 // Same-origin embed: load the dashboard via Apache's ProxyPass at
 // /dashboard/* (configured in the Dockerfile). This puts the iframe
@@ -79,7 +73,7 @@ $pid = (int) $pid;
 // blocking that breaks iframe OAuth callbacks. The PATIENT_DASHBOARD_URL
 // env var is still used for the misconfigured-banner check + the
 // fallback "open in new tab" link (when the proxy is unreachable).
-$iframeSrc = $misconfigured
+$iframeSrc = ($misconfigured || $noPatient)
     ? ''
     : '/dashboard/patient/' . rawurlencode((string) $pid);
 
@@ -111,6 +105,13 @@ $iframeSrc = $misconfigured
         The <code>PATIENT_DASHBOARD_URL</code> environment variable is missing on this deployment.
         Ask an administrator to set it to the public URL of the Next.js dashboard service.
     </div>
+<?php } elseif ($noPatient) { ?>
+    <div role="status" style="display:flex;align-items:center;justify-content:center;height:100%;padding:2rem;text-align:center;font-family:system-ui,sans-serif;color:#444;">
+        <div>
+            <div style="font-size:1.05rem;font-weight:600;margin-bottom:0.4rem;">No patient selected</div>
+            <div style="font-size:0.9rem;color:#666;">Open a patient chart from the OpenEMR sidebar, then return to this tab.</div>
+        </div>
+    </div>
 <?php } else { ?>
     <div class="frame-wrap">
         <div class="frame-loading" aria-hidden="true">Loading patient dashboard…</div>
@@ -123,5 +124,42 @@ $iframeSrc = $misconfigured
         ></iframe>
     </div>
 <?php } ?>
+<script>
+    // Poll the OpenEMR session for the active patient pid. When it changes
+    // (user picked a different patient via OpenEMR's chrome), reload this
+    // tab so index.php re-renders with the new pid (or the empty state).
+    // Document is hidden → skip polling to avoid background traffic.
+    (function () {
+        var renderedPid = <?php echo (int) $pid; ?>;
+        var endpoint = 'current-pid.php';
+        var intervalMs = 2500;
+        var inFlight = false;
+
+        function check() {
+            if (inFlight || document.hidden) return;
+            inFlight = true;
+            fetch(endpoint, { credentials: 'same-origin', cache: 'no-store' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (body) {
+                    if (!body || typeof body.pid !== 'number') return;
+                    if (body.pid !== renderedPid) {
+                        // Pid changed (or cleared): full reload picks up
+                        // both the iframe-vs-empty-state branch and the
+                        // new patient context atomically.
+                        window.location.reload();
+                    }
+                })
+                .catch(function () { /* network blip; try again next tick */ })
+                .finally(function () { inFlight = false; });
+        }
+
+        setInterval(check, intervalMs);
+        // Also check immediately when the tab becomes visible again, so
+        // returning from another OpenEMR tab feels instant.
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) check();
+        });
+    })();
+</script>
 </body>
 </html>

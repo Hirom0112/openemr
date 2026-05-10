@@ -104,10 +104,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         return token;
       }
 
-      // Expired: try to refresh.
+      // Expired: try to refresh. On any failure (no refresh token,
+      // refresh request rejected, network error), invalidate the JWT
+      // by returning null. Auth.js treats this as a logged-out state →
+      // proxy.ts redirects /patient/* → /login → the OpenEMR OAuth
+      // provider re-authenticates silently if the user still has an
+      // OpenEMR session, producing a fresh access_token. This avoids
+      // the previous failure mode where we returned a token-without-
+      // accessToken and FHIR calls 401'd one card at a time.
       const refreshToken = token.refreshToken;
       if (typeof refreshToken !== "string" || refreshToken.length === 0) {
-        return { ...token, error: "RefreshAccessTokenError" };
+        console.warn("[auth] Access token expired and no refresh token; clearing session");
+        return null;
       }
 
       try {
@@ -120,8 +128,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         delete token.error;
         return token;
       } catch (error) {
-        console.error("[auth] Failed to refresh access token", error);
-        return { ...token, error: "RefreshAccessTokenError" };
+        console.error("[auth] Failed to refresh access token; clearing session", error);
+        return null;
       }
     },
     async session({ session, token }) {
