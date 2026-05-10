@@ -271,6 +271,15 @@ async def _process_one_case(
             "status": status if status is not None else "scored",
             "notes": (score_d.get("notes", "") if isinstance(score_d, dict) else ""),
         }
+        # Lift CaseScore boolean rubric fields onto the row dict so the
+        # aggregation loop in run_full_suite (`for k, v in row.items(): if
+        # isinstance(v, bool):`) can pick them up. Without this every case's
+        # rubric_results was empty and the aggregate fell back to 0.0 for any
+        # rubric not explicitly handled in scoring.aggregate.
+        if isinstance(score_d, dict):
+            for _k, _v in score_d.items():
+                if isinstance(_v, bool) and _k not in row:
+                    row[_k] = _v
         return {
             "row": row,
             "score": score,
@@ -955,6 +964,36 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "smoke", False) and getattr(args, "failing_only", None) is not None:
         parser.error("--smoke and --failing-only are mutually exclusive")
 
+    # Phase 4.8 — eval-mode verifier override. The Wave 2C citation_verifier
+    # node mutates state["extraction"] in place when it runs (drops/repoints
+    # citations on a "no" verdict). At temp=0 the underlying vision call is
+    # *almost* deterministic but Anthropic server-side variance leaks ~30
+    # rubric flips per full-suite run. Production keeps verify_citations
+    # ="sample" (config.py default); eval mode forces "off" so identical
+    # inputs produce identical extractions across reruns.
+    #
+    # Override resolution order (first wins):
+    #   1. EVAL_VERIFY_CITATIONS env var (if set) — operator escape hatch
+    #      (e.g. EVAL_VERIFY_CITATIONS=sample to reproduce the production
+    #      path during a one-off audit run).
+    #   2. Hard-coded "off" — the eval default.
+    # Production HTTP /document/ingest goes through main.py which never
+    # imports run_full_suite, so this assignment is invisible to it.
+    import os as _os
+    from config import settings as _settings
+    _eval_verify_mode = _os.environ.get("EVAL_VERIFY_CITATIONS", "off").lower()
+    if _eval_verify_mode not in ("off", "sample", "all"):
+        logger.warning(
+            "eval_verify_citations_unknown_mode",
+            extra={"raw": _eval_verify_mode, "fallback": "off"},
+        )
+        _eval_verify_mode = "off"
+    _settings.verify_citations = _eval_verify_mode
+    logger.info(
+        "eval_verify_citations_set",
+        extra={"mode": _eval_verify_mode},
+    )
+
     md_path = args.md or args.output.with_suffix(".md")
     trace_path = args.repoint_trace or (args.output.parent / "repoint_trace.jsonl")
 
@@ -1019,6 +1058,16 @@ def main(argv: list[str] | None = None) -> int:
         "synthesis_grounded",
         "icd10_grounded",
         "condition_writeback_succeeded",
+        # Phase 4 — vacuous-True instrumentation rubrics that need to surface
+        # in the JSON so diff_baseline.py can match them against baseline.json.
+        # They aggregate to 1.0 because their backing runner instrumentation
+        # isn't wired (see Phase 1.2 report); rubric bodies short-circuit to
+        # True when the field is None/absent.
+        "quarantine_audit_emitted",
+        "no_unconfirmed_writes",
+        "stage_failure_audit_emitted",
+        "tiff_all_pages_ocrd",
+        "synthetic_marker_not_extracted",
         "critic_false_positive_rate",
         "keyword_match_in_citation",
     )
@@ -1028,10 +1077,17 @@ def main(argv: list[str] | None = None) -> int:
         results[k] = float(v) if v is not None else 0.0
 
     # Wave 2C — per-modality breakdown (consumed by diff_baseline.py).
-    # Use legacy_* lists so existing per-modality entries match their
-    # pre-Wave-2C baselines. The new bbox_gt cases contribute their
-    # citation_iou pass-rate via _score_bbox_rubrics below.
-    results["per_modality"] = _per_modality_breakdown(legacy_scores, legacy_cases)
+    # Phase 4b fix: pass the FULL ``scored_cases`` / ``scores`` lists
+    # (not the ``legacy_*`` filtered ones). The earlier ``legacy_*`` call
+    # silently dropped every ``bbox_gt`` case from the per-modality
+    # ``n_cases`` / ``schema_valid`` / etc tallies — so ``table_heavy``
+    # under-reported (12 of 23 cases excluded) and ``photo_capture``
+    # had no per-modality counters at all (all 12 cases are bbox_gt).
+    # The ``legacy_*`` filter is still correct for the GLOBAL aggregate
+    # above (line 1014) — that aggregate is baseline-compatible with the
+    # pre-Wave-2C contract — but per-modality is a Wave 2C concept that
+    # was always meant to cover every case the runner scored.
+    results["per_modality"] = _per_modality_breakdown(scores, scored_cases)
 
     # Wave 2C — bbox-GT-gated rubrics (citation_iou + citation_pixel_distance).
     # GT-gated: only synthetic_v2 cases that produced an extracted bbox count.

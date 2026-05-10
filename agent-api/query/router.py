@@ -77,6 +77,7 @@ async def _llm_classify(query: str, patient_id: str) -> QueryRoute:
         response = await client.messages.create(
             model=_MODEL,
             max_tokens=200,
+            temperature=0,
             system=_LLM_SYSTEM,
             messages=[{"role": "user", "content": f"Patient ID: {patient_id}\nQuery: {query}"}],
         )

@@ -167,6 +167,7 @@ async def add_llm_summary(
         response = await client.messages.create(
             model=_MODEL,
             max_tokens=200,
+            temperature=0,
             messages=[{"role": "user", "content": prompt}],
             tools=[PRODUCE_SAFETY_SUMMARY],
             tool_choice={"type": "any"},

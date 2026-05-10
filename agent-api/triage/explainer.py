@@ -96,6 +96,7 @@ async def explain_one(
         response = await client.messages.create(
             model=_MODEL,
             max_tokens=80,
+            temperature=0,
             system=_SYSTEM,
             messages=[{"role": "user", "content": user_prompt}],
             tools=[PRODUCE_TRIAGE_EXPLANATION],

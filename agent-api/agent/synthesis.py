@@ -649,6 +649,7 @@ async def synthesize(
             response = await client.messages.create(
                 model=_MODEL,
                 max_tokens=_MAX_TOKENS,
+                temperature=0,
                 system=_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_payload}],
                 tools=[_PRODUCE_SYNTHESIS],

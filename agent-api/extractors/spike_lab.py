@@ -180,6 +180,7 @@ def _call_claude(
             resp = client.messages.create(
                 model=model,
                 max_tokens=4096,
+                temperature=0,
                 tools=[tool],
                 tool_choice={"type": "tool", "name": "submit_lab_report"},
                 system=_PROMPT,

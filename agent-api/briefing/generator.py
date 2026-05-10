@@ -117,6 +117,7 @@ async def generate_briefing(
             return await client.messages.create(
                 model=_MODEL,
                 max_tokens=4096,
+                temperature=0,
                 system=system_blocks,
                 messages=messages,
                 tools=[PRODUCE_BRIEFING],

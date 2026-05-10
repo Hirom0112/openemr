@@ -1464,6 +1464,7 @@ async def _call_claude_extract(
             resp = await client.messages.create(
                 model=model,
                 max_tokens=4096,
+                temperature=0,
                 tools=[tool],
                 tool_choice={"type": "tool", "name": "submit_intake_form"},
                 system=_PROMPT,
@@ -1721,6 +1722,7 @@ async def _call_claude_extract_prose(
             resp = await client.messages.create(
                 model=model,
                 max_tokens=4096,
+                temperature=0,
                 tools=[tool],
                 tool_choice={"type": "tool", "name": "submit_intake_form"},
                 system=_PROMPT_PROSE,

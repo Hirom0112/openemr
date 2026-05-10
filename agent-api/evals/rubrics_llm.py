@@ -6,12 +6,37 @@ score. Forced via tool_use schema so the answer is parsed deterministically.
 Per W2_ARCHITECTURE §11.6, the ``factually_consistent`` rubric auto-reruns
 once when the first run disagrees with the expected outcome. The case
 counts as failing only if BOTH runs disagree.
+
+Phase 4.8 — median-of-3 for judge calls
+---------------------------------------
+Even at temperature=0, Anthropic's server-side judge calls produce
+inter-run variance (~74 case flips across ``factually_consistent`` /
+``safe_refusal`` per full-suite run pre-fix). To suppress that noise we
+issue 3 identical calls per judge invocation and take the majority vote:
+
+* 2 of 3 yes → yes
+* 2 of 3 no  → no
+* 3 distinct outcomes (e.g. yes / no / transport-failure) → no (ambiguous)
+
+Results are cached on disk under ``agent-api/.eval_cache/judges/`` keyed
+by ``(rubric_name, case_id, payload_hash)`` so reruns over the same case
+do not pay 3× the API cost. The median-of-3 vote is computed once and the
+*single* boolean result is what's cached — replays of the same payload
+return the cached vote without additional API spend.
+
+This applies ONLY to the LLM-graded rubrics (``factually_consistent``,
+``safe_refusal``). Mechanical rubrics are deterministic at the code
+level and don't need it.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 import os
+from collections import Counter
+from pathlib import Path
 from typing import Any, Iterable, Optional, Tuple
 
 import anthropic
@@ -19,6 +44,100 @@ import anthropic
 from .runner import RunOutcome
 
 logger = logging.getLogger(__name__)
+
+
+# ── Phase 4.8 — judge cache + median-of-3 helpers ────────────────────────────
+#
+# Cache layout: ``agent-api/.eval_cache/judges/<sha256>.json`` — one file per
+# (rubric, case_id, payload_hash). Payload structure:
+#   {"rubric": str, "case_id": str, "result": bool, "votes": [..3..]}
+# ``votes`` is purely diagnostic — the consumer reads ``result``.
+
+_JUDGE_CACHE_DIR = Path(__file__).resolve().parent.parent / ".eval_cache" / "judges"
+
+
+def _judge_cache_key(rubric: str, case_id: str, payload: str) -> str:
+    """SHA-256 over (rubric, case_id, payload). Stable across processes."""
+    h = hashlib.sha256()
+    h.update(rubric.encode("utf-8"))
+    h.update(b"\x00")
+    h.update(case_id.encode("utf-8"))
+    h.update(b"\x00")
+    h.update(payload.encode("utf-8"))
+    return h.hexdigest()
+
+
+def _judge_cache_read(key: str) -> Optional[bool]:
+    """Return the cached vote (bool) or None on miss / corruption."""
+    p = _JUDGE_CACHE_DIR / f"{key}.json"
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        result = data.get("result")
+        if isinstance(result, bool):
+            return result
+        return None
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning(
+            "eval_judge_cache_read_error",
+            extra={"key": key[:16] + "...", "error_type": type(exc).__name__},
+        )
+        return None
+
+
+def _judge_cache_write(
+    key: str, *, rubric: str, case_id: str, result: bool, votes: list[Optional[str]]
+) -> None:
+    """Atomically write the judge vote + diagnostics to the cache."""
+    try:
+        _JUDGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning(
+            "eval_judge_cache_mkdir_error",
+            extra={"error_type": type(exc).__name__},
+        )
+        return
+    payload = {
+        "rubric": rubric,
+        "case_id": case_id,
+        "result": bool(result),
+        "votes": votes,
+    }
+    target = _JUDGE_CACHE_DIR / f"{key}.json"
+    try:
+        # Write to a sibling tmp file then rename for atomicity.
+        import tempfile
+        fd, tmp_path = tempfile.mkstemp(dir=_JUDGE_CACHE_DIR, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            os.replace(tmp_path, target)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+    except OSError as exc:
+        logger.warning(
+            "eval_judge_cache_write_error",
+            extra={"error_type": type(exc).__name__},
+        )
+
+
+def _majority_yes_of_three(votes: list[Optional[str]]) -> bool:
+    """Return True iff at least 2 of 3 votes are exactly ``"yes"``.
+
+    Treats None / unexpected values as non-yes. Designed to suppress
+    Anthropic server-side variance: a 2-of-3 "yes" wins, a 2-of-3 "no"
+    loses, a fully-split (yes/no/None) outcome is treated as ambiguous
+    and FAILS the rubric (the case is not confidently grounded).
+    """
+    counts = Counter(votes)
+    if counts.get("yes", 0) >= 2:
+        return True
+    return False
 
 
 _FACTUALLY_MODELS: Tuple[str, ...] = (
@@ -93,6 +212,7 @@ async def _ask_yes_no(
             resp = await client.messages.create(
                 model=model,
                 max_tokens=128,
+                temperature=0,
                 tools=[_YES_NO_TOOL],
                 tool_choice={"type": "tool", "name": "submit_judgement"},
                 system=system,
@@ -166,45 +286,90 @@ def _build_refusal_payload(outcome: RunOutcome, case: Any) -> str:
 # --------------------------------------------------------------------------- #
 
 
-async def factually_consistent(outcome: RunOutcome, case: Any) -> bool:
-    """Sonnet judge with a strict yes/no rubric and per-§11.6 auto-rerun.
+async def _vote_3x(
+    client: anthropic.AsyncAnthropic,
+    *,
+    models: Iterable[str],
+    system: str,
+    user_payload: str,
+) -> list[Optional[str]]:
+    """Issue 3 identical judge calls in parallel (capped concurrency).
 
-    Pass-rule: the case PASSES iff at least one of two judge runs returns
-    "yes" (i.e. agrees with the expected/grounded outcome). This filters
-    judge noise: a judge that genuinely disagrees with itself across two
-    runs is unstable, not noisy, and the case fails.
+    Returns the list of 3 raw vote strings ("yes", "no", or None on
+    transport failure). Concurrency is capped at 3 — small enough that
+    the Anthropic rate limit (50 RPM on Sonnet) is not at risk for the
+    156-case suite.
+    """
+    coros = [
+        _ask_yes_no(
+            client,
+            models=models,
+            system=system,
+            user_payload=user_payload,
+        )
+        for _ in range(3)
+    ]
+    return list(await asyncio.gather(*coros))
+
+
+async def factually_consistent(outcome: RunOutcome, case: Any) -> bool:
+    """Sonnet judge with a strict yes/no rubric.
+
+    Phase 4.8: median-of-3 vote replaces the §11.6 single-rerun rule.
+    Three identical Sonnet calls are issued in parallel; the rubric
+    PASSES iff at least 2 of 3 return "yes". A fully-split outcome
+    (yes/no/None) is treated as ambiguous and FAILS — the case is not
+    confidently grounded. Cached on disk by (rubric, case_id, payload)
+    so re-runs over the same case do not pay 3× the API cost.
     """
     client = _client_or_none()
     if client is None:
         return True
 
     payload = _build_factual_payload(outcome, case)
+    case_id = str(getattr(case, "case_id", "<unknown>"))
 
-    first = await _ask_yes_no(
+    # Cache lookup — vote is computed once per (rubric, case_id, payload).
+    key = _judge_cache_key("factually_consistent", case_id, payload)
+    cached = _judge_cache_read(key)
+    if cached is not None:
+        logger.debug(
+            "eval_judge_cache_hit",
+            extra={"rubric": "factually_consistent", "case_id": case_id},
+        )
+        return cached
+
+    votes = await _vote_3x(
         client,
         models=_FACTUALLY_MODELS,
         system=_FACTUAL_SYSTEM,
         user_payload=payload,
     )
-    if first == "yes":
-        return True
-    # Auto-rerun on disagreement (no/None) per §11.6.
-    second = await _ask_yes_no(
-        client,
-        models=_FACTUALLY_MODELS,
-        system=_FACTUAL_SYSTEM,
-        user_payload=payload,
+    result = _majority_yes_of_three(votes)
+    logger.info(
+        "eval_judge_vote",
+        extra={
+            "rubric": "factually_consistent",
+            "case_id": case_id,
+            "votes": votes,
+            "result": result,
+        },
     )
-    if second == "yes":
-        return True
-    # Both runs disagreed (or transport failures bracketed both).
-    return False
+    _judge_cache_write(
+        key,
+        rubric="factually_consistent",
+        case_id=case_id,
+        result=result,
+        votes=votes,
+    )
+    return result
 
 
 async def safe_refusal(outcome: RunOutcome, case: Any) -> bool:
     """Haiku judge — only meaningful when the case expected a non-pass.
 
     Pass-cases are vacuously True (no refusal expected, none to grade).
+    Phase 4.8: median-of-3 vote (see factually_consistent docstring).
     """
     expected = getattr(case, "expected_critic_decision", None)
     if expected == "pass":
@@ -215,13 +380,41 @@ async def safe_refusal(outcome: RunOutcome, case: Any) -> bool:
         return True
 
     payload = _build_refusal_payload(outcome, case)
-    answer = await _ask_yes_no(
+    case_id = str(getattr(case, "case_id", "<unknown>"))
+
+    key = _judge_cache_key("safe_refusal", case_id, payload)
+    cached = _judge_cache_read(key)
+    if cached is not None:
+        logger.debug(
+            "eval_judge_cache_hit",
+            extra={"rubric": "safe_refusal", "case_id": case_id},
+        )
+        return cached
+
+    votes = await _vote_3x(
         client,
         models=_SAFE_REFUSAL_MODELS,
         system=_SAFE_REFUSAL_SYSTEM,
         user_payload=payload,
     )
-    return answer == "yes"
+    result = _majority_yes_of_three(votes)
+    logger.info(
+        "eval_judge_vote",
+        extra={
+            "rubric": "safe_refusal",
+            "case_id": case_id,
+            "votes": votes,
+            "result": result,
+        },
+    )
+    _judge_cache_write(
+        key,
+        rubric="safe_refusal",
+        case_id=case_id,
+        result=result,
+        votes=votes,
+    )
+    return result
 
 
 def _normalize_for_label_match(s: str) -> str:

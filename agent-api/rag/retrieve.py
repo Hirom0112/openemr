@@ -19,6 +19,7 @@ import asyncio
 import datetime as _dt
 import logging
 import time
+from contextvars import ContextVar
 from typing import Any, NamedTuple
 
 from audit.writer import get_pool
@@ -83,21 +84,36 @@ def _normalize(scores: list[tuple[str, float]]) -> dict[str, float]:
     return {cid: (s - lo) / span for cid, s in scores}
 
 
-_LAST_RETRIEVAL_STATS: dict[str, Any] = {}
-"""Per-call telemetry from the most recent ``search()`` invocation in this
-event-loop task. Populated unconditionally before each return path. Read by
-``graph.nodes.retriever`` to emit Prometheus observations + the
-``retrieval_completed`` audit row without forcing ``rag`` to import
-``agent.metrics`` (would break the ``rag-isolated`` import-linter contract).
-Per-call only — the dict is overwritten each call, never accumulated.
-"""
+# Per-task telemetry from the most recent ``search()`` invocation. Stored in
+# a ContextVar so concurrent ``asyncio.gather``'d searches don't trample each
+# other (each task runs in its own copied context, so the writes/reads stay
+# task-local). Read by ``graph.nodes.retriever`` to emit Prometheus
+# observations + the ``retrieval_completed`` audit row without forcing
+# ``rag`` to import ``agent.metrics`` (would break the ``rag-isolated``
+# import-linter contract). Per-call only — the dict is overwritten each
+# call, never accumulated.
+#
+# Phase 4.8: previously a process-wide module-level dict, which under
+# ``asyncio.gather`` (e.g. the parallel eval runner's batch_size > 1 path)
+# could let one task's stats clobber a sibling's between the search() return
+# and the retriever node's read. ContextVar mirrors the
+# ``evals.runner._case_log_records`` pattern (runner.py:217) so the fix is
+# consistent across the agent.
+_last_retrieval_stats: ContextVar[dict[str, Any]] = ContextVar(
+    "_last_retrieval_stats", default={}
+)
+
+
+def _set_last_retrieval_stats(stats: dict[str, Any]) -> None:
+    """Replace the current task's stats dict (overwrite-each-call semantics)."""
+    _last_retrieval_stats.set(dict(stats))
 
 
 def get_last_retrieval_stats() -> dict[str, Any]:
     """Return the per-call stats dict written by the most recent ``search()``.
 
-    Returns an empty dict if ``search()`` has not been called yet on this
-    interpreter. The shape is::
+    Returns an empty dict if ``search()`` has not been called yet in this
+    asyncio task / context. The shape is::
 
         {
             "sparse_hits": int,
@@ -111,7 +127,7 @@ def get_last_retrieval_stats() -> dict[str, Any]:
             "query_prefix": str,  # first 30 chars only
         }
     """
-    return dict(_LAST_RETRIEVAL_STATS)
+    return dict(_last_retrieval_stats.get())
 
 
 async def search(
@@ -123,15 +139,18 @@ async def search(
     """Sparse + dense + rerank. Returns up to ``k`` snippets (may be empty)."""
     t0 = time.monotonic()
     query = (query or "").strip()
-    _LAST_RETRIEVAL_STATS.clear()
-    _LAST_RETRIEVAL_STATS["query_prefix"] = query[:30]
+    # Per-call stats accumulator — written into the ContextVar via
+    # _set_last_retrieval_stats() before each return path so concurrent
+    # gather()'d callers don't see each other's numbers.
+    _stats: dict[str, Any] = {"query_prefix": query[:30]}
     if not query:
-        _LAST_RETRIEVAL_STATS.update({
+        _stats.update({
             "sparse_hits": 0, "dense_hits": 0, "after_rerank": 0,
             "rerank_used": False,
             "sparse_seconds": 0.0, "dense_seconds": 0.0,
             "merge_seconds": 0.0, "rerank_seconds": 0.0,
         })
+        _set_last_retrieval_stats(_stats)
         return []
 
     pool = await get_pool()
@@ -140,12 +159,13 @@ async def search(
             "rag_search_pool_unavailable",
             extra={"query_prefix": query[:30]},
         )
-        _LAST_RETRIEVAL_STATS.update({
+        _stats.update({
             "sparse_hits": 0, "dense_hits": 0, "after_rerank": 0,
             "rerank_used": False,
             "sparse_seconds": 0.0, "dense_seconds": 0.0,
             "merge_seconds": 0.0, "rerank_seconds": 0.0,
         })
+        _set_last_retrieval_stats(_stats)
         return []
 
     # 1. Embed the query.
@@ -210,7 +230,7 @@ async def search(
                 "query_prefix": query[:30],
             },
         )
-        _LAST_RETRIEVAL_STATS.update({
+        _stats.update({
             "sparse_hits": len(sparse_hits),
             "dense_hits": len(dense_hits),
             "after_rerank": 0,
@@ -220,6 +240,7 @@ async def search(
             "merge_seconds": merge_seconds,
             "rerank_seconds": 0.0,
         })
+        _set_last_retrieval_stats(_stats)
         return []
 
     candidate_ids = sorted(merged.keys(), key=lambda c: merged[c], reverse=True)[:30]
@@ -245,7 +266,7 @@ async def search(
                 "query_prefix": query[:30],
             },
         )
-        _LAST_RETRIEVAL_STATS.update({
+        _stats.update({
             "sparse_hits": len(sparse_hits),
             "dense_hits": len(dense_hits),
             "after_rerank": 0,
@@ -255,6 +276,7 @@ async def search(
             "merge_seconds": merge_seconds,
             "rerank_seconds": 0.0,
         })
+        _set_last_retrieval_stats(_stats)
         return []
 
     documents = [str(r["content"]) for r in ordered_candidates]
@@ -318,7 +340,7 @@ async def search(
             "query_prefix": query[:30],
         },
     )
-    _LAST_RETRIEVAL_STATS.update({
+    _stats.update({
         "sparse_hits": len(sparse_hits),
         "dense_hits": len(dense_hits),
         "after_rerank": len(snippets),
@@ -328,6 +350,7 @@ async def search(
         "merge_seconds": merge_seconds,
         "rerank_seconds": rerank_seconds,
     })
+    _set_last_retrieval_stats(_stats)
     return snippets
 
 

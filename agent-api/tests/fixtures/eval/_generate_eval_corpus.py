@@ -691,6 +691,29 @@ def generate_all() -> dict[str, Path]:
         v2_paths = generate_all_v2()
         for key, path in v2_paths.items():
             out[key] = path
+
+    # Phase 3 Item 2 — multimodal corpus (HL7 / XLSX / DOCX / TIFF). The
+    # generator is idempotent and lives next to its fixtures under
+    # ``tests/fixtures/w2/multimodal/``. Registered here so the eval runner's
+    # fixture index resolves multimodal fixture_keys (e.g. ``p01-chen-oru-r01``,
+    # ``p02-whitaker-workbook``) to their actual on-disk paths instead of
+    # falling back to the flat ``{key}.pdf`` lookup. Without this hookup the
+    # 32 Phase 9 Slice 9.9 multimodal eval cases all silently resolve to
+    # nonexistent ``.pdf`` files and fail with "fixture not found" upstream.
+    try:
+        from tests.fixtures.w2.multimodal._generate_w2_multimodal_corpus import (  # type: ignore
+            generate_all as _generate_multimodal_all,
+        )
+    except Exception:
+        _generate_multimodal_all = None  # type: ignore[assignment]
+    if _generate_multimodal_all is not None:
+        try:
+            multimodal_paths = _generate_multimodal_all()
+        except Exception:
+            multimodal_paths = {}
+        for key, path in multimodal_paths.items():
+            out[key] = path
+
     return out
 
 

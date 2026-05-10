@@ -1586,53 +1586,21 @@ def _flatten_citations_from_dict(payload: dict[str, Any]) -> list[dict[str, Any]
 # All probes operate on the leading ~1 KB only — never load the full
 # upload to detect format.
 
-_HL7_MAGIC: bytes = b"MSH|"
-_PDF_MAGIC: bytes = b"%PDF-"
-_PNG_MAGIC: bytes = b"\x89PNG\r\n\x1a\n"
-_TIFF_MAGIC_LE: bytes = b"II*\x00"
-_TIFF_MAGIC_BE: bytes = b"MM\x00*"
-_ZIP_MAGIC: tuple[bytes, ...] = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
-
-
-def _detect_ingest_format(data: bytes) -> str:
-    """Return one of ``hl7|xlsx|docx|tiff|pdf|png|unknown`` from magic bytes.
-
-    ``data`` is the full uploaded byte string (already capped at the
-    ``_DOC_INGEST_HARD_READ_CAP``). Only the leading prefix is inspected for
-    fixed magic; for Zip-prefixed inputs we crack the central directory to
-    differentiate XLSX (``xl/``) from DOCX (``word/``). On any failure to
-    introspect the zip we return ``"unknown"`` rather than guess — the
-    caller surfaces unknowns as 415.
-    """
-    if not data:
-        return "unknown"
-    if data.startswith(_HL7_MAGIC):
-        return "hl7"
-    if data.startswith(_PDF_MAGIC):
-        return "pdf"
-    if data.startswith(_PNG_MAGIC):
-        return "png"
-    if data.startswith(_TIFF_MAGIC_LE) or data.startswith(_TIFF_MAGIC_BE):
-        return "tiff"
-    if any(data.startswith(m) for m in _ZIP_MAGIC):
-        # Crack the zip's central directory; the first matching file path
-        # tells us whether this is an OOXML-Word (DOCX) or OOXML-Spreadsheet
-        # (XLSX) container. Any other zip layout returns ``"unknown"``.
-        try:
-            import io as _io
-            import zipfile as _zipfile
-
-            with _zipfile.ZipFile(_io.BytesIO(data)) as zf:
-                names = zf.namelist()
-        except Exception:
-            return "unknown"
-        for name in names:
-            if name.startswith("word/"):
-                return "docx"
-            if name.startswith("xl/"):
-                return "xlsx"
-        return "unknown"
-    return "unknown"
+# Magic-byte detection lives in ``documents.format_detect`` (Phase 3
+# Part B' refactor) so non-HTTP callers (LangGraph nodes, eval runner,
+# parser tests) can import it without dragging in FastAPI. The names
+# below preserve the original module-private surface so downstream
+# imports of ``main._detect_ingest_format`` / ``main._HL7_MAGIC`` keep
+# working unchanged.
+from documents.format_detect import (  # noqa: E402 — late re-export
+    HL7_MAGIC as _HL7_MAGIC,
+    PDF_MAGIC as _PDF_MAGIC,
+    PNG_MAGIC as _PNG_MAGIC,
+    TIFF_MAGIC_LE as _TIFF_MAGIC_LE,
+    TIFF_MAGIC_BE as _TIFF_MAGIC_BE,
+    ZIP_MAGIC as _ZIP_MAGIC,
+    detect_ingest_format as _detect_ingest_format,
+)
 
 
 _INGEST_MIME_BY_FORMAT: dict[str, str] = {
@@ -1769,32 +1737,28 @@ async def _dispatch_multimodal_ingest(
     )
 
     if detected_format == "hl7":
-        from parsers.hl7 import dispatch as _hl7_dispatch
-        from parsers.hl7.exceptions import (
-            ParserMalformedError as _HL7Malformed,
-            ParserUnsupportedError as _HL7Unsupported,
+        from documents.multimodal_dispatch import (
+            MultimodalParseError as _MMParseError,
+            parse_multimodal_full as _parse_multimodal_full,
         )
         from parsers.hl7.types import DemographicUpdateEvent
         try:
-            parsed = _hl7_dispatch.parse_hl7(
-                raw_bytes,
-                document_reference_id=write_result.document_reference_id,
+            _mm_result = await _parse_multimodal_full(
+                detected_format="hl7",
+                raw_bytes=raw_bytes,
                 patient_id=patient_id,
+                document_reference_id=write_result.document_reference_id,
+                dry_run=False,
+                request_id=rid,
             )
-        except _HL7Malformed as exc:
+        except _MMParseError as exc:
             agent_document_ingest_dispatch_total.labels(
                 format="hl7", outcome="rejected"
             ).inc()
             raise HTTPException(
-                status_code=400, detail="HL7 v2 message malformed"
+                status_code=exc.status, detail=exc.detail
             ) from exc
-        except _HL7Unsupported as exc:
-            agent_document_ingest_dispatch_total.labels(
-                format="hl7", outcome="rejected"
-            ).inc()
-            raise HTTPException(
-                status_code=415, detail="HL7 v2 message type unsupported"
-            ) from exc
+        parsed = _mm_result.parsed_raw
 
         if isinstance(parsed, DemographicUpdateEvent):
             # ADT^A08 → run the resolver to confirm we have the right chart
@@ -1965,16 +1929,35 @@ async def _dispatch_multimodal_ingest(
 
     elif detected_format == "docx":
         from documents import docx_loader as _docx_loader
-        from extractors import intake as _intake
+        from documents.multimodal_dispatch import (
+            MultimodalParseError as _MMParseError,
+            parse_multimodal_full as _parse_multimodal_full,
+        )
         from observations import writer as _obs_writer
         # Loader is referenced via the extractor; the dispatcher just
         # owns the "DOCX → prose intake" routing decision.
         _ = _docx_loader  # keep the import live so the contract is obvious
-        extraction = await _intake.extract_intake_from_docx(
-            raw_bytes,
-            patient_id=patient_id,
-            document_reference_id=write_result.document_reference_id,
-        )
+        # Pre-refactor (Phase 3.5) this branch called
+        # ``_intake.extract_intake_from_docx`` directly with no try/except;
+        # any extractor failure propagated as a generic 500. Post-refactor
+        # we go through ``parse_multimodal_full``, which wraps the same
+        # call but raises ``MultimodalParseError("docx_extract_failed",
+        # status=500)``. We let that propagate unwrapped — FastAPI returns
+        # the same 500 status, with a slightly more informative detail
+        # ("DOCX extraction failed" vs "Internal Server Error"). See the
+        # Phase 3.5 deliverable for the documented discrepancy.
+        try:
+            _mm_result = await _parse_multimodal_full(
+                detected_format="docx",
+                raw_bytes=raw_bytes,
+                patient_id=patient_id,
+                document_reference_id=write_result.document_reference_id,
+                dry_run=False,
+                request_id=rid,
+            )
+        except _MMParseError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+        extraction = _mm_result.parsed_raw
         try:
             await _store.complete(
                 extraction_id=claim.extraction_id,
@@ -2251,31 +2234,28 @@ async def _dispatch_multimodal_ingest(
                     )
 
     elif detected_format == "tiff":
+        from documents.multimodal_dispatch import (
+            MultimodalParseError as _MMParseError,
+            parse_multimodal_full as _parse_multimodal_full,
+        )
         from documents.tiff_loader import extract_tiff_layout
-        from extractors import intake as _intake
-        from extractors import lab as _lab
-        from extractors.classifier import classify_keywords as _classify_keywords
 
+        # parse_summary needs page_count; the multimodal dispatcher does
+        # its own classifier-driven extractor selection internally so we
+        # only need the layout here for page-count derivation.
         layout_blocks = extract_tiff_layout(raw_bytes)
-        verdict = _classify_keywords(layout_blocks) if layout_blocks else None
-        # The intake/lab extractors expect raw bytes; for TIFF we hand
-        # them the original tiff bytes — the extractors fan out via
-        # documents.ocr.extract_layout which already handles the TIFF
-        # branch. The pre-computed layout_blocks above are used only
-        # for the classifier dispatch decision; the extractors run
-        # their own pass when called.
-        if verdict is not None and verdict.kind == "intake_form":
-            extraction = await _intake.extract_intake(
-                raw_bytes,
+        try:
+            _mm_result = await _parse_multimodal_full(
+                detected_format="tiff",
+                raw_bytes=raw_bytes,
                 patient_id=patient_id,
                 document_reference_id=write_result.document_reference_id,
+                dry_run=False,
+                request_id=rid,
             )
-        else:
-            extraction = await _lab.extract(
-                raw_bytes,
-                patient_id=patient_id,
-                document_reference_id=write_result.document_reference_id,
-            )
+        except _MMParseError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+        extraction = _mm_result.parsed_raw
         try:
             await _store.complete(
                 extraction_id=claim.extraction_id,
@@ -4733,6 +4713,7 @@ async def document_chat(
             completion = await client.messages.create(
                 model=_DOC_CHAT_MODEL,
                 max_tokens=1024,
+                temperature=0,
                 system=_DOC_CHAT_SYSTEM_PROMPT,
                 messages=messages,
             )

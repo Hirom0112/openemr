@@ -34,7 +34,7 @@ from typing import Any
 from agent.metrics import agent_w2_critic_decisions_total
 from audit import writer as audit_writer
 from audit.models import AuditEvent
-from extractors.schemas import LabReport, UnknownDocument
+from extractors.schemas import IntakeForm, LabReport, UnknownDocument, WorkbookExtraction
 from pydantic import ValidationError
 from verification.dispatcher_response import (
     VerificationResult,
@@ -90,13 +90,30 @@ def _from_w1_result(result: VerificationResult) -> tuple[str, list[str]]:
 
 
 def _validate_schema(extraction: dict[str, Any]) -> tuple[Any | None, str | None]:
-    """Return ``(parsed_model, error_str)``. ``parsed_model`` is None on failure."""
+    """Return ``(parsed_model, error_str)``. ``parsed_model`` is None on failure.
+
+    Phase 3 Item 2 — extended to recognise the multimodal kinds the
+    extractor node can now emit: ``intake_form`` (DOCX prose, XLSX
+    Patient sheet) and ``workbook`` (XLSX wrapper). HL7 emits either
+    ``lab_report`` or ``demographic_update``; the latter is structurally
+    distinct (parsers.hl7.types.DemographicUpdateEvent) but does NOT yet
+    flow through this critic node — HL7 ADT routes through the HTTP
+    dispatcher's quarantine path, not the W2 graph. Adding it here would
+    couple the graph to a parser type that has no corresponding
+    document-path violation set, so we treat it as an unsupported_kind
+    today — revisit when ADT^A08 routes through the graph in a future
+    slice.
+    """
     kind = extraction.get("kind")
     try:
         if kind == "lab_report":
             return LabReport.model_validate_json(json.dumps(extraction)), None
         if kind == "unknown":
             return UnknownDocument.model_validate_json(json.dumps(extraction)), None
+        if kind == "intake_form":
+            return IntakeForm.model_validate_json(json.dumps(extraction)), None
+        if kind == "workbook":
+            return WorkbookExtraction.model_validate_json(json.dumps(extraction)), None
         return None, f"unsupported_kind:{kind!r}"
     except ValidationError as exc:
         return None, str(exc)
@@ -111,6 +128,43 @@ def _gather_cited_items(model: Any) -> list[Any]:
         return list(model.values)
     if isinstance(model, UnknownDocument):
         return list(model.key_facts)
+    if isinstance(model, IntakeForm):
+        # Surface every cited TextField/MedicationItem/AllergyItem etc.
+        # that bears a ``citations`` list. Mirrors the rubric-side walk in
+        # ``evals.rubrics_mechanical._iter_cited_items`` so the critic and
+        # the eval grader inspect the same set of items.
+        items: list[Any] = []
+        if model.demographics is not None:
+            for v in model.demographics.__dict__.values():
+                if hasattr(v, "citations"):
+                    items.append(v)
+        if model.chief_concern is not None:
+            items.append(model.chief_concern)
+        items.extend(model.current_medications)
+        items.extend(model.allergies)
+        items.extend(model.family_history)
+        items.extend(model.pertinent_labs)
+        items.extend(model.problem_list)
+        if model.code_status is not None:
+            items.append(model.code_status)
+        return items
+    if isinstance(model, WorkbookExtraction):
+        # Recurse into each embedded extraction lane — workbook is a
+        # multi-extraction wrapper (Phase 3 Item 2 design note in
+        # ``extractors.schemas.WorkbookExtraction``).
+        items: list[Any] = []
+        if model.intake_form is not None:
+            items.extend(_gather_cited_items(model.intake_form))
+        for lr in model.lab_reports:
+            items.extend(_gather_cited_items(lr))
+        for task in model.pending_tasks:
+            if task.measure is not None:
+                items.append(task.measure)
+            if task.measure_ref is not None:
+                items.append(task.measure_ref)
+            if task.notes is not None:
+                items.append(task.notes)
+        return items
     return []
 
 
@@ -162,12 +216,20 @@ def _check_document_path(
 
     # 3. Citation resolvability ──────────────────────────────────────────────
     layout = _layout_index(ocr_layout)
-    for item in items:
-        for citation in item.citations:
-            if citation.source_type != "document":
-                continue  # guideline citations resolved against guideline corpus, not here
-            if citation.field_or_chunk_id not in layout:
-                return "hard_block", ["CITATION_UNRESOLVABLE"], soft_warns
+    # Phase 3 Item 2 — multimodal lanes (HL7 / XLSX / DOCX) have no
+    # rasterised OCR layout; their citations point at structured locators
+    # (segment paths, sheet/row/col, paragraph indexes). The W2 critic's
+    # bbox-grounded resolvability check is meaningless for those formats,
+    # so when the layout index is empty we skip the check (mirroring the
+    # vacuous-True semantics in ``evals.rubrics_mechanical.citation_resolvable``).
+    # PDF/PNG/TIFF still flow through the layout walker with full strictness.
+    if layout:
+        for item in items:
+            for citation in item.citations:
+                if citation.source_type != "document":
+                    continue  # guideline citations resolved against guideline corpus, not here
+                if citation.field_or_chunk_id not in layout:
+                    return "hard_block", ["CITATION_UNRESOLVABLE"], soft_warns
 
     # 4. Citation fidelity (§8.7 — skip on low confidence) ───────────────────
     doc_conf = _document_ocr_confidence(ocr_layout)

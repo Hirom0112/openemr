@@ -44,6 +44,26 @@ class CaseScore:
     synthesis: Optional[dict] = None
     synthesis_input: Optional[dict] = None
     synthesis_grounded: bool = True  # vacuous-PASS default (synthesis is None)
+    # Phase 9 Slice 9.9 — multimodal expansion rubrics. All vacuous-True
+    # when their backing runner instrumentation is absent (see each rubric's
+    # docstring). Wired into score_case but defaulted here so test fixtures
+    # that build CaseScore positionally keep working.
+    quarantine_audit_emitted: bool = True
+    no_unconfirmed_writes: bool = True
+    stage_failure_audit_emitted: bool = True
+    tiff_all_pages_ocrd: bool = True
+    synthetic_marker_not_extracted: bool = True
+    # Phase 3 Part B' — per-modality citation locator shape rubrics.
+    # Vacuous-True when ``case.document_modality`` doesn't match
+    # ``'hl7_v2'`` / ``'xlsx_workbook'`` respectively, so PDF / DOCX /
+    # TIFF / PNG cases keep their pass-rate contribution intact.
+    hl7_citation_locator_well_formed: bool = True
+    xlsx_citation_locator_well_formed: bool = True
+    # 2026-05-08 problem_list build — ICD-10 hallucination guardrail and
+    # FHIR Condition write-through (vacuous-True for non-intake_form cases
+    # and when the runner hasn't populated written_condition_ids).
+    icd10_grounded: bool = True
+    condition_writeback_succeeded: bool = True
     error: Optional[str] = None
 
 
@@ -105,8 +125,8 @@ async def score_case(case: Any, outcome: RunOutcome) -> CaseScore:
     schema_ok = rubrics_mechanical.schema_valid(outcome)
     citation_ok = rubrics_mechanical.citation_present(outcome)
     citation_resolvable_ok = rubrics_mechanical.citation_resolvable(outcome)
-    citation_row_match_ok = rubrics_mechanical.citation_row_match(outcome)
-    citation_token_match_ok = rubrics_mechanical.citation_token_match(outcome)
+    citation_row_match_ok = rubrics_mechanical.citation_row_match(outcome, case=case)
+    citation_token_match_ok = rubrics_mechanical.citation_token_match(outcome, case=case)
     critic_ok = rubrics_mechanical.correct_critic_decision(outcome, expected=expected)
     phi_ok = rubrics_mechanical.no_phi_in_logs(outcome)
 
@@ -116,6 +136,22 @@ async def score_case(case: Any, outcome: RunOutcome) -> CaseScore:
     is_false_positive = expected == "pass" and outcome.critic_decision == "hard_block"
     provenance_ok = _score_provenance_chain(case, outcome)
     synthesis_grounded_ok = rubrics_mechanical.synthesis_grounded(outcome, case=case)
+
+    # Phase 9 Slice 9.9 — multimodal expansion rubrics. Each is vacuous-True
+    # when the runner hasn't populated its backing field (see rubric
+    # docstrings) so cases without the relevant instrumentation are not
+    # spuriously failed. Calling them all here is what surfaces them in the
+    # aggregate pass-rate map (instead of defaulting to 0.0 in
+    # run_full_suite.py's empty-aggregate path).
+    quarantine_audit_emitted_ok = rubrics_mechanical.quarantine_audit_emitted(outcome, case=case)
+    no_unconfirmed_writes_ok = rubrics_mechanical.no_unconfirmed_writes(outcome, case=case)
+    stage_failure_audit_emitted_ok = rubrics_mechanical.stage_failure_audit_emitted(outcome, case=case)
+    tiff_all_pages_ocrd_ok = rubrics_mechanical.tiff_all_pages_ocrd(outcome, case=case)
+    synthetic_marker_not_extracted_ok = rubrics_mechanical.synthetic_marker_not_extracted(outcome, case=case)
+    icd10_grounded_ok = rubrics_mechanical.icd10_grounded(outcome, case=case)
+    condition_writeback_succeeded_ok = rubrics_mechanical.condition_writeback_succeeded(outcome, case=case)
+    hl7_locator_ok = rubrics_mechanical.hl7_citation_locator_well_formed(outcome, case=case)
+    xlsx_locator_ok = rubrics_mechanical.xlsx_citation_locator_well_formed(outcome, case=case)
 
     return CaseScore(
         case_id=outcome.case_id,
@@ -133,6 +169,15 @@ async def score_case(case: Any, outcome: RunOutcome) -> CaseScore:
         synthesis=outcome.synthesis,
         synthesis_input=outcome.synthesis_input,
         synthesis_grounded=synthesis_grounded_ok,
+        quarantine_audit_emitted=quarantine_audit_emitted_ok,
+        no_unconfirmed_writes=no_unconfirmed_writes_ok,
+        stage_failure_audit_emitted=stage_failure_audit_emitted_ok,
+        tiff_all_pages_ocrd=tiff_all_pages_ocrd_ok,
+        synthetic_marker_not_extracted=synthetic_marker_not_extracted_ok,
+        icd10_grounded=icd10_grounded_ok,
+        condition_writeback_succeeded=condition_writeback_succeeded_ok,
+        hl7_citation_locator_well_formed=hl7_locator_ok,
+        xlsx_citation_locator_well_formed=xlsx_locator_ok,
         error=outcome.error,
     )
 
@@ -154,6 +199,21 @@ _RUBRIC_FIELDS = (
     "no_phi_in_logs",
     # Phase 2 Step 2 Stage 3 — post-approval RAG synthesis grounding.
     "synthesis_grounded",
+    # Phase 9 Slice 9.9 — multimodal expansion rubrics (vacuous-True when
+    # the runner hasn't wired their backing fields; see rubric docstrings).
+    "quarantine_audit_emitted",
+    "no_unconfirmed_writes",
+    "stage_failure_audit_emitted",
+    "tiff_all_pages_ocrd",
+    "synthetic_marker_not_extracted",
+    # 2026-05-08 problem_list build — ICD-10 hallucination guardrail +
+    # FHIR Condition write-through (vacuous-True for non-intake_form cases).
+    "icd10_grounded",
+    "condition_writeback_succeeded",
+    # Phase 3 Part B' — per-modality citation locator shape (vacuous-True
+    # for cases whose document_modality doesn't match).
+    "hl7_citation_locator_well_formed",
+    "xlsx_citation_locator_well_formed",
 )
 
 

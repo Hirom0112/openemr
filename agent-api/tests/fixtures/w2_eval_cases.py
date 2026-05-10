@@ -1396,6 +1396,15 @@ BUCKET_COUNTS: dict[str, int] = {
     # (12 typed_pdf + 12 table_heavy + 12 photo_capture). See
     # ``_generate_synthetic_v2.py`` for layout details.
     "bbox_gt": 36,
+    # Phase 9 Slice 9.9 — 32 multimodal cases (HL7v2 / XLSX / DOCX / TIFF)
+    # appended additively after ``_validate()``. They physically reuse the
+    # existing ``Bucket`` literals (``lab_nominal``, ``wrong_patient`` etc)
+    # for scenario routing, but are accounted SEPARATELY here so the
+    # original W2 baseline contract (BUCKET_CONTRACT_TOTAL=124) stays a
+    # true accounting of the pre-multimodal suite. ``_validate()`` excludes
+    # this entry from the bucket-distribution check; a dedicated assertion
+    # below verifies it sums to len(_MULTIMODAL_CASES) after the append.
+    "slice_9_9_multimodal": 32,
 }
 
 # ---------------------------------------------------------------------------
@@ -1507,13 +1516,22 @@ def _validate() -> None:
     counts: dict[str, int] = {}
     for c in CASES:
         counts[c.bucket] = counts.get(c.bucket, 0) + 1
-    if counts != BUCKET_COUNTS:
+    # Compare against BUCKET_COUNTS minus the slice_9_9_multimodal entry —
+    # those 32 cases are appended additively below this validator, after the
+    # frozen baseline contract has been verified.
+    expected_pre_multimodal = {
+        k: v for k, v in BUCKET_COUNTS.items() if k != "slice_9_9_multimodal"
+    }
+    if counts != expected_pre_multimodal:
         raise AssertionError(
-            f"CASES bucket distribution drifted: got {counts}, want {BUCKET_COUNTS}"
+            f"CASES bucket distribution drifted: got {counts}, "
+            f"want {expected_pre_multimodal}"
         )
-    if sum(BUCKET_COUNTS.values()) != BUCKET_CONTRACT_TOTAL:
+    pre_multimodal_total = sum(expected_pre_multimodal.values())
+    if pre_multimodal_total != BUCKET_CONTRACT_TOTAL:
         raise AssertionError(
-            f"BUCKET_COUNTS must total {BUCKET_CONTRACT_TOTAL}, got {sum(BUCKET_COUNTS.values())}"
+            f"BUCKET_COUNTS (excluding slice_9_9_multimodal) must total "
+            f"{BUCKET_CONTRACT_TOTAL}, got {pre_multimodal_total}"
         )
     ids = [c.case_id for c in CASES]
     if len(set(ids)) != len(ids):
@@ -2038,6 +2056,15 @@ def _validate_multimodal_unique() -> None:
                 dups.append(cid)
             seen.add(cid)
         raise AssertionError(f"Duplicate case_id after multimodal append: {dups}")
+    # Phase 4b — assert the slice_9_9_multimodal accounting entry matches
+    # the actual count of multimodal cases appended. This is the separate
+    # accounting check referenced by ``_validate()`` above.
+    expected = BUCKET_COUNTS.get("slice_9_9_multimodal", 0)
+    if len(_MULTIMODAL_CASES) != expected:
+        raise AssertionError(
+            f"slice_9_9_multimodal accounting drifted: BUCKET_COUNTS says "
+            f"{expected}, _MULTIMODAL_CASES has {len(_MULTIMODAL_CASES)}"
+        )
 
 
 _validate_multimodal_unique()

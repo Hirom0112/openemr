@@ -79,6 +79,67 @@ class RunOutcome:
     # it None until a future refactor exposes it via the response envelope.
     synthesis: Optional[Dict[str, Any]] = None
     synthesis_input: Optional[Dict[str, Any]] = None
+    # Phase 1.2 (Path 1 Part A Option 1) — instrumentation for the multimodal
+    # mechanical rubrics in evals.rubrics_mechanical (Phase 9 Slice 9.9 family
+    # plus the 2026-05-08 problem_list rubrics). Each field is typed as
+    # ``Optional[List[...]]`` so the rubrics' "vacuous-True when None"
+    # semantics survive when a particular pathway didn't run for this case.
+    #
+    # ``audit_rows`` — every ``audit.models.AuditEvent`` that the graph
+    # nodes (and any in-graph code path) constructed and handed to
+    # ``audit.writer.emit()`` during this run, captured in normalized dict
+    # shape (``event``, ``detail_json``, ``reason``, ``outcome``, etc.).
+    # Populated by ``run_case`` via a temporary monkeypatch of
+    # ``audit.writer.emit`` for the lifetime of the run — the production
+    # writer is no-op without ``settings.audit_db_url`` so the patch is
+    # observationally-free outside the eval. Drives
+    # ``quarantine_audit_emitted`` and ``stage_failure_audit_emitted``.
+    audit_rows: Optional[List[Dict[str, Any]]] = None
+    # ``staged_observations`` — FHIR-shaped Observation dicts that landed in
+    # ``copilot_pending_extractions`` (state='pending'). Populated only when
+    # the runner exercises a writer/staging code path. The current eval
+    # runner topology (extraction → critic → finalize) does not invoke
+    # ``observations.writer.stage_observation`` or its siblings — staging
+    # happens in the post-approval HTTP path which the runner does not call.
+    # Wiring is forward-compatible: when an approval-flow runner lands, this
+    # field is populated by reading ``state['staged_observations']`` from the
+    # final graph state (or by a writer-call interceptor analogous to the
+    # audit one). Until then the rubric ``synthetic_marker_not_extracted``
+    # remains vacuous-True. See Phase 1.2 report.
+    staged_observations: Optional[List[Dict[str, Any]]] = None
+    # ``pending_extractions`` — list of ``{observation_id, state}`` dicts
+    # mirroring ``copilot_pending_extractions`` rows for this run. Same
+    # caveat as ``staged_observations``: the graph does not invoke staging
+    # so this field is populated only when an approval-flow runner is
+    # added. Drives ``no_unconfirmed_writes`` (paired with
+    # ``written_observation_ids``).
+    pending_extractions: Optional[List[Dict[str, Any]]] = None
+    # ``written_observation_ids`` — Observation ids that landed in
+    # ``copilot_observations``. Same caveat as above.
+    written_observation_ids: Optional[List[str]] = None
+    # ``written_condition_ids`` — Condition ids written via
+    # ``observations.writer.write_condition`` for problem_list rows. Same
+    # caveat as above. Drives ``condition_writeback_succeeded``.
+    written_condition_ids: Optional[List[str]] = None
+    # Phase 3 Part B' — TIFF instrumentation referenced by the
+    # ``tiff_all_pages_ocrd`` rubric (see
+    # ``evals.rubrics_mechanical.tiff_all_pages_ocrd``). Both fields are
+    # ``Optional`` so non-TIFF cases (the vast majority) leave them None
+    # and the rubric short-circuits to vacuous-True.
+    #
+    # ``tiff_n_pages`` — total page count of the input TIFF as reported by
+    # ``PIL.Image.n_frames`` (1-based count). The rubric uses this as the
+    # ground-truth denominator: a 4-page TIFF must produce citations for
+    # all 4 pages, not 3 (the off-by-one trap).
+    #
+    # ``ocr_page_citations`` — list of citation counts indexed by page,
+    # i.e. ``ocr_page_citations[i]`` = number of distinct OCR
+    # LayoutBlocks/citations emitted for page ``i+1``. Population site is
+    # the TIFF adapter (``documents.tiff_loader.extract_tiff_layout``):
+    # group blocks by their ``page`` attribute, then emit one int per
+    # page index in ascending order. The rubric requires every entry > 0.
+    tiff_n_pages: Optional[int] = None
+    ocr_page_citations: Optional[List[int]] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -318,6 +379,197 @@ def _outcome_from_dict(data: Dict[str, Any], case_id: str) -> "RunOutcome":
 # --------------------------------------------------------------------------- #
 
 
+def _audit_event_to_row(event: Any) -> Dict[str, Any]:
+    """Project an ``audit.models.AuditEvent`` onto the rubric-side row shape.
+
+    The mechanical rubrics (``quarantine_audit_emitted``,
+    ``stage_failure_audit_emitted``) read ``event``, ``detail_json``,
+    ``reason``, ``error``, ``outcome``, ``type``. The production AuditEvent
+    dataclass uses ``event_type`` (not ``event``); we expose both keys so a
+    rubric written against either name resolves correctly.
+    """
+    detail = getattr(event, "detail_json", None) or {}
+    if not isinstance(detail, dict):
+        detail = {}
+    # Surface ``reason`` / ``error`` from detail_json so the
+    # ``stage_failure_audit_emitted`` rubric can find them at the row level
+    # without re-reaching into detail_json.
+    reason = detail.get("decision_reason") or detail.get("reason") or detail.get("error")
+    return {
+        "event": getattr(event, "event_type", None),
+        "type": getattr(event, "event_type", None),
+        "event_type": getattr(event, "event_type", None),
+        "request_id": getattr(event, "request_id", None),
+        "session_id": getattr(event, "session_id", None),
+        "provider_id": getattr(event, "provider_id", None),
+        "patient_id": getattr(event, "patient_id", None),
+        "tool_name": getattr(event, "tool_name", None),
+        "outcome": getattr(event, "outcome", None),
+        "duration_ms": getattr(event, "duration_ms", None),
+        "detail_json": detail,
+        "reason": reason,
+        "error": detail.get("error"),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Per-case audit-event capture (Phase 4.6 — race-free)
+# --------------------------------------------------------------------------- #
+#
+# History
+# -------
+# The original ``_AuditCapturePatch`` swapped ``audit.writer.emit`` at the
+# module level inside ``__enter__`` and restored it in ``__exit__``. Under
+# ``asyncio.gather`` with ``batch_size > 1`` two concurrent ``run_case``
+# invocations overlapped on that module attribute: the second ``__enter__``
+# stored the FIRST patch's ``_capturing_emit`` as its ``_original`` and
+# every event was funnelled into a single sink (or, worse, into the wrong
+# sink and then "restored" in arbitrary order on exit, leaking the patch
+# across cases).
+#
+# Phase 4.6 reshape — mirror the ``_case_log_records`` pattern used for
+# log-record capture (see line ~217). One module-level sentinel install at
+# import time, plus a per-task ContextVar sink:
+#
+# 1. ``_install_audit_capture_dispatcher_once()`` runs at import time. It
+#    captures the production ``audit.writer.emit`` exactly once and replaces
+#    it with a dispatcher that:
+#      - mirrors the event into ``_case_audit_rows.get()`` if non-None, then
+#      - delegates to the original (no-op-without-DSN) writer for its
+#        metrics / drop accounting.
+# 2. ``_AuditCaptureScope`` no longer touches the module attribute. It only
+#    binds a fresh per-task list to the ContextVar on enter and resets the
+#    token on exit. Under ``asyncio.gather`` each task owns a copy of the
+#    context so two concurrent scopes cannot see each other's sink.
+# 3. The contract for callers is unchanged: ``with _AuditCaptureScope() as
+#    cap: ... cap.rows`` still yields the rows captured during the scope.
+#
+# The wrapper is installed exactly once, guarded by a threading lock and a
+# module-level sentinel, so import-time idempotency holds across re-imports
+# and test reloads.
+_case_audit_rows: ContextVar[Optional[List[Dict[str, Any]]]] = ContextVar(
+    "_case_audit_rows", default=None
+)
+
+_AUDIT_DISPATCHER_INSTALLED: bool = False
+_AUDIT_DISPATCHER_LOCK = threading.Lock()
+
+
+def _install_audit_capture_dispatcher_once() -> None:
+    """Replace ``audit.writer.emit`` with a per-context-aware dispatcher.
+
+    Idempotent: subsequent calls are no-ops once the wrapper is in place.
+    Lock-guarded so concurrent first-time callers cannot install twice.
+    """
+    global _AUDIT_DISPATCHER_INSTALLED
+    if _AUDIT_DISPATCHER_INSTALLED:
+        return
+    with _AUDIT_DISPATCHER_LOCK:
+        if _AUDIT_DISPATCHER_INSTALLED:
+            return
+        try:
+            from audit import writer as _audit_writer  # local import
+        except Exception:  # pragma: no cover — defensive
+            return
+
+        _original_emit: Callable[..., Awaitable[None]] = _audit_writer.emit  # type: ignore[assignment]
+
+        async def _dispatching_emit(event: Any) -> None:
+            sink = _case_audit_rows.get()
+            if sink is not None:
+                try:
+                    sink.append(_audit_event_to_row(event))
+                except Exception as exc:  # pragma: no cover — defensive
+                    logger.debug(
+                        "eval_audit_capture_failed",
+                        extra={"error_type": type(exc).__name__},
+                    )
+            # Always delegate to the production writer so its
+            # metrics / drop accounting are preserved (no-op without DSN).
+            try:
+                await _original_emit(event)
+            except Exception as exc:  # pragma: no cover — writer is fire-and-forget
+                logger.debug(
+                    "eval_audit_delegate_failed",
+                    extra={"error_type": type(exc).__name__},
+                )
+
+        _audit_writer.emit = _dispatching_emit  # type: ignore[assignment]
+        _AUDIT_DISPATCHER_INSTALLED = True
+
+
+class _AuditCaptureScope:
+    """Per-``run_case`` audit-row sink, scoped to the current asyncio task.
+
+    Binds a fresh ``List[Dict]`` to the ``_case_audit_rows`` ContextVar on
+    ``__enter__`` and resets the token on ``__exit__``. The module-level
+    dispatcher (installed once via
+    :func:`_install_audit_capture_dispatcher_once`) is responsible for
+    funnelling ``audit_writer.emit(event)`` calls into the bound list.
+
+    Under ``asyncio.gather`` each task runs in its own copied context, so
+    two concurrent scopes get their own sinks and cannot cross-contaminate.
+    Mirrors the ``_case_log_records`` pattern at runner.py:217.
+    """
+
+    # Backwards compat alias — older call sites referred to the old class
+    # name; keep the alias so tests / callers don't need to rename.
+    def __init__(self) -> None:
+        self.rows: List[Dict[str, Any]] = []
+        self._token: Any = None
+
+    def __enter__(self) -> "_AuditCaptureScope":
+        _install_audit_capture_dispatcher_once()
+        self._token = _case_audit_rows.set(self.rows)
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self._token is not None:
+            try:
+                _case_audit_rows.reset(self._token)
+            except (LookupError, ValueError):  # pragma: no cover — defensive
+                pass
+            self._token = None
+
+
+# Backwards-compatible alias for any external caller / test that imported
+# the old class name. New code should use ``_AuditCaptureScope`` directly.
+_AuditCapturePatch = _AuditCaptureScope
+
+
+def _coerce_str_list(value: Any) -> Optional[List[str]]:
+    """Best-effort conversion of a graph-state value to ``List[str]``.
+
+    Returns ``None`` when the value is missing or not list-shaped — the
+    rubrics treat ``None`` as "field not wired for this case" and fall
+    through to vacuous-True. Returning ``[]`` would assert "wired and
+    empty" which has different semantics.
+    """
+    if value is None or not isinstance(value, list):
+        return None
+    out: List[str] = []
+    for v in value:
+        if isinstance(v, str):
+            out.append(v)
+        elif v is not None:
+            out.append(str(v))
+    return out
+
+
+def _coerce_dict_list(value: Any) -> Optional[List[Dict[str, Any]]]:
+    """Best-effort conversion of a graph-state value to ``List[Dict[...]]``.
+
+    See :func:`_coerce_str_list` re: None semantics.
+    """
+    if value is None or not isinstance(value, list):
+        return None
+    out: List[Dict[str, Any]] = []
+    for v in value:
+        if isinstance(v, dict):
+            out.append(v)
+    return out
+
+
 async def run_case(
     case: Any,  # W2EvalCase — typed via duck-typing to avoid hard import
     *,
@@ -364,6 +616,23 @@ async def run_case(
     do_read = cache_reads_enabled(effective_mode)
     do_write = cache_writes_enabled(effective_mode)
     case_id = getattr(case, "case_id", "<unknown>")
+
+    # Phase 4.8 — per-case eval-mode verifier override.
+    # The Wave 2C citation_verifier mutates state["extraction"] in place
+    # when it runs. At temp=0 the underlying vision call is *almost*
+    # deterministic but Anthropic server-side variance leaks rubric flips
+    # between identical reruns. Eval mode forces "off" so identical inputs
+    # produce identical extractions; production keeps the config.py default
+    # ("sample"). Operator escape hatch: EVAL_VERIFY_CITATIONS=sample to
+    # reproduce the production path during a one-off audit run.
+    # ``run_full_suite.main`` also sets this once at startup; this per-case
+    # assignment additionally protects direct ``run_case`` callers (tests,
+    # ad-hoc scripts) from picking up the production default.
+    import os as _os
+    from config import settings as _settings
+    _eval_verify_mode = _os.environ.get("EVAL_VERIFY_CITATIONS", "off").lower()
+    if _eval_verify_mode in ("off", "sample", "all"):
+        _settings.verify_citations = _eval_verify_mode
     # Per-case log isolation. Bind a fresh records list to the ContextVar
     # so this task's emissions (and only this task's) accumulate here. Under
     # ``asyncio.gather`` each task runs in its own copied context, so two
@@ -371,6 +640,12 @@ async def run_case(
     case_records: List[Dict[str, Any]] = []
     token = _case_log_records.set(case_records)
     _ensure_global_capture()
+    # Phase 1.2 — capture every AuditEvent emitted by graph nodes during
+    # this run. The patch delegates to the real writer (which no-ops
+    # without a DSN, the eval default) so its metrics are preserved; we
+    # only add a passive in-memory mirror keyed by AuditEvent's fields.
+    audit_capture = _AuditCapturePatch()
+    audit_capture.__enter__()
     try:
         # ── Evidence-retrieval branch ────────────────────────────────────
         # Cases in the ``evidence_retrieval`` bucket exercise the
@@ -460,11 +735,45 @@ async def run_case(
             )
             # Seed a stub extraction so the supervisor routes to
             # evidence_retriever (see graph/nodes/supervisor.py:_decide).
+            #
+            # Phase 3 Part B' — populate every UnknownDocument-required
+            # field so the ``schema_valid`` rubric passes for evidence-
+            # retrieval cases (which don't actually extract — the stub
+            # only exists to drive the supervisor's "extraction populated
+            # → evidence_retriever" branch). Previously the stub was
+            # missing ``document_kind_guess`` / ``summary`` / ``key_facts``
+            # / ``classifier_confidence`` / ``ocr_confidence_range`` /
+            # ``extracted_at`` and so failed strict-mode schema validation
+            # for every evidence case — that's the root cause of the
+            # typed_pdf modality's 0.3333 schema_valid baseline (10 of 15
+            # typed_pdf cases are evidence_retrieval routed at consultant_note).
+            from datetime import datetime as _dt, timezone as _tz
+            stub_doc_ref = f"eval-stub-{case_id}"
             initial["extraction"] = {
                 "kind": "unknown",
                 "schema_version": "1.0",
                 "patient_id": str(chart_patient.get("id") or "eval-patient"),
-                "document_reference_id": f"eval-stub-{case_id}",
+                "document_reference_id": stub_doc_ref,
+                "document_kind_guess": "unknown",
+                "summary": "Evidence-retrieval stub extraction (no document parse).",
+                "key_facts": [
+                    {
+                        "text": "evidence_retrieval_stub",
+                        "citations": [
+                            {
+                                "source_type": "document",
+                                "source_id": stub_doc_ref,
+                                "page_or_section": None,
+                                "field_or_chunk_id": "stub-0",
+                                "quote_or_value": "evidence_retrieval_stub",
+                            }
+                        ],
+                        "needs_review": False,
+                    }
+                ],
+                "classifier_confidence": 0.0,
+                "ocr_confidence_range": [0.0, 0.0],
+                "extracted_at": _dt.now(_tz.utc).isoformat(),
             }
 
             config = {"configurable": {"thread_id": f"eval-thread-{case_id}"}}
@@ -480,6 +789,17 @@ async def run_case(
                 error=None,
                 retrieval=final.get("retrieval"),
                 finalized=final.get("finalized"),
+                # Phase 1.2 instrumentation. ``audit_rows`` is always
+                # populated from the in-run capture (empty list when no
+                # events fired). Staging/writer fields default to None
+                # when absent — the rubrics treat that as "not wired for
+                # this case" (vacuous-True), distinct from "wired and
+                # empty".
+                audit_rows=list(audit_capture.rows),
+                staged_observations=_coerce_dict_list(final.get("staged_observations")),
+                pending_extractions=_coerce_dict_list(final.get("pending_extractions")),
+                written_observation_ids=_coerce_str_list(final.get("written_observation_ids")),
+                written_condition_ids=_coerce_str_list(final.get("written_condition_ids")),
             )
             if do_write and _ev_cache_key:
                 effective_cache.write(_ev_cache_key, _outcome_to_dict(outcome_ev))
@@ -548,6 +868,37 @@ async def run_case(
         config = {"configurable": {"thread_id": f"eval-thread-{case_id}"}}
         final = await compiled.ainvoke(initial, config=config)
 
+        # Phase 3 Part B' — derive TIFF-specific page instrumentation from
+        # the OCR layout. The TIFF loader (``documents.tiff_loader``) tags
+        # every LayoutBlock with its real 1-based page index; we group by
+        # that to produce both the total page count and the per-page
+        # citation count the ``tiff_all_pages_ocrd`` rubric expects.
+        # Non-TIFF cases (no ``page`` attribute on any block, or no layout)
+        # leave both fields ``None`` and the rubric short-circuits.
+        _ocr_layout_list = (
+            list(final.get("ocr_layout") or [])
+            if final.get("ocr_layout") is not None
+            else None
+        )
+        _tiff_n_pages: Optional[int] = None
+        _ocr_page_citations: Optional[List[int]] = None
+        modality = getattr(case, "document_modality", None)
+        if modality == "tiff_fax" and _ocr_layout_list:
+            page_counts: Dict[int, int] = {}
+            for blk in _ocr_layout_list:
+                if not isinstance(blk, dict):
+                    continue
+                page = blk.get("page")
+                if isinstance(page, int) and page >= 1:
+                    page_counts[page] = page_counts.get(page, 0) + 1
+            if page_counts:
+                _tiff_n_pages = max(page_counts.keys())
+                # Index 0 => page 1, etc. Pages with zero blocks register
+                # as 0 (a real failure of the per-page OCR contract).
+                _ocr_page_citations = [
+                    page_counts.get(i, 0) for i in range(1, _tiff_n_pages + 1)
+                ]
+
         outcome_doc = RunOutcome(
             case_id=case_id,
             extraction=final.get("extraction"),
@@ -556,8 +907,16 @@ async def run_case(
             soft_warns=list(final.get("soft_warns") or []),
             captured_logs=list(case_records),
             error=None,
-            ocr_layout=list(final.get("ocr_layout") or []) if final.get("ocr_layout") is not None else None,
+            ocr_layout=_ocr_layout_list,
             observations=None,  # populated by probe_observations() if MySQL is reachable
+            # Phase 1.2 instrumentation — see evidence-branch comment above.
+            audit_rows=list(audit_capture.rows),
+            staged_observations=_coerce_dict_list(final.get("staged_observations")),
+            pending_extractions=_coerce_dict_list(final.get("pending_extractions")),
+            written_observation_ids=_coerce_str_list(final.get("written_observation_ids")),
+            written_condition_ids=_coerce_str_list(final.get("written_condition_ids")),
+            tiff_n_pages=_tiff_n_pages,
+            ocr_page_citations=_ocr_page_citations,
         )
         if do_write and _cache_key:
             effective_cache.write(_cache_key, _outcome_to_dict(outcome_doc))
@@ -575,8 +934,12 @@ async def run_case(
             soft_warns=[],
             captured_logs=list(case_records),
             error=f"{type(exc).__name__}",
+            # Even on failure surface any audit rows that fired before the
+            # exception — useful for debugging which node aborted.
+            audit_rows=list(audit_capture.rows),
         )
     finally:
+        audit_capture.__exit__(None, None, None)
         _case_log_records.reset(token)
 
 

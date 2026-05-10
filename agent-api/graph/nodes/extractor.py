@@ -1,9 +1,25 @@
-"""Slice 3.3 — Intake-extractor node.
+"""Slice 3.3 — Intake-extractor node (multimodal-aware as of Phase 3 Item 2).
 
-Wraps :func:`extractors.lab.extract` for the LangGraph pipeline. Raw bytes
-do NOT live in the graph state — only an opaque ``file_bytes_ref`` does.
-The route handler (slice 3.9) injects a ``file_bytes_provider`` callback
-that resolves the ref to bytes (e.g. from a session-keyed Redis blob).
+Wraps :func:`extractors.lab.extract` (PDF/PNG default lane) plus the
+multimodal dispatcher (HL7 / XLSX / DOCX / TIFF) for the LangGraph
+pipeline. Raw bytes do NOT live in the graph state — only an opaque
+``file_bytes_ref`` does. The route handler injects a
+``file_bytes_provider`` callback that resolves the ref to bytes (e.g.
+from a session-keyed Redis blob).
+
+Format routing
+--------------
+After resolving bytes, the node calls
+``documents.format_detect.detect_ingest_format`` and routes:
+
+* ``hl7`` / ``xlsx`` / ``docx`` / ``tiff`` →
+  :func:`documents.multimodal_dispatch.parse_multimodal` with
+  ``dry_run=True`` (no FHIR / staging side-effects fire — those belong to
+  the HTTP path).
+* ``pdf`` / ``png`` / ``unknown`` → existing ``extractors.lab.extract``
+  pipeline (preserves the original W2 PDF/PNG critical path; ``unknown``
+  falls through to the layout parser which surfaces "no extractable
+  content" as ``ExtractionFailed`` cleanly).
 """
 from __future__ import annotations
 
@@ -15,6 +31,11 @@ from dataclasses import asdict
 
 from audit.models import AuditEvent
 from audit import writer as audit_writer
+from documents.format_detect import detect_ingest_format
+from documents.multimodal_dispatch import (
+    MultimodalParseError,
+    parse_multimodal,
+)
 from documents.ocr import extract_layout
 from extractors.lab import ExtractionFailed, extract
 
@@ -102,15 +123,74 @@ async def extractor_node(
     ocr_layout: list[dict[str, Any]] | None = state.get("ocr_layout")
     try:
         pdf_bytes = await file_bytes_provider(file_ref)
-        # Surface the OCR layout into graph state so the critic's
-        # citation-resolvability and fidelity checks can reference real
-        # bbox_ids. Cheap re-parse: PyMuPDF text-PDF parse is sub-100ms;
-        # the lab extractor will parse again internally — accepted cost
-        # for keeping the lab module's signature stable. Layout-parse
-        # failure is non-fatal: the lab extractor's own parse will catch
-        # genuinely-malformed PDFs and surface ExtractionFailed; a
-        # transient layout error here just means the critic falls back
-        # to whatever layout is already in state (typically empty).
+
+        # Phase 3 Item 2 — multimodal routing. Detect format from magic
+        # bytes BEFORE invoking the PDF/PNG lab extractor so HL7 / XLSX /
+        # DOCX / TIFF inputs land on their dedicated parsers. PDF / PNG /
+        # unknown fall through to the legacy ``extract_layout`` +
+        # ``extractors.lab.extract`` lane preserved below.
+        detected_format = detect_ingest_format(pdf_bytes)
+        if detected_format in ("hl7", "xlsx", "docx", "tiff"):
+            patient_id_value = state.get("patient_id") or ""
+            doc_ref_id = f"draft-{state.get('request_id')}"
+            extraction_dict = await parse_multimodal(
+                detected_format=detected_format,
+                raw_bytes=pdf_bytes,
+                patient_id=patient_id_value,
+                document_reference_id=doc_ref_id,
+                dry_run=True,
+                request_id=state.get("request_id"),
+            )
+            # TIFF carries multi-page layout via the lab/intake extractor's
+            # internal layout parse — surface it to graph state so the
+            # rubric layer can derive ``ocr_page_citations`` /
+            # ``tiff_n_pages`` for the ``tiff_all_pages_ocrd`` rubric.
+            if detected_format == "tiff":
+                try:
+                    from documents.tiff_loader import extract_tiff_layout
+                    tiff_blocks = extract_tiff_layout(pdf_bytes)
+                    ocr_layout = [asdict(b) for b in tiff_blocks]
+                except Exception as layout_exc:  # noqa: BLE001 — boundary
+                    logger.warning(
+                        "graph_extractor_tiff_layout_failed",
+                        extra={"error_type": type(layout_exc).__name__},
+                    )
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            logger.info(
+                "graph_extractor_multimodal_complete",
+                extra={
+                    "request_id": state.get("request_id"),
+                    "format": detected_format,
+                    "kind": extraction_dict.get("kind"),
+                    "duration_ms": duration_ms,
+                },
+            )
+            await _emit_handoff(
+                state=state,
+                to_node="demographics",
+                outcome="success",
+                duration_ms=duration_ms,
+                reason=f"multimodal extraction complete ({detected_format})",
+            )
+            update: dict[str, Any] = {
+                "extraction": extraction_dict,
+                "errors": errors,
+                "next_node": "demographics",
+            }
+            if ocr_layout is not None:
+                update["ocr_layout"] = ocr_layout
+            return update
+
+        # Legacy PDF / PNG / unknown lane — surface the OCR layout into
+        # graph state so the critic's citation-resolvability and fidelity
+        # checks can reference real bbox_ids. Cheap re-parse: PyMuPDF
+        # text-PDF parse is sub-100ms; the lab extractor will parse again
+        # internally — accepted cost for keeping the lab module's
+        # signature stable. Layout-parse failure is non-fatal: the lab
+        # extractor's own parse will catch genuinely-malformed PDFs and
+        # surface ExtractionFailed; a transient layout error here just
+        # means the critic falls back to whatever layout is already in
+        # state (typically empty).
         try:
             layout_blocks = extract_layout(pdf_bytes)
             ocr_layout = [asdict(b) for b in layout_blocks]
@@ -125,6 +205,25 @@ async def extractor_node(
             document_reference_id=f"draft-{state.get('request_id')}",
         )
         extraction_dict = extraction.model_dump(mode="json")
+    except MultimodalParseError as exc:
+        errors.append(f"extractor: {exc.code}")
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        logger.error(
+            "graph_extractor_multimodal_failed",
+            extra={
+                "request_id": state.get("request_id"),
+                "code": exc.code,
+                "duration_ms": duration_ms,
+            },
+        )
+        await _emit_handoff(
+            state=state,
+            to_node="finalize",
+            outcome="failure",
+            duration_ms=duration_ms,
+            reason=f"multimodal_parse_error:{exc.code}",
+        )
+        return {"errors": errors, "next_node": "finalize"}
     except ExtractionFailed:
         errors.append("extractor: extraction failed")
         duration_ms = int((time.monotonic() - t0) * 1000)

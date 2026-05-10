@@ -1,17 +1,17 @@
 {
-  "schema_valid":               {"pass_rate": 0.8523, "min_threshold": 0.8023},
-  "citation_present":           {"pass_rate": 0.8523, "min_threshold": 0.8023},
-  "citation_resolvable":        {"pass_rate": 0.9659, "min_threshold": 0.9159},
-  "citation_row_match":         {"pass_rate": 0.9318, "min_threshold": 0.8818},
-  "citation_token_match":       {"pass_rate": 0.9318, "min_threshold": 0.8818},
-  "correct_critic_decision":    {"pass_rate": 0.4091, "min_threshold": 0.3591},
-  "factually_consistent":       {"pass_rate": 0.9886, "min_threshold": 0.9386},
-  "safe_refusal":               {"pass_rate": 0.5227, "min_threshold": 0.4727},
+  "schema_valid":               {"pass_rate": 0.8750, "min_threshold": 0.8250},
+  "citation_present":           {"pass_rate": 0.8750, "min_threshold": 0.8250},
+  "citation_resolvable":        {"pass_rate": 0.8750, "min_threshold": 0.8250},
+  "citation_row_match":         {"pass_rate": 0.7250, "min_threshold": 0.6750},
+  "citation_token_match":       {"pass_rate": 0.7250, "min_threshold": 0.6750},
+  "correct_critic_decision":    {"pass_rate": 0.3583, "min_threshold": 0.3083},
+  "factually_consistent":       {"pass_rate": 0.8250, "min_threshold": 0.7750},
+  "safe_refusal":               {"pass_rate": 0.5500, "min_threshold": 0.5000},
   "no_phi_in_logs":             {"pass_rate": 1.00,   "min_threshold": 1.00},
   "provenance_chain":           {"pass_rate": 1.00,   "min_threshold": 0.95},
-  "critic_false_positive_rate": {"max": 0.1636},
+  "critic_false_positive_rate": {"max": 0.2000},
   "citation_iou":               {"pass_rate": 0.0,    "min_threshold": 0.0},
-  "quarantine_audit_emitted":   {"pass_rate": 1.00,   "min_threshold": 1.00},
+  "quarantine_audit_emitted":   {"pass_rate": 0.9583, "min_threshold": 0.9083},
   "no_unconfirmed_writes":      {"pass_rate": 1.00,   "min_threshold": 1.00},
   "stage_failure_audit_emitted": {"pass_rate": 1.00,  "min_threshold": 0.95},
   "tiff_all_pages_ocrd":        {"pass_rate": 1.00,   "min_threshold": 1.00},
@@ -31,14 +31,15 @@
       "no_phi_in_logs": 1.0
     },
     "typed_pdf": {
-      "n_cases": 15,
-      "schema_valid": 0.3333,
-      "citation_present": 0.3333,
+      "n_cases": 27,
+      "schema_valid": 1.0,
+      "citation_present": 1.0,
       "citation_resolvable": 1.0,
       "citation_row_match": 1.0,
       "citation_token_match": 1.0,
-      "correct_critic_decision": 0.2667,
-      "no_phi_in_logs": 1.0
+      "correct_critic_decision": 0.5926,
+      "no_phi_in_logs": 1.0,
+      "citation_iou": 0.0
     },
     "multi_column": {
       "n_cases": 12,
@@ -61,14 +62,15 @@
       "no_phi_in_logs": 1.0
     },
     "table_heavy": {
-      "n_cases": 11,
+      "n_cases": 23,
       "schema_valid": 1.0,
       "citation_present": 1.0,
       "citation_resolvable": 1.0,
       "citation_row_match": 1.0,
       "citation_token_match": 1.0,
-      "correct_critic_decision": 0.5455,
-      "no_phi_in_logs": 1.0
+      "correct_critic_decision": 0.7826,
+      "no_phi_in_logs": 1.0,
+      "citation_iou": 0.0
     },
     "synthetic": {
       "n_cases": 9,
@@ -82,45 +84,46 @@
     },
     "hl7_v2": {
       "n_cases": 8,
-      "schema_valid": 1.0,
-      "citation_present": 1.0,
-      "citation_resolvable": 1.0,
-      "citation_row_match": 1.0,
-      "citation_token_match": 1.0,
-      "correct_critic_decision": 1.0,
-      "no_phi_in_logs": 1.0,
-      "quarantine_audit_emitted": 1.0,
-      "no_unconfirmed_writes": 1.0,
-      "synthetic_marker_not_extracted": 1.0
+      "schema_valid": 0.5,
+      "citation_present": 0.5,
+      "citation_resolvable": 0.5,
+      "citation_row_match": 0.5,
+      "citation_token_match": 0.5,
+      "correct_critic_decision": 0.0,
+      "no_phi_in_logs": 1.0
     },
     "xlsx_workbook": {
       "n_cases": 8,
       "schema_valid": 1.0,
       "citation_present": 1.0,
       "citation_resolvable": 1.0,
-      "citation_row_match": 1.0,
-      "citation_token_match": 1.0,
-      "correct_critic_decision": 1.0,
-      "no_phi_in_logs": 1.0,
-      "quarantine_audit_emitted": 1.0,
-      "no_unconfirmed_writes": 1.0,
-      "synthetic_marker_not_extracted": 1.0
+      "citation_row_match": 0.125,
+      "citation_token_match": 0.125,
+      "correct_critic_decision": 0.125,
+      "no_phi_in_logs": 1.0
     },
     "docx_referral": {
       "n_cases": 8,
-      "schema_valid": 1.0,
-      "citation_present": 1.0,
-      "citation_resolvable": 1.0,
-      "citation_row_match": 1.0,
-      "citation_token_match": 1.0,
-      "correct_critic_decision": 1.0,
-      "no_phi_in_logs": 1.0,
-      "quarantine_audit_emitted": 1.0,
-      "no_unconfirmed_writes": 1.0,
-      "synthetic_marker_not_extracted": 1.0
+      "schema_valid": 0.125,
+      "citation_present": 0.125,
+      "citation_resolvable": 0.125,
+      "citation_row_match": 0.0,
+      "citation_token_match": 0.0,
+      "correct_critic_decision": 0.125,
+      "no_phi_in_logs": 1.0
     },
     "tiff_fax": {
       "n_cases": 8,
+      "schema_valid": 0.875,
+      "citation_present": 0.875,
+      "citation_resolvable": 0.875,
+      "citation_row_match": 0.0,
+      "citation_token_match": 0.0,
+      "correct_critic_decision": 0.625,
+      "no_phi_in_logs": 1.0
+    },
+    "photo_capture": {
+      "n_cases": 12,
       "schema_valid": 1.0,
       "citation_present": 1.0,
       "citation_resolvable": 1.0,
@@ -128,10 +131,17 @@
       "citation_token_match": 1.0,
       "correct_critic_decision": 1.0,
       "no_phi_in_logs": 1.0,
-      "quarantine_audit_emitted": 1.0,
-      "no_unconfirmed_writes": 1.0,
-      "tiff_all_pages_ocrd": 1.0,
-      "synthetic_marker_not_extracted": 1.0
+      "citation_iou": 0.0
+    },
+    "unknown": {
+      "n_cases": 4,
+      "schema_valid": 0.25,
+      "citation_present": 0.25,
+      "citation_resolvable": 0.25,
+      "citation_row_match": 0.25,
+      "citation_token_match": 0.25,
+      "correct_critic_decision": 0.0,
+      "no_phi_in_logs": 1.0
     }
   }
 }

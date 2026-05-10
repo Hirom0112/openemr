@@ -56,6 +56,13 @@ def _ensure_api_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
     # Reset the module-level "we already warned" flag so each test is independent.
     rubrics_llm._warned_no_key = False
+    # Phase 4.8 — bypass the on-disk judge cache so each test exercises a
+    # fresh vote. Without this the first test populates the cache and
+    # subsequent tests with the same payload hit the cached result.
+    monkeypatch.setattr(rubrics_llm, "_judge_cache_read", lambda key: None)
+    monkeypatch.setattr(
+        rubrics_llm, "_judge_cache_write", lambda key, **kw: None
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -65,35 +72,49 @@ def _ensure_api_key(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_factually_consistent_passes_clean_run() -> None:
+    """Phase 4.8 — median-of-3: 3 yes votes → pass, 3 calls issued."""
     case = _StubCase()
     out = _outcome("pass")
     with patch.object(rubrics_llm, "_ask_yes_no", new=AsyncMock(return_value="yes")) as ask:
         result = await rubrics_llm.factually_consistent(out, case)
     assert result is True
-    assert ask.call_count == 1
+    assert ask.call_count == 3
 
 
 @pytest.mark.asyncio
-async def test_factually_consistent_auto_reruns_on_disagreement() -> None:
-    """Per §11.6: first run "no" + second run "yes" → PASS (judge noise filter)."""
+async def test_factually_consistent_majority_yes_wins() -> None:
+    """Phase 4.8 — 2 of 3 yes → pass (filters single judge-noise flip)."""
     case = _StubCase()
     out = _outcome("pass")
-    ask = AsyncMock(side_effect=["no", "yes"])
+    ask = AsyncMock(side_effect=["no", "yes", "yes"])
     with patch.object(rubrics_llm, "_ask_yes_no", new=ask):
         result = await rubrics_llm.factually_consistent(out, case)
     assert result is True
-    assert ask.call_count == 2
+    assert ask.call_count == 3
 
 
 @pytest.mark.asyncio
-async def test_factually_consistent_fails_when_both_runs_disagree() -> None:
+async def test_factually_consistent_fails_when_majority_no() -> None:
+    """Phase 4.8 — 2 of 3 no → fail (sustained disagreement, not noise)."""
     case = _StubCase()
     out = _outcome("pass")
-    ask = AsyncMock(side_effect=["no", "no"])
+    ask = AsyncMock(side_effect=["no", "no", "yes"])
     with patch.object(rubrics_llm, "_ask_yes_no", new=ask):
         result = await rubrics_llm.factually_consistent(out, case)
     assert result is False
-    assert ask.call_count == 2
+    assert ask.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_factually_consistent_split_outcome_treated_as_ambiguous() -> None:
+    """Phase 4.8 — yes / no / None → fails (ambiguous = not confidently grounded)."""
+    case = _StubCase()
+    out = _outcome("pass")
+    ask = AsyncMock(side_effect=["yes", "no", None])
+    with patch.object(rubrics_llm, "_ask_yes_no", new=ask):
+        result = await rubrics_llm.factually_consistent(out, case)
+    assert result is False
+    assert ask.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -123,12 +144,13 @@ async def test_safe_refusal_returns_true_for_pass_case_without_call() -> None:
 
 @pytest.mark.asyncio
 async def test_safe_refusal_haiku_returns_yes_on_correct_refusal() -> None:
+    """Phase 4.8 — 3 yes votes → pass (3 calls under median-of-3)."""
     case = _StubCase(expected_critic_decision="hard_block")
     out = _outcome("hard_block")
     with patch.object(rubrics_llm, "_ask_yes_no", new=AsyncMock(return_value="yes")) as ask:
         result = await rubrics_llm.safe_refusal(out, case)
     assert result is True
-    assert ask.call_count == 1
+    assert ask.call_count == 3
 
 
 @pytest.mark.asyncio

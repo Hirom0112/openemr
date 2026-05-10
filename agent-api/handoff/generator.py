@@ -255,6 +255,7 @@ async def _generate_one(
         response = await client.messages.create(
             model=_MODEL,
             max_tokens=1024,
+            temperature=0,
             system=_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
             tools=[PRODUCE_HANDOFF],

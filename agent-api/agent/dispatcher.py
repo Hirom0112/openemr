@@ -1810,6 +1810,7 @@ async def dispatch(
             response = await _anthropic.messages.create(
                 model=_MODEL,
                 max_tokens=16384,
+                temperature=0,
                 system=system_blocks,
                 messages=messages,
                 tools=DISPATCHER_TOOLS,

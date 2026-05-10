@@ -351,3 +351,47 @@ class PendingTask(BaseModel):
     due_date: Optional[date] = None
     notes: Optional[TextField] = None
     staged_at: datetime
+
+
+# --------------------------------------------------------------------------- #
+# WorkbookExtraction (Phase 3 Item 2 — discriminated multi-extraction wrapper)
+# --------------------------------------------------------------------------- #
+#
+# Design: Operator-approved Option B — a single discriminated wrapper kind
+# (``"workbook"``) that embeds the heterogeneous outputs of an XLSX parse
+# (zero-or-one ``IntakeForm``, zero-or-many ``LabReport`` per date column,
+# zero-or-many ``PendingTask`` per Care_Gaps row).
+#
+# Why a wrapper instead of one-of (pick one)? An XLSX is intrinsically
+# multi-document — every workbook simultaneously carries demographic context,
+# multiple lab snapshots in time, and pending-task rows. Picking a single
+# ``expected_kind`` would force the eval framework to grade only one of those
+# lanes per fixture; a wrapper preserves the parser's full output and lets
+# the rubric machinery walk every cited item across all lanes.
+#
+# Rubric integration: ``evals.rubrics_mechanical._iter_cited_items`` recurses
+# into ``intake_form`` / ``lab_reports`` / ``pending_tasks`` so every
+# ``citation_present`` / ``citation_resolvable`` / ``citation_row_match``
+# rule fires on the embedded extractions without per-rubric forking.
+#
+# Strictly NOT a member of the ``ExtractionResult`` discriminated union —
+# the union gates the lab/intake/unknown lanes the W1 critic walks; the
+# workbook wrapper lives alongside it as a parallel kind discriminator
+# consumed by the eval rubric registry.
+
+
+class WorkbookExtraction(BaseModel):
+    """Multi-extraction wrapper for an XLSX workbook (eval-graded as a unit)."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    kind: Literal["workbook"] = "workbook"
+    schema_version: Literal["1.0"] = "1.0"
+    patient_id: str
+    document_reference_id: str
+    intake_form: Optional[IntakeForm] = None
+    lab_reports: List[LabReport] = Field(default_factory=list)
+    pending_tasks: List[PendingTask] = Field(default_factory=list)
+    classifier_confidence: float
+    ocr_confidence_range: Tuple[float, float]
+    extracted_at: datetime

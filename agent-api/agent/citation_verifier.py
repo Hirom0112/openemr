@@ -197,6 +197,7 @@ async def _default_claude_verify(value: str, crop_png: bytes) -> VerificationRes
         resp = await client.messages.create(
             model=VERIFIER_MODEL,
             max_tokens=200,
+            temperature=0,
             messages=[
                 {
                     "role": "user",

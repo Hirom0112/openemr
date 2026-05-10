@@ -382,6 +382,7 @@ class ConversationHandler:
                 response = await self._client.messages.create(
                     model=_MODEL,
                     max_tokens=300,
+                    temperature=0,
                     system=_SYSTEM,
                     messages=messages,
                     tools=[PRODUCE_QUERY_ANSWER],
