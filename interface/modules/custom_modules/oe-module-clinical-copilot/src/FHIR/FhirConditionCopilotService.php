@@ -152,6 +152,28 @@ class FhirConditionCopilotService extends FhirServiceBase implements IPatientCom
             $sqlFrag = $whereClause->getFragment();
             $bindArray = $whereClause->getBoundValues();
 
+            // Dedupe against rows already projected to legacy `lists` by
+            // scripts/project_copilot_to_lists.php. The projection writes
+            // a marker into lists.extrainfo of the form
+            // `copilot:copilot_conditions:<copilot_conditions.id>` and the
+            // core FhirConditionProblemListItemService surfaces those rows
+            // through the same /Condition endpoint — without this filter
+            // every projected condition returns twice.
+            //
+            // Defensive posture: NOT EXISTS on an empty/lagging `lists`
+            // simply returns true for every copilot row, so the service
+            // degrades to "emit everything" when projection hasn't run.
+            $dedupeFrag = " AND NOT EXISTS (\n"
+                . "    SELECT 1 FROM lists l\n"
+                . "    WHERE l.extrainfo = CONCAT('copilot:copilot_conditions:', c.id)\n"
+                . "      AND l.activity = 1\n"
+                . ")";
+            if (empty($sqlFrag)) {
+                $sqlFrag = ' WHERE 1=1' . $dedupeFrag;
+            } else {
+                $sqlFrag .= $dedupeFrag;
+            }
+
             $sql = 'SELECT
                         c.id, c.document_id, c.patient_id,
                         c.icd10_code, c.snomed_code, c.condition_text,
@@ -162,7 +184,7 @@ class FhirConditionCopilotService extends FhirServiceBase implements IPatientCom
                     FROM ' . self::TABLE . ' c
                     JOIN patient_data pd ON pd.pid = c.patient_id
                     LEFT JOIN documents d ON d.id  = c.document_id'
-                . (empty($sqlFrag) ? '' : $sqlFrag)
+                . $sqlFrag
                 . ' ORDER BY c.updated_at DESC, c.id DESC';
 
             $rows = QueryUtils::fetchRecords($sql, $bindArray) ?? [];
