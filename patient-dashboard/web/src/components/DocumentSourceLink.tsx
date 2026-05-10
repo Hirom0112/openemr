@@ -80,7 +80,12 @@ export function DocumentSourceLink({
   const loadDocument = React.useCallback(async () => {
     setState({ kind: "loading" });
     try {
-      const res = await fetch(`/api/documents/${encodeURIComponent(uuid)}`);
+      // next.config.ts sets basePath: "/dashboard". Client-side fetch()
+      // does not auto-prefix the basePath, so the URL has to include it
+      // explicitly or the request 404s through to OpenEMR's Apache.
+      const res = await fetch(
+        `/dashboard/api/documents/${encodeURIComponent(uuid)}`,
+      );
       if (!res.ok) {
         setState({
           kind: "error",
@@ -302,7 +307,7 @@ function PreviewBody({
         Cannot preview {state.mimetype} in-app.
       </p>
       <a
-        href={`/api/documents/${encodeURIComponent(uuid)}`}
+        href={`/dashboard/api/documents/${encodeURIComponent(uuid)}`}
         download
         className="text-xs text-primary underline underline-offset-2"
         data-testid="document-source-download"
