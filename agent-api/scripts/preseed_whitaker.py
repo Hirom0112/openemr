@@ -46,15 +46,47 @@ import hashlib
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import httpx
+import jwt as pyjwt
 import pymysql
 
 DEFAULT_PATIENT_ID = 27
 INGEST_TIMEOUT_SECONDS = 120.0
+TOKEN_TTL_SECONDS = 600  # 10 min — long enough to load 5 fixtures sequentially.
+
+
+def _mint_token(secret: str, *, provider_id: str = "system") -> str:
+    """Mint an HS256 JWT the agent-api jwt_middleware accepts.
+
+    Required claims (per agent-api/auth/jwt_middleware.py): iss must be
+    ``openemr-copilot``, sub is the principal id, iat + exp present.
+    The middleware bypasses auth entirely when COPILOT_JWT_SECRET is
+    empty on the server, so an empty secret here means we don't bother
+    sending the header at all.
+    """
+    now = int(time.time())
+    return pyjwt.encode(
+        {
+            "iss": "openemr-copilot",
+            "sub": provider_id,
+            "provider_id": provider_id,
+            "sid": f"preseed-{now}",
+            # 'admin' satisfies _require_mutating_role on the staging
+            # router (clinician|admin allowed) so the auto-approval call
+            # downstream lands writes into copilot_observations /
+            # copilot_conditions instead of leaving them pending.
+            "role": "admin",
+            "iat": now,
+            "exp": now + TOKEN_TTL_SECONDS,
+        },
+        secret,
+        algorithm="HS256",
+    )
 
 
 @dataclass(frozen=True)
@@ -182,6 +214,7 @@ def _ingest(
     fx: Fixture,
     file_bytes: bytes,
     patient_id: int,
+    bearer_token: Optional[str],
 ) -> dict:
     """POST the fixture to /document/ingest. Returns the JSON response."""
     url = f"{agent_api_url.rstrip('/')}/document/ingest"
@@ -189,8 +222,36 @@ def _ingest(
     data: dict[str, str] = {"patient_id": str(patient_id)}
     if fx.doc_type_hint is not None:
         data["doc_type_hint"] = fx.doc_type_hint
+    headers: dict[str, str] = {}
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
     with httpx.Client(timeout=INGEST_TIMEOUT_SECONDS) as client:
-        response = client.post(url, data=data, files=files)
+        response = client.post(url, data=data, files=files, headers=headers)
+        response.raise_for_status()
+        return response.json()
+
+
+def _batch_approve(
+    *,
+    agent_api_url: str,
+    pending_ids: list[int],
+    bearer_token: Optional[str],
+) -> dict:
+    """Approve staged extractions so the writer fires.
+
+    Without this, /document/ingest returns rows in 'pending' state and
+    nothing lands in copilot_observations / copilot_conditions — the
+    dashboard sidebar cards stay empty even though the documents
+    themselves are visible in the chart Documents tab. The token must
+    carry role in {clinician, admin} for the staging router to accept
+    the mutation.
+    """
+    url = f"{agent_api_url.rstrip('/')}/pending-extractions/batch-approve"
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    with httpx.Client(timeout=INGEST_TIMEOUT_SECONDS) as client:
+        response = client.post(url, json={"ids": pending_ids}, headers=headers)
         response.raise_for_status()
         return response.json()
 
@@ -217,6 +278,10 @@ def main() -> int:
     args = parser.parse_args()
 
     agent_api_url = os.environ.get("AGENT_API_URL", "http://localhost:8400")
+    copilot_jwt_secret = os.environ.get("COPILOT_JWT_SECRET", "")
+    bearer_token: Optional[str] = (
+        _mint_token(copilot_jwt_secret) if copilot_jwt_secret else None
+    )
     selected = (
         FIXTURES
         if args.tier == "all"
@@ -224,7 +289,10 @@ def main() -> int:
     )
 
     print(f"[preseed] target pid={args.patient_id}, agent-api={agent_api_url}")
-    print(f"[preseed] tier={args.tier}, fixtures={len(selected)}, dry_run={args.dry_run}")
+    print(
+        f"[preseed] tier={args.tier}, fixtures={len(selected)}, "
+        f"dry_run={args.dry_run}, jwt_auth={'yes' if bearer_token else 'no'}"
+    )
 
     try:
         conn = _open_mysql()
@@ -235,6 +303,7 @@ def main() -> int:
     skipped: list[str] = []
     ingested: list[str] = []
     failed: list[tuple[str, str]] = []
+    pending_ids: list[int] = []
     try:
         for fx in selected:
             try:
@@ -267,6 +336,7 @@ def main() -> int:
                     fx=fx,
                     file_bytes=file_bytes,
                     patient_id=args.patient_id,
+                    bearer_token=bearer_token,
                 )
             except httpx.HTTPStatusError as exc:
                 body = (exc.response.text or "")[:500]
@@ -290,13 +360,59 @@ def main() -> int:
                 or result.get("metadata", {}).get("document_reference_id")
                 or "<unknown>"
             )
-            print(f"[preseed] {fx.name}: INGESTED, doc_ref={doc_ref}")
+            staging = result.get("metadata", {}).get("staging") or {}
+            pending = list(staging.get("pending_extraction_ids") or [])
+            print(
+                f"[preseed] {fx.name}: INGESTED, doc_ref={doc_ref}, "
+                f"pending_extractions={len(pending)}"
+            )
             ingested.append(fx.name)
+            pending_ids.extend(pending)
     finally:
         conn.close()
 
+    # Auto-approve every pending extraction we created so the writer
+    # populates copilot_observations / copilot_conditions and the
+    # dashboard cards have data to render. Skipped under --dry-run.
+    approved_ok = 0
+    approved_fail = 0
+    if pending_ids and not args.dry_run:
+        print()
+        print(f"[preseed] approving {len(pending_ids)} pending extractions…")
+        try:
+            ar = _batch_approve(
+                agent_api_url=agent_api_url,
+                pending_ids=pending_ids,
+                bearer_token=bearer_token,
+            )
+            for item in ar.get("results") or []:
+                if item.get("state") == "written":
+                    approved_ok += 1
+                else:
+                    approved_fail += 1
+                    print(
+                        f"[preseed]   pending_id={item.get('pending_id')}: "
+                        f"state={item.get('state')} "
+                        f"error={item.get('error') or item.get('write_error')}"
+                    )
+            print(f"[preseed] approval results: written={approved_ok}, other={approved_fail}")
+        except httpx.HTTPStatusError as exc:
+            body = (exc.response.text or "")[:500]
+            print(
+                f"[preseed] batch-approve HTTP {exc.response.status_code}: {body}",
+                file=sys.stderr,
+            )
+            failed.append(("batch-approve", f"HTTP {exc.response.status_code}"))
+        except Exception as exc:
+            print(f"[preseed] batch-approve unexpected error: {exc}", file=sys.stderr)
+            failed.append(("batch-approve", str(exc)))
+
     print()
-    print(f"[preseed] summary: ingested={len(ingested)}, skipped={len(skipped)}, failed={len(failed)}")
+    print(
+        f"[preseed] summary: ingested={len(ingested)}, skipped={len(skipped)}, "
+        f"failed={len(failed)}, approved_written={approved_ok}, "
+        f"approved_other={approved_fail}"
+    )
     if ingested:
         print(f"[preseed]   ingested: {', '.join(ingested)}")
     if skipped:
