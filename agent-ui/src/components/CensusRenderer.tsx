@@ -378,6 +378,20 @@ export default function CensusRenderer({ data, citations, onBrief, onMeds, onHan
         </div>
       ) : null}
 
+      {census.length === 0 && (data?.requested ?? 0) === 0 ? (
+        <div
+          role="status"
+          style={{ ...cardStyle(AMB), padding: '10px 12px', fontSize: 13, color: AMB.text, marginBottom: 10 }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>No patients on your panel</div>
+          <div style={{ color: SURFACE.muted, fontSize: 12, lineHeight: 1.4 }}>
+            The launch context did not include any patients. This usually means no open
+            encounters are attributed to you within the last 30 days. Ask an admin to
+            attribute an encounter to your provider id, or relaunch from a patient chart.
+          </div>
+        </div>
+      ) : null}
+
       {/* Summary strip — 4 tier metric cards */}
       <MetricStrip
         ariaLabel="Census tier summary"
