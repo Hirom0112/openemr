@@ -82,7 +82,7 @@ async def test_typed_path_uses_tool_summary_as_narrative() -> None:
         result = await dispatch(
             message="any allergies for him",
             session_id="sess-med-typed",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     # Exactly one Anthropic call — no framing turn.
@@ -119,7 +119,7 @@ async def test_typed_path_falls_back_when_summary_missing() -> None:
         result = await dispatch(
             message="check medication safety",
             session_id="sess-med-fallback",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert fake_create.await_count == 1

@@ -125,7 +125,7 @@ async def test_structured_response_skips_framing_call(response_type: str) -> Non
         result = await dispatch(
             message=_INTENT_MATCHING_MESSAGE[response_type],
             session_id="sess-test",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert fake_create.await_count == 1, (
@@ -163,7 +163,7 @@ async def test_query_answer_falls_through_when_intent_mismatches() -> None:
         result = await dispatch(
             message="do the thing",
             session_id="sess-test-qa-mismatch",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert fake_create.await_count == 2, (
@@ -205,7 +205,7 @@ async def test_query_answer_skip_enriches_history_with_patient_context() -> None
         result = await dispatch(
             message="what was the last potassium",
             session_id="sess-test-qa-history",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert fake_create.await_count == 1
@@ -243,7 +243,7 @@ async def test_census_chains_to_query_answer_when_intent_mismatches_census() -> 
     qa_payload = {"found": True, "answer": "Potassium 4.2 mEq/L."}
 
     fake_create = AsyncMock(side_effect=[
-        _planner_response("get_census_summary", {"patient_ids": []}),
+        _planner_response("get_census_summary", {"patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]}),
         _planner_response("query_patient_records", {"patient_id": "pt-007", "question": "potassium"}),
     ])
     fake_census = AsyncMock(return_value={"result": census_payload, "citations": []})
@@ -265,7 +265,7 @@ async def test_census_chains_to_query_answer_when_intent_mismatches_census() -> 
         result = await dispatch(
             message="what was Sara Chen's last potassium",
             session_id="sess-chain-qa",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     # Two planner calls: dispatcher did NOT skip after the census resolution.
@@ -294,7 +294,7 @@ async def test_structured_response_chains_when_intent_mismatches() -> None:
     briefing_payload = {"patient_id": "pt-001", "sections": []}
 
     fake_create = AsyncMock(side_effect=[
-        _planner_response("get_census_summary", {"patient_ids": []}),
+        _planner_response("get_census_summary", {"patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]}),
         _planner_response("get_patient_briefing", {"patient_id": "pt-001"}),
     ])
     fake_census = AsyncMock(return_value={"result": census_payload, "citations": []})
@@ -321,7 +321,7 @@ async def test_structured_response_chains_when_intent_mismatches() -> None:
         result = await dispatch(
             message="Brief Marcus Webb",
             session_id="sess-chain",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     # Two planner calls — the dispatcher did NOT structured-skip after census.

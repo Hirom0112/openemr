@@ -7,9 +7,23 @@ deny it surfaces an ``is_error=True`` tool_result back to the LLM rather than
 crashing the loop.
 
 Authoritative scope source: ``session_context["patient_ids"]`` — populated by
-the HTTP layer from the inbound request body. If that list is missing or
-empty we fail OPEN (allow + warn) during the rollout, then flip to fail-
-closed once telemetry confirms the field is reliably populated.
+the HTTP layer from the inbound request body (which itself comes from the
+HS256 launch JWT minted by the OpenEMR iframe wrapper).
+
+Posture: **fail-closed** (VUL-0001 mitigation, 2026-05-15). Previous rollout
+phase allowed an empty census to fall through; VUL-0001 demonstrated that
+this gap is exactly what multi-turn social-engineering attacks exploit
+(planner names an arbitrary out-of-panel patient and the dispatcher
+executes the FHIR fetch). An empty census now denies any patient-keyed
+tool call — the only legitimate caller in that state is the bootstrap
+census-discovery path itself, which is not a member of ``PATIENT_KEYED_TOOLS``.
+
+ID normalization: clinicians' census carries OpenEMR numeric pids
+(``"5"``, ``"13"``) sourced from ``form_encounter.provider_id`` lookups.
+The planner sometimes emits synthetic aliases (``"pt-018"``) or already-
+resolved FHIR UUIDs (``"6da9dadb-..."``). To prevent a trivial alias-
+bypass, we canonicalize both sides into the numeric-pid form when
+possible, and compare the original string as a fallback for UUIDs.
 
 This module is part of the ``auth`` leaf package. Per the import-linter
 contract it must not import from any sibling business package.
@@ -18,6 +32,7 @@ contract it must not import from any sibling business package.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -36,6 +51,26 @@ PATIENT_KEYED_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+_PT_ALIAS_RE = re.compile(r"^pt-(\d+)$", re.IGNORECASE)
+
+
+def _canonical_pid(raw: Any) -> str:
+    """Normalize a patient id string for membership comparison.
+
+    Maps ``"pt-018"`` → ``"18"``, ``"5"`` → ``"5"``. UUIDs and other
+    free-form strings pass through unchanged (lower-cased) so that
+    direct-UUID membership still works on both sides.
+    """
+    s = str(raw or "").strip().lower()
+    if not s:
+        return ""
+    m = _PT_ALIAS_RE.match(s)
+    if m:
+        return str(int(m.group(1)))
+    if s.isdigit():
+        return str(int(s))
+    return s
+
 
 def check_patient_scope(
     tool_name: str,
@@ -48,13 +83,13 @@ def check_patient_scope(
     only when ``allowed`` is False and is suitable for surfacing to the LLM
     as the body of an ``is_error=True`` tool_result.
 
-    Decisions:
+    Decisions (fail-closed posture):
       * Tool not in ``PATIENT_KEYED_TOOLS`` → allow.
       * No ``patient_id`` in ``tool_input`` → allow (nothing to scope).
-      * ``session_context["patient_ids"]`` missing/empty → allow + warn
-        (fail-open during rollout).
-      * ``patient_id`` IS in census → allow.
-      * ``patient_id`` is NOT in census → deny with reason.
+      * ``session_context["patient_ids"]`` missing/empty → **deny**
+        (VUL-0001 mitigation).
+      * Canonicalized ``patient_id`` IS in canonicalized census → allow.
+      * Otherwise → deny with reason.
     """
     if tool_name not in PATIENT_KEYED_TOOLS:
         return True, None
@@ -65,22 +100,31 @@ def check_patient_scope(
 
     raw_ids = session_context.get("patient_ids")
     if not raw_ids:
-        # Fail-open: the request did not carry a patient_ids scope. Log so
-        # we can spot any caller that is stripping it before the dispatcher
-        # sees it. Telemetry-only — no metric here, the structured warn is
-        # enough for the rollout window.
+        # Fail-closed: there is no authoritative panel to validate against.
+        # In production this means the iframe launch did not deliver the
+        # JWT-derived panel into the request body, or some earlier hop
+        # stripped it. VUL-0001 (2026-05-15) showed that the fail-open
+        # variant of this branch was directly exploitable by multi-turn
+        # social-engineering; deny here and let the dispatcher surface the
+        # refusal as a structured tool_result so the LLM cannot retry the
+        # same call with a different alias.
         logger.warning(
-            "tool_scope_check_fail_open_empty_census",
+            "tool_scope_check_deny_empty_census",
             extra={
                 "tool_name": tool_name,
                 "requested_patient_id": requested,
                 "session_id": session_context.get("session_id"),
             },
         )
-        return True, None
+        return (
+            False,
+            "scope_violation: no active census on this session; refuse to fetch "
+            "patient data without a clinician-scoped panel",
+        )
 
-    census_ids = {str(p) for p in raw_ids}
-    if str(requested) in census_ids:
+    census_canonical = {_canonical_pid(p) for p in raw_ids if p is not None and p != ""}
+    requested_canonical = _canonical_pid(requested)
+    if requested_canonical and requested_canonical in census_canonical:
         return True, None
 
     return (

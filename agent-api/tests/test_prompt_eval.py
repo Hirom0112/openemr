@@ -297,7 +297,7 @@ async def test_prompt_eval_case(case: PromptEvalCase) -> None:
     session_context: dict[str, Any] = {
         "provider_id": "prov-eval",
         "provider_name": "Eval",
-        "patient_ids": [],
+        "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"],
         "sqlite_saver": saver,
     }
     session_context.update(case.session_context)
