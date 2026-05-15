@@ -264,7 +264,7 @@ async def test_dispatch_success_emits_one_ok_audit_event() -> None:
         result = await dispatch(
             message="please run the census",
             session_id="sess-ok",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert result["type"] == "census"
@@ -282,8 +282,10 @@ async def test_dispatch_success_emits_one_ok_audit_event() -> None:
 async def test_dispatch_tool_failure_emits_error_audit_with_failure_class() -> None:
     tool_name = "query_patient_records"
 
+    # Pick an in-panel patient so the scope check passes and we exercise
+    # the tool-failure audit path (not the scope-violation audit path).
     fake_create = AsyncMock(side_effect=[
-        _planner_response(tool_name, {"patient_id": "p1"}),
+        _planner_response(tool_name, {"patient_id": "pt-001"}),
         _framing_response("Sorry, I couldn't fetch that."),
     ])
     fake_tool = AsyncMock(side_effect=RuntimeError("FHIR upstream 502"))
@@ -299,7 +301,7 @@ async def test_dispatch_tool_failure_emits_error_audit_with_failure_class() -> N
         await dispatch(
             message="what was the potassium?",
             session_id="sess-err",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     error_events = [e for e in captured if e["outcome"] == "error"]

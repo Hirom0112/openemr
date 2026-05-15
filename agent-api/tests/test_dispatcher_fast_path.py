@@ -115,7 +115,7 @@ async def test_happy_path_skips_llm_and_increments_counter() -> None:
         result = await dispatch(
             message="brief Marcus Webb",
             session_id="sess-fp-happy",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert fake_create.await_count == 0, "Fast path must not call Anthropic"
@@ -152,7 +152,7 @@ async def test_cold_start_required_history_falls_through() -> None:
         result = await dispatch(
             message="brief Marcus Webb",
             session_id="sess-fp-history",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert fake_create.await_count == 1, (
@@ -184,7 +184,7 @@ async def test_no_name_match_falls_through_to_llm() -> None:
         result = await dispatch(
             message="brief XYZ Patient",
             session_id="sess-fp-nomatch",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     # Census ran during fast-path resolution attempt, then bailed; LLM path
@@ -219,7 +219,7 @@ async def test_multiple_matches_fall_through_to_llm() -> None:
         result = await dispatch(
             message="brief Marcus",
             session_id="sess-fp-multi",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert fake_create.await_count == 1
@@ -246,7 +246,7 @@ async def test_direct_id_format_skips_census_lookup() -> None:
         result = await dispatch(
             message="brief patient pt-001",
             session_id="sess-fp-id",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert fake_create.await_count == 0
@@ -284,7 +284,7 @@ async def test_audit_event_emitted_exactly_once_on_success() -> None:
         await dispatch(
             message="pre-encounter briefing for Marcus Webb",
             session_id="sess-fp-audit",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert len(captured) == 1
@@ -316,7 +316,7 @@ async def test_census_error_falls_through_to_llm() -> None:
         result = await dispatch(
             message="brief Marcus Webb",
             session_id="sess-fp-census-err",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     # LLM path ran; fast path bailed silently.
@@ -361,7 +361,7 @@ async def test_pattern_non_match_skips_fast_path() -> None:
         result = await dispatch(
             message="what's the weather?",
             session_id="sess-fp-nopattern",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     # LLM path took over.
@@ -409,7 +409,7 @@ async def test_query_fast_path_what_is_pattern() -> None:
         result = await dispatch(
             message="what is the creatinine for Marcus",
             session_id="sess-qfp-whatis",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert fake_create.await_count == 0, "Query fast path must not call Anthropic"
@@ -446,7 +446,7 @@ async def test_query_fast_path_possessive() -> None:
         result = await dispatch(
             message="Marcus's potassium",
             session_id="sess-qfp-poss",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert fake_create.await_count == 0
@@ -478,7 +478,7 @@ async def test_query_fast_path_when_was_last() -> None:
         result = await dispatch(
             message="when was last appointment for Delia",
             session_id="sess-qfp-when",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert fake_create.await_count == 0
@@ -519,7 +519,7 @@ async def test_query_fast_path_bails_when_ambiguous() -> None:
         result = await dispatch(
             message="what's going on",
             session_id="sess-qfp-ambig",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     # LLM took over.
@@ -561,7 +561,7 @@ async def test_query_fast_path_bails_on_warm_session() -> None:
         result = await dispatch(
             message="what is the creatinine for Marcus",
             session_id="sess-qfp-warm",
-            session_context={"provider_id": "prov-1", "patient_ids": []},
+            session_context={"provider_id": "prov-1", "patient_ids": ["pt-001", "pt-002", "pt-003", "pt-004", "pt-007"]},
         )
 
     assert fake_create.await_count >= 1

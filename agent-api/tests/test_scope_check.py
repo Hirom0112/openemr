@@ -55,30 +55,34 @@ def test_tool_without_patient_id_is_allowed() -> None:
     assert reason is None
 
 
-def test_empty_census_fails_open_with_warning(
+def test_empty_census_fails_closed_with_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    # VUL-0001 mitigation (2026-05-15): the prior fail-open branch was
+    # exploitable by multi-turn social-engineering; deny when there is no
+    # authoritative panel to validate against.
     caplog.set_level(logging.WARNING, logger="auth.scope")
     allowed, reason = check_patient_scope(
         "get_patient_briefing",
         {"patient_id": "999"},
         {"patient_ids": [], "session_id": "s1"},
     )
-    assert allowed is True
-    assert reason is None
+    assert allowed is False
+    assert reason is not None and "no active census" in reason
     assert any(
-        "tool_scope_check_fail_open_empty_census" in r.message for r in caplog.records
+        "tool_scope_check_deny_empty_census" in r.message for r in caplog.records
     )
 
 
-def test_missing_census_key_fails_open() -> None:
+def test_missing_census_key_fails_closed() -> None:
+    # Same VUL-0001 mitigation when the key is absent entirely.
     allowed, reason = check_patient_scope(
         "get_patient_briefing",
         {"patient_id": "999"},
         {"session_id": "s1"},  # no patient_ids key at all
     )
-    assert allowed is True
-    assert reason is None
+    assert allowed is False
+    assert reason is not None and "no active census" in reason
 
 
 def test_non_patient_keyed_tool_is_allowed() -> None:
