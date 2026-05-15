@@ -5,6 +5,7 @@ dispatcher) can import from a stable location regardless of where the
 ContextVar is defined.
 """
 
+from auth.injection import InjectionVerdict, detect_injection
 from auth.jwt_middleware import request_principal_var
 from auth.scope import (
     PATIENT_KEYED_TOOLS,
@@ -16,5 +17,7 @@ __all__ = [
     "request_principal_var",
     "check_patient_scope",
     "filter_patient_ids_to_panel",
+    "detect_injection",
+    "InjectionVerdict",
     "PATIENT_KEYED_TOOLS",
 ]

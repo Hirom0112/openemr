@@ -94,7 +94,7 @@ def _phi_audit_tool(
         # No running loop (sync test contexts) — drop silently; the
         # writer is fire-and-forget by contract.
         return
-from auth import check_patient_scope, request_principal_var
+from auth import check_patient_scope, detect_injection, request_principal_var
 from config import settings
 from verification.dispatcher_response import verify_dispatcher_response
 from verification.domain_constraints import verify_conversation_answer
@@ -1704,6 +1704,58 @@ async def dispatch(
                 input={"message": message, "session_id": session_id},
                 metadata={"provider_id": session_context.get("provider_id")},
             )
+
+    # VUL-0003 (CRITICAL, 2026-05-15): indirect prompt-injection via
+    # instruction-shaped payloads in inbound message text (typically
+    # purporting to be document footers or "AI SYSTEM OVERRIDE" directives).
+    # Detect at the dispatcher boundary and short-circuit with a structured
+    # refusal — every tool call below this point must NOT execute when the
+    # input is suspected of carrying directives sourced from document
+    # content.
+    injection_verdict = detect_injection(message)
+    if injection_verdict.suspected:
+        principal = request_principal_var.get()
+        provider_id = (
+            (principal or {}).get("provider_id")
+            or session_context.get("provider_id")
+        )
+        logger.warning(
+            "dispatch_refused_suspected_injection",
+            extra={
+                "session_id": session_id,
+                "provider_id": provider_id,
+                "matched_patterns": list(injection_verdict.matched_patterns),
+                "sample": injection_verdict.sample,
+            },
+        )
+        emit_audit_event(
+            session_id=session_id,
+            provider_id=provider_id,
+            tool_name="dispatch",
+            outcome="blocked",
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            patient_id=None,
+            failure_class="indirect_prompt_injection",
+        )
+        _finalize_span(
+            dispatch_span,
+            error=False,
+            output={"type": "error", "error": "indirect_prompt_injection"},
+        )
+        return {
+            "type": "error",
+            "error": "indirect_prompt_injection",
+            "narrative": injection_verdict.reason(),
+            "data": {
+                "matched_patterns": list(injection_verdict.matched_patterns),
+            },
+            "citations": [],
+            "metadata": {
+                "request_id": session_context.get("request_id"),
+                "session_id": session_id,
+                "duration_ms": int((time.monotonic() - t_start) * 1000),
+            },
+        }
 
     # Load conversation history
     history = await _load_history(session_id, session_context)
