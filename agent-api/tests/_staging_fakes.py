@@ -265,6 +265,22 @@ class _FakeConn:
     async def execute(self, sql: str, *args: Any) -> None:
         self.store.execute_fetchrow(sql, args)
 
+    def transaction(self) -> _TxnCM:
+        # Production code wraps multi-statement work in ``async with
+        # conn.transaction():`` (asyncpg). The fake has no real transaction
+        # semantics — every write hits the in-memory store immediately — so
+        # this is a no-op context manager that lets the tested code path
+        # execute unchanged.
+        return _TxnCM()
+
+
+class _TxnCM:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *exc_info: Any) -> None:
+        return None
+
 
 class _AsyncCM:
     def __init__(self, conn: _FakeConn) -> None:
