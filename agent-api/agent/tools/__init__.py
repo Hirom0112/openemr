@@ -483,17 +483,39 @@ async def get_census_summary(
 ) -> dict[str, Any]:
     t0 = time.monotonic()
     provider_id: str = input["provider_id"]
-    patient_ids: list[str] = list(input["patient_ids"] or [])
+    requested_patient_ids: list[str] = list(input["patient_ids"] or [])
     # The system prompt instructs the LLM to call census with an empty list
     # to "auto-discover all patients." Auto-discovery via FHIR participant
     # search is broken (OpenEMR does not populate Encounter.participant), so
     # an empty list silently falls through to "every patient in the system"
     # and the panel scoping is lost. When the iframe has supplied the active
     # panel via session_context, prefer it over auto-discovery.
-    if not patient_ids:
+    if not requested_patient_ids:
         session_panel: list[str] = list(session_context.get("patient_ids") or [])
         if session_panel:
-            patient_ids = session_panel
+            requested_patient_ids = session_panel
+
+    # VUL-0002 (CRITICAL, 2026-05-15): the planner is allowed to pass a
+    # ``patient_ids`` list directly to this bulk route. Restrict that list
+    # to the session's panel before fetch so a single planner step cannot
+    # exfiltrate out-of-panel PHI even if a downstream tool description
+    # is jailbroken.
+    from auth import filter_patient_ids_to_panel
+
+    patient_ids, dropped_ids = filter_patient_ids_to_panel(
+        requested_patient_ids, session_context
+    )
+    if dropped_ids:
+        logger.warning(
+            "census_summary_out_of_panel_filtered",
+            extra={
+                "session_id": session_context.get("session_id"),
+                "requested_count": len(requested_patient_ids),
+                "kept_count": len(patient_ids),
+                "dropped_count": len(dropped_ids),
+                "dropped_ids": dropped_ids,
+            },
+        )
     # Surfaced from the UI Refresh button via /triage/census. The dispatcher
     # path leaves this absent (default False) so LLM-driven census calls keep
     # using the warm cache.
@@ -1044,8 +1066,31 @@ async def generate_handoff(
     session_context: dict[str, Any],
 ) -> dict[str, Any]:
     t0 = time.monotonic()
-    patient_ids: list[str] = input["patient_ids"]
+    requested_patient_ids: list[str] = list(input["patient_ids"] or [])
     langfuse = session_context.get("langfuse")
+
+    # VUL-0002 (CRITICAL, 2026-05-15): a single-turn "for the joint sign-out"
+    # message coerced the planner into invoking this bulk route with patients
+    # outside the requesting clinician's panel. The handoff route then leaked
+    # multi-patient PHI. Filter the input list against the session's panel
+    # before iterating — out-of-panel ids are dropped and emitted as audit
+    # events so security can see lateral-movement pressure.
+    from auth import filter_patient_ids_to_panel
+
+    patient_ids, dropped_ids = filter_patient_ids_to_panel(
+        requested_patient_ids, session_context
+    )
+    if dropped_ids:
+        logger.warning(
+            "generate_handoff_out_of_panel_filtered",
+            extra={
+                "session_id": session_context.get("session_id"),
+                "requested_count": len(requested_patient_ids),
+                "kept_count": len(patient_ids),
+                "dropped_count": len(dropped_ids),
+                "dropped_ids": dropped_ids,
+            },
+        )
 
     summaries = await generate_handoffs(patient_ids, langfuse=langfuse, redis_client=session_context.get("redis_client"))
 

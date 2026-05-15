@@ -133,4 +133,60 @@ def check_patient_scope(
     )
 
 
-__all__ = ["check_patient_scope", "PATIENT_KEYED_TOOLS"]
+def filter_patient_ids_to_panel(
+    patient_ids: list[Any] | None,
+    session_context: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Restrict a list of patient ids to the current session's panel.
+
+    Returns ``(in_panel, dropped)`` — the canonicalized in-panel ids that
+    callers may proceed with, and the dropped (out-of-panel) ids for the
+    purpose of audit logging. Used by bulk-extraction tools (handoff,
+    census) where the LLM planner is allowed to pass a *list* of patient
+    ids; VUL-0002 (2026-05-15) showed the unfiltered list was the
+    exfiltration channel.
+
+    Decisions (fail-closed):
+      * ``session_context["patient_ids"]`` missing/empty → all input
+        treated as out-of-panel (drop everything, return ``([], [...all])``).
+      * Each input id is canonicalized; only those whose canonical form
+        appears in the canonicalized panel are returned.
+      * Empty/None inputs become ``([], [])``.
+    """
+    raw_input = list(patient_ids or [])
+    if not raw_input:
+        return [], []
+
+    raw_panel = session_context.get("patient_ids")
+    if not raw_panel:
+        logger.warning(
+            "bulk_tool_panel_filter_empty_census",
+            extra={
+                "input_count": len(raw_input),
+                "session_id": session_context.get("session_id"),
+            },
+        )
+        return [], [str(p) for p in raw_input if p is not None]
+
+    panel_canonical = {
+        _canonical_pid(p) for p in raw_panel if p is not None and p != ""
+    }
+
+    kept: list[str] = []
+    dropped: list[str] = []
+    for raw in raw_input:
+        if raw is None or raw == "":
+            continue
+        cid = _canonical_pid(raw)
+        if cid and cid in panel_canonical:
+            kept.append(str(raw))
+        else:
+            dropped.append(str(raw))
+    return kept, dropped
+
+
+__all__ = [
+    "check_patient_scope",
+    "filter_patient_ids_to_panel",
+    "PATIENT_KEYED_TOOLS",
+]
