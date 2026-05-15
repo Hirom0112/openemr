@@ -39,6 +39,7 @@ pytestmark = pytest.mark.hard_failure
 def test_doc_classes_closed_set() -> None:
     assert set(DOC_CLASSES) == {
         "intake_form",
+        "intake_form_prose",
         "lab_report_tabular",
         "other_narrative",
     }

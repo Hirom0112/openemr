@@ -161,7 +161,7 @@ async def test_write_observation_happy_path(monkeypatch) -> None:
         return httpx.Response(
             200,
             json={
-                "id": "copilot-117-32693-4",
+                "id": "copilot-117-32693-4-lactate",
                 "document_id": 117,
                 "patient_id": 1,
                 "action": "created",
@@ -177,7 +177,7 @@ async def test_write_observation_happy_path(monkeypatch) -> None:
             lab_value=lab_value,
         )
 
-    assert result["id"] == "copilot-117-32693-4"
+    assert result["id"] == "copilot-117-32693-4-lactate"
     assert result["action"] == "created"
     assert len(captured) == 1
     call = captured[0]
@@ -187,7 +187,7 @@ async def test_write_observation_happy_path(monkeypatch) -> None:
 
     body = call["json"]
     assert body["resourceType"] == "Observation"
-    assert body["id"] == "copilot-117-32693-4"
+    assert body["id"] == "copilot-117-32693-4-lactate"
     assert body["status"] == "final"
     assert body["code"]["coding"][0]["code"] == "32693-4"
     assert body["subject"]["reference"] == "Patient/1"
@@ -234,7 +234,7 @@ async def test_write_observation_unknown_loinc_uses_fallback(monkeypatch) -> Non
     body = captured[0]
     assert body["code"]["coding"][0]["code"] == "LP-UNKNOWN"
     # Sanitised id still satisfies the copilot id pattern.
-    assert body["id"] == "copilot-9-LP-UNKNOWN"
+    assert body["id"] == "copilot-9-LP-UNKNOWN-ferritin"
 
 
 async def test_write_observation_non_numeric_uses_value_string(monkeypatch) -> None:
@@ -328,7 +328,7 @@ async def test_no_phi_in_logs(
     )
 
     def _handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"id": "copilot-117-32693-4", "action": "created"})
+        return httpx.Response(200, json={"id": "copilot-117-32693-4-lactate", "action": "created"})
 
     lab_value = _make_lab_value(citation_quote=_VALUE_SENTINEL)
 

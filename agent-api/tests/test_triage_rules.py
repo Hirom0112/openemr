@@ -5,6 +5,7 @@ Hard failure gate: 100% pass required.
 """
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -13,8 +14,33 @@ from triage.criteria import extract, TriageCriteria
 from triage.rules_engine import rank, TriageResult
 
 
+def _refresh_bundle_timestamps(bundle: dict, now_iso: str) -> dict:
+    # Vitals freshness gate (criteria.VITALS_FRESHNESS_WINDOW = 7d) silently
+    # invalidates committed fixtures once they age out. Rewrite time fields
+    # in-place so the assertions test the rules engine, not the calendar.
+    for entries in bundle.get("resources", {}).values():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            res = entry.get("resource", entry) if isinstance(entry, dict) else None
+            if not isinstance(res, dict):
+                continue
+            if "effectiveDateTime" in res:
+                res["effectiveDateTime"] = now_iso
+            period = res.get("effectivePeriod")
+            if isinstance(period, dict) and "start" in period:
+                period["start"] = now_iso
+            if "issued" in res:
+                res["issued"] = now_iso
+    return bundle
+
+
 def _load(name: str) -> dict:
-    return json.loads((Path(__file__).parent / "fixtures" / name).read_text())
+    data = json.loads((Path(__file__).parent / "fixtures" / name).read_text())
+    bundle = data.get("bundle")
+    if isinstance(bundle, dict):
+        _refresh_bundle_timestamps(bundle, datetime.now(timezone.utc).isoformat())
+    return data
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

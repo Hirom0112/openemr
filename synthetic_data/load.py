@@ -1186,16 +1186,20 @@ def _ensure_persistent_sara_panel(conn: Any, sara_user_id: int, pids: list[int])
                 (str(pid), pid, str(pid)),
             )
             # Ensure at least one form_encounter row attributes a visit to Sara.
+            # Refresh the date to NOW() on every seed run so the index.php
+            # 30-day panel-discovery filter does not silently age the panel out.
             cur.execute(
                 """
                 SELECT encounter
                   FROM form_encounter
                  WHERE pid = %s AND provider_id = %s
+                 ORDER BY date DESC
                  LIMIT 1
                 """,
                 (pid, sara_user_id),
             )
-            if cur.fetchone() is None:
+            existing = cur.fetchone()
+            if existing is None:
                 cur.execute(
                     """
                     INSERT INTO form_encounter
@@ -1204,7 +1208,17 @@ def _ensure_persistent_sara_panel(conn: Any, sara_user_id: int, pids: list[int])
                     """,
                     (pid, sara_user_id, "Sara persistent panel"),
                 )
-            print(f"  pid={pid}: pinned")
+                print(f"  pid={pid}: pinned (inserted)")
+            else:
+                cur.execute(
+                    """
+                    UPDATE form_encounter
+                       SET date = NOW(), date_end = NULL
+                     WHERE encounter = %s
+                    """,
+                    (existing[0],),
+                )
+                print(f"  pid={pid}: pinned (refreshed encounter={existing[0]})")
     conn.commit()
 
 

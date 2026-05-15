@@ -38,6 +38,16 @@ RUN mkdir -p /var/www/localhost/htdocs/openemr/sites/default && \
 # We deliberately do NOT copy vendor/, public/assets/, or sites/ — those are
 # either built/installed by the base image or contain runtime config we are
 # already managing above (sqlconf.php).
+#
+# CACHE_BUST: pass `--build-arg CACHE_BUST=$(git rev-parse HEAD)` (Railway sets
+# this automatically via RAILWAY_GIT_COMMIT_SHA when wired) so every commit
+# invalidates the COPY layers below. Without it, Docker reuses a cached
+# COPY-src/ layer keyed on the source-tree content hash — and on May 15 2026
+# that produced a deploy where an upstream PHP fix landed in our repo a month
+# earlier but the cached image still served the pre-fix file.
+ARG CACHE_BUST=unset
+RUN echo "cache-bust=${CACHE_BUST}"
+
 COPY src/         /var/www/localhost/htdocs/openemr/src/
 COPY library/     /var/www/localhost/htdocs/openemr/library/
 COPY interface/   /var/www/localhost/htdocs/openemr/interface/
