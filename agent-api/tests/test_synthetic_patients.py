@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -28,13 +29,31 @@ from triage.rules_engine import rank
 _BUNDLE_DIR = Path(__file__).parent.parent.parent / "synthetic_data" / "bundles"
 
 
+def _refresh_timestamps(resource: dict, now_iso: str) -> None:
+    # The rules engine gates vitals on a 7-day freshness window. The committed
+    # bundle fixtures carry absolute timestamps from when they were authored,
+    # so after a week every assertion that depends on a vital flips to "stale"
+    # and the engine returns the wrong tier. Rewrite the time fields in-place
+    # so these tests exercise the rules engine, not the calendar.
+    if "effectiveDateTime" in resource:
+        resource["effectiveDateTime"] = now_iso
+    period = resource.get("effectivePeriod")
+    if isinstance(period, dict) and "start" in period:
+        period["start"] = now_iso
+    issued = resource.get("issued")
+    if issued:
+        resource["issued"] = now_iso
+
+
 def _load_bundle(fname: str) -> dict:
     data = json.loads((_BUNDLE_DIR / fname).read_text())
+    now_iso = datetime.now(timezone.utc).isoformat()
     resources: dict = {"Observation": [], "MedicationRequest": [], "Condition": [], "AllergyIntolerance": []}
     for entry in data.get("entry", []):
         res = entry.get("resource", {})
         rt = res.get("resourceType")
         if rt in resources:
+            _refresh_timestamps(res, now_iso)
             resources[rt].append({"resource": res})
     return {"resources": resources}
 

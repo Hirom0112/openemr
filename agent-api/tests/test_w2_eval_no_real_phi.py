@@ -53,6 +53,12 @@ SYNTHETIC_IDENTITIES: frozenset[tuple[str, str, str, str]] = frozenset({
     # All 36 bbox_gt cases reuse this single benign chart patient; the
     # rubric operates on document-side citations, not demographics.
     ("GT",       "Synthetic",  "200000", "1980-01-01"),
+    # HL7/DOCX integrity-edge synthetic identities (blank OBX, multi-patient
+    # packet, intra-document conflict, referral with labs / meds history /
+    # wrong-patient demographic). MRNs follow the standard 100xxx range.
+    ("Aisha",    "Patel",      "100612", "1976-04-10"),
+    ("David",    "Johnson",    "100623", "1949-12-22"),
+    ("Bao",      "Nguyen",     "100634", "1988-07-05"),
 })
 
 # Spot-check ranges: every synthetic MRN starts with "100" or "200" (W2 reserves

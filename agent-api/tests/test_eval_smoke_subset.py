@@ -43,7 +43,7 @@ def _get_full_cases():
 
 def test_smoke_case_ids_length():
     ids = _get_smoke_ids()
-    assert len(ids) == 10, f"Expected 10 smoke cases, got {len(ids)}: {ids}"
+    assert len(ids) == 12, f"Expected 12 smoke cases, got {len(ids)}: {ids}"
 
 
 # ---------------------------------------------------------------------------
